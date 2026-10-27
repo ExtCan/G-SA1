@@ -1,0 +1,4 @@
+[submodule "third_party/gmod-module-base"]
+	path = third_party/gmod-module-base
+	url = https://github.com/Facepunch/gmod-module-base
+	branch = development

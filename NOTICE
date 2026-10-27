@@ -1,0 +1,29 @@
+G-SA1
+Copyright (C) 2026 ExtCan and contributors
+
+G-SA1's own code (everything in this repository except third_party/) is free software: you can redistribute it and/or
+modify it under the terms of the GNU General Public License version 3 as published by the Free Software Foundation
+(see LICENSE). It is distributed WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.
+
+Third-party components
+----------------------
+
+* third_party/gmod-module-base - Facepunch Studios' Garry's Mod binary-module headers,
+  https://github.com/Facepunch/gmod-module-base (branch "development", commit
+  e0156e5f96cd0bad8eed738f0d20e2c9a14b2a0d). Included as a git SUBMODULE, not copied into this repository: upstream
+  publishes no licence file, so its terms are Facepunch's. The headers are only used to compile the module's Lua
+  binding.
+
+* libsa1 - linked statically into the module. Built from https://github.com/ExtCan/LibSA1 (GPL-3.0; see its own
+  NOTICE).
+
+* BASS (un4seen developments) is NOT part of G-SA1: at run time the module calls the copy that Garry's Mod ships and has
+  already loaded.
+
+Game data
+---------
+
+No SEGA data is included in this repository or in G-SA1's releases. Sonic Adventure's models, textures, animations,
+sounds and music are read at run time from the user's own disc image. Sonic Adventure, Sonic the Hedgehog and the
+characters are trademarks of SEGA; this project is not affiliated with or endorsed by SEGA or Facepunch Studios.
