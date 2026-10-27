@@ -15,20 +15,22 @@
 --     transparent; cam.Start3D framed from the copies' bounds (a three-quarter view from slightly above, distance =
 --     radius / sin(fov / 2)); fixed lighting from above; tone-mapping scale 1 and fog off (both restored); the blended
 --     batches with a separate alpha blend (ONE / ONE_MINUS_SRC_ALPHA on alpha: cl_textures.lua's fix 2c); then THE
---     READ-BACK CHECK (review R.7): render.CapturePixels / render.ReadPixel - the corner transparent, some sample of the
---     picture not - and only a passing render target replaces the drawn icon (where ReadPixel gives no alpha, only the
---     PNG check below can pass it).
+--     READ-BACK CHECK (review R.7): render.CapturePixels / render.ReadPixel - the coverage check (THE CHECK, 0.9.4d,
+--     below) - and only a passing render target replaces the drawn icon (where ReadPixel gives no alpha, only the PNG
+--     check below can pass it).
 --   * SHOWN at once: a material per class (UnlitGeneric, $basetexture = the render target, $translucent, $vertexalpha,
 --     $vertexcolor); feat/cl_objects.lua's content type gsa1_object hands every icon it makes to I.Decorate (a weak list),
 --     so a picture made later replaces the drawn one in place - in the G-SA1 tab and in Entities > G-SA1.
 --   * KEPT (gsa1_set_icons_save 1; owner answer O5): render.Capture{format = "png", alpha = true} inside the same push,
 --     written ONLY under garrysmod/data/gsa1/icons as gsa1_obj_<class>[_c<contents>]_<key>[_r<n>].png, then checked through
---     Material("../data/gsa1/icons/<file>") (not an error material; IMaterial:GetColor: the corner transparent, some sample
---     not): only a passing file goes into gsa1/icons/index.json {format = 1, key, made, files}, a failing one is deleted
+--     Material("../data/gsa1/icons/<file>") (not an error material; IMaterial:GetColor: the four corners transparent; 0.9.4f:
+--     its coverage scanned only where ReadPixel gives no alpha, else a PNG is written only from a passing render target):
+--     only a passing file goes into gsa1/icons/index.json {format = 1, key, made, files}, a failing one is deleted
 --     with one log line. Next session, before the disc is ready (and without it: they are the owner's own files, review
 --     R.19), a key that matches index.json gives the icons their PNG material at once - each only if its file exists and
 --     its Material is not an error material.
---   * THE KEY: util.CRC of (the module's version, libsa1's version, the kind, the default contents, the picture format 1);
+--   * THE KEY: util.CRC of (the module's version, libsa1's version, the default contents, the picture format 1; 0.9.4f: not
+--     the character - changing character made every picture again, at 1 fps);
 --     a new key renders again and deletes the files the old index.json lists - only those, only under data/gsa1/icons, only
 --     names matching ^gsa1_obj_[%w_]+%.png$ (index.json is a file anyone can edit). "Redraw the spawn-menu pictures" (the
 --     Objects page) and the console command gsa1_icons_rebuild draw them again (new names: Source caches a material by its
@@ -57,7 +59,8 @@
 --     colour modulation and blend 1 (each restored).
 --   * THE FRAMING per class (I.VIEWS, I.Fit: the bounds' corners fill I.FILL = 85 % of the picture, centred).
 --   * THE CHECK: coverage over the whole picture (I.Coverage: every I.COVER_STEP-th pixel of every I.COVER_STEP-th row,
---     render.ReadPixel of the render target, IMaterial:GetColor4Part / GetColor of the PNG): at least I.COVER_MIN of it
+--     render.ReadPixel of the render target; 0.9.4f: the PNG is saved only from a render target that passed, its four
+--     corners checked - or, where ReadPixel gives no alpha, scanned on its own at I.PNG_STEP): at least I.COVER_MIN of it
 --     opaque and at least I.CLEAR_MIN fully transparent (the clear worked). 0.9.4b's 7 x 7 sample grid missed thin rings
 --     (the circle and the line were refused although they were drawn).
 --   * THE KEY carries I.PICTURES (2): the 0.9.4b / 0.9.4c pictures are made again, and the files of an index.json of
@@ -113,8 +116,13 @@ I.NEAR_MIN = I.DESTALPHA_RANGE + I.NEAR + 8   -- HU from the eye to the nearest 
 I.STUDIO = { [0] = Vector(0.9, 0.9, 0.9), [1] = Vector(0.9, 0.9, 0.9), [2] = Vector(0.9, 0.9, 0.9),
              [3] = Vector(0.9, 0.9, 0.9), [4] = Vector(1, 1, 1), [5] = Vector(0.6, 0.6, 0.6) }
 -- THE CHECK (0.9.4d)
-I.COVER_STEP = 2            -- every second pixel of every second row (16,384 of a 256 x 256 picture)
+I.COVER_STEP = 8            -- every 8th pixel of every 8th row (1,024 of a 256 x 256 picture). 0.9.4f hot fix: 0.9.4d's
+                            -- step 2 (16,384 reads) plus the same scan of the saved PNG made each picture take 17-27 s
+                            -- at 1 fps (owner log 2026-10-27 20:54-20:58), and every character change made them all again
+-- the saved PNG: written only from a render target that passed (its four corners checked), or scanned on its own at
+-- I.PNG_STEP where render.ReadPixel gives no alpha
 I.COVER_ALPHA = 128         -- a pixel counts as opaque from this alpha
+I.PNG_STEP = 16             -- 0.9.4f: the PNG's own scan (only where render.ReadPixel gives no alpha): 256 reads
 I.COVER_MIN = 0.02          -- at least 2 % of the picture opaque
 I.CLEAR_MIN = 0.10          -- and at least 10 % of it fully transparent (else the clear failed)
 
@@ -148,15 +156,16 @@ function I.Enabled()
     return cv.icons ~= nil and cv.icons:GetBool()
 end
 
--- the key of this session's pictures (nil without the module): util.CRC of the module's and libsa1's versions, the kind,
--- the default contents, the picture format and I.PICTURES. 0.9.4d: made again only when one of them changed (0.9.4b built
+-- the key of this session's pictures (nil without the module): util.CRC of the module's and libsa1's versions, the default
+-- contents, the picture format and I.PICTURES (the kind slot is always 0 since 0.9.4f). 0.9.4d: made again only when one of them changed (0.9.4b built
 -- its string and CRC every frame: 160 bytes of Lua garbage a frame, tests/frame_test.lua)
 local keyIn = {}
 function I.Key()
     local ver = gsa1 and gsa1.VERSION
     if not ver then return nil end
-    local V = GSA1.ObjView
-    local kind = V and V.KindNow and V.KindNow() or 0
+    -- 0.9.4f hot fix: the character is NOT part of the key any more - the spawn-menu pictures always show the Dreamcast logo
+    -- on the Extra Life box, so changing character must not make them all again (owner: 1 fps for a minute)
+    local kind = 0
     local lib, con = gsa1.LIBSA1_VERSION, contents()
     if keyIn.key and keyIn[1] == ver and keyIn[2] == lib and keyIn[3] == kind and keyIn[4] == con and
        keyIn[5] == I.PICTURES then
@@ -318,7 +327,7 @@ function I.KeyChanged(key)
             for class in pairs(I.pics) do I.pics[class] = nil end
             for _, class in ipairs(I.Classes()) do I.ApplyClass(class) end
         else
-            -- 0.9.4d: the session's first key differs from index.json's (an update, another disc, kind or contents): the
+            -- 0.9.4d: the session's first key differs from index.json's (an update, another disc or contents): the
             -- files that index lists are another key's and go now (0.9.4b kept them, and wrote its new index over it)
             local idx = I.ReadIndex(true)
             if idx and tostring(idx.key) ~= key then
@@ -551,8 +560,12 @@ local function rt_alpha(x, y)
     return a
 end
 
--- the PNG check (review R.7): the file's material, not an error, and its coverage
-local function png_check(f, size)
+-- the PNG check (review R.7): the file's material, not an error, and its four corners transparent (a capture that ignored
+-- alpha = true has an opaque background). 0.9.4f hot fix: the file's coverage is scanned only when scan is set - where
+-- render.ReadPixel gives no alpha, every I.PNG_STEP-th pixel (256 reads); else the PNG is written only from a render target
+-- that passed. 0.9.4d scanned 16,384 pixels of every PNG with IMaterial:GetColor4Part (about 1 ms a read): 15-27 s a
+-- picture at 1 fps (owner log 2026-10-27)
+local function png_check(f, size, scan)
     local m = I.PngMaterial(f)
     if not m or not (m.GetColor or m.GetColor4Part) then return nil, "Material() gave an error material" end
     local read
@@ -567,22 +580,27 @@ local function png_check(f, size)
             return c and (c.a or 255) or nil
         end
     end
-    local opaque, clear = I.Coverage(read, size)
-    if not I.CoverageOK(opaque, clear) then
-        return nil, (opaque and opaque < I.COVER_MIN) and ("nothing of the picture is in it: " .. cover_text(opaque, clear))
-            or cover_text(opaque, clear)
+    local e = size - 1
+    for i = 1, 4 do
+        local a = read(i <= 2 and 0 or e, i % 2 == 1 and 0 or e)
+        -- an unknown alpha counts as opaque (as IMaterial:GetColor's missing .a above)
+        if a == nil or a > 0 then return nil, "a corner is not transparent (the PNG kept no alpha)" end
+    end
+    if scan then
+        local opaque, clear = I.Coverage(read, size, I.PNG_STEP)
+        if not I.CoverageOK(opaque, clear) then return nil, cover_text(opaque, clear) end
     end
     return m
 end
 
 -- writes the PNG of class (when saving is on) and checks it; returns its material and file name, or nil
-local function save_png(class, data, size)
+local function save_png(class, data, size, scan)
     if not (data and cv.icons_save and cv.icons_save:GetBool() and file and file.Write) then return nil end
     local f = I.FileName(class, I.key)
     if not I.SafeName(f) then return nil end
     file.CreateDir(I.DIR)
     file.Write(I.DIR .. "/" .. f, data)
-    local m, why = png_check(f, size)
+    local m, why = png_check(f, size, scan)
     if not m then
         I.stats.png_failed = I.stats.png_failed + 1
         if file.Delete then file.Delete(I.DIR .. "/" .. f) end
@@ -684,9 +702,13 @@ function I.Render(class, inst)
     studio_end(st)
     local opaque, clear = nil, nil
     local data = nil
+    local tc = 0             -- 0.9.4f: the render target's check time, in the log line (0.9.4d's pictures took 15-27 s
+                             -- each; its log gave totals only - the PNG's GetColor4Part scan the likely cost)
     if ok then
+        local t1 = SysTime()
         render.CapturePixels()
         opaque, clear = I.Coverage(rt_alpha, size)
+        tc = SysTime() - t1
         if cv.icons_save:GetBool() and render.Capture then
             data = render.Capture({ format = "png", x = 0, y = 0, w = size, h = size, alpha = true })
         end
@@ -699,7 +721,10 @@ function I.Render(class, inst)
     end
     local rt_ok = I.CoverageOK(opaque, clear)
     if not rt_ok then I.stats.rt_failed = I.stats.rt_failed + 1 end
-    local pm, pf = save_png(class, data, size)
+    -- 0.9.4f hot fix: a PNG only of a picture that passed (its pixels are the render target's) - or, where render.ReadPixel
+    -- gives no alpha (opaque nil), of every picture: then the PNG's own coverage scan decides
+    local no_alpha = opaque == nil
+    local pm, pf = save_png(class, (rt_ok or no_alpha) and data or nil, size, no_alpha)
     local p
     if rt_ok then
         local mat = CreateMaterial("gsa1_icon_" .. class .. "_" .. fmt.name, "UnlitGeneric", {
@@ -717,8 +742,9 @@ function I.Render(class, inst)
     I.stats.made = I.stats.made + 1
     I.ApplyClass(class)
     if pf then I.WriteIndex() end
-    log("the spawn-menu picture of %s made (%.1f ms, %s; %s, %.0f degrees at %.0f HU)", class, (SysTime() - t0) * 1000,
-        p.from == "rt" and "render target" or "from its PNG", cover_text(opaque, clear), fov, dist)
+    log("the spawn-menu picture of %s made (%.1f ms, %s; %s, the check %.1f ms; %.0f degrees at %.0f HU)", class,
+        (SysTime() - t0) * 1000, p.from == "rt" and "render target" or "from its PNG", cover_text(opaque, clear), tc * 1000,
+        fov, dist)
     return true
 end
 -- Sonic's 1-up icon into a 16 x 16 picture for the tab
@@ -826,8 +852,17 @@ function I.Step()
         -- the classes wait for the spawn menu's first G-SA1 icon (or its opening); the tab's icon does not
         if class ~= "tab" and not I.wanted then return end
         table.remove(I.queue, 1)
-        job = { class = class, t0 = now_s() }
+        job = { class = class, t0 = now_s(), start = now_s() }
         I.job = job
+    end
+    if job.class ~= "tab" and V.KindNow then
+        -- 0.9.4f: a character change while a picture waits clears the showcase copies (cl_objview.lua V.Think); the wait
+        -- starts again for the new kind's copies and textures instead of running out (a new key requeued them until 0.9.4e)
+        local k = V.KindNow()
+        if job.kind ~= k then
+            if job.kind ~= nil then job.t0 = now_s() end
+            job.kind = k
+        end
     end
     local done
     if job.class == "tab" then
@@ -840,7 +875,7 @@ function I.Step()
     end
     if done then
         I.job = nil
-    elseif now_s() - job.t0 > I.WAIT_MAX then
+    elseif now_s() - job.t0 > I.WAIT_MAX or now_s() - job.start > 3 * I.WAIT_MAX then   -- 3 x: a kind that never settles
         I.stats.waited = I.stats.waited + 1
         log("the spawn-menu picture of %s was not ready within %d s: G-SA1's drawing stays", job.class, I.WAIT_MAX)
         I.job = nil

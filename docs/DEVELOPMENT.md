@@ -40,6 +40,23 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.4f changes: no more lag when changing character
+
+A hot fix for the owner's report on 0.9.4e: "changing character makes the game lag like hell for a minute ... like 1 fps".
+
+* **The cause**: 0.9.4d's check of the spawn-menu pictures read 16,384 pixels of each picture and another 16,384 of its saved PNG,
+  which took 15-27 seconds a picture at about 1 fps; and the pictures' key held the character, so every character change made all
+  five again (the log: "the spawn-menu pictures' key changed ... drawn again" right after "Sonic spawned").
+* **The fix**: the character is no longer part of the key (the pictures look the same for every character: the Extra Life box shows
+  the Dreamcast logo), so changing character makes nothing again; the check reads every 8th pixel of every 8th row (1,024, still
+  enough for the thin rings of a line or circle); the saved PNG is not read back again - it is written only from a picture that
+  passed (only its four corners are checked to be transparent; on a PC whose render targets give no alpha, the PNG is still
+  written and checked on its own, 256 reads). The log line of each picture now says how long its check took ("the check ...
+  ms").
+* Known, not changed here: while the Faces page's mouth shape tester is open, its close-up renders the world a second time each
+  frame (about 35-47 fps instead of 60 in the owner's log); it goes back to normal when the page is closed.
+* The pictures are made once more after this update (the version is part of the key), quickly this time.
+
 ## What 0.9.4e changes: better lip sync, the mouth shape tester, a hidden wheel and play rate
 
 The owner's notes on 0.9.4c / 0.9.4d (sadc `docs/research/lipsync2_plan.md` with its review and the owner's answers 10.1;

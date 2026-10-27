@@ -10,7 +10,7 @@ module (`gmcl_gsa1_win64.dll`) plus a Lua addon, built on **libsa1**. libsa1 is 
 and character code, packaged so that a host program can run it. Its sources are in the
 [LibSA1](https://github.com/ExtCan/LibSA1) repository.
 
-Version: **0.9.4d** (in development; single player is the main target).
+Version: **0.9.4f** (in development; single player is the main target).
 
 ## You need
 

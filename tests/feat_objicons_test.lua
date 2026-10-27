@@ -11,7 +11,8 @@
 -- the picture in place (made before or after the icon); the Extra Life box's picture wears the Dreamcast logo; a failing
 -- PNG check deletes the file and keeps the render target only when its read-back passed; a failing read-back and PNG keep
 -- G-SA1's drawing; next session a matching index.json gives the PNGs at once, before the disc (review R.19), a PNG whose
--- Material is an error keeps the drawing; a changed key (contents, character, module version) draws again and deletes the
+-- Material is an error keeps the drawing; a changed key (contents, module version; 0.9.4f: not the character) draws again
+-- and deletes the
 -- old files - only names of the pattern under data/gsa1/icons (review R.7); a device reset switches to the PNG or draws
 -- again; gsa1_set_icons 0 -> G-SA1's drawings, gsa1_set_icons_save 0 -> nothing written; every file.Write under
 -- gsa1/icons.
@@ -463,6 +464,7 @@ render.ReadPixel = function(x, y)
     return 255, 255, 255, shape_alpha(rt_shape(st), x, y, RT.cur and RT.cur.w or 256)
 end
 local captures = 0
+pngReads = 0                     -- IMaterial:GetColor calls on a saved PNG (0.9.4f: 0.9.4d's 16,384 a picture were the lag)
 render.Capture = function(t)
     captures = captures + 1
     local st = RT.cur and RT.state[RT.cur.name]
@@ -475,7 +477,9 @@ function Material(p)
     local shape, size = string.match(data, "^PNG:(%a+):(%d+):")
     size = tonumber(size) or 256
     return { name = p, IsError = function() return false end, GetColor = function(self, x, y)
-        return Color(255, 255, 255, shape_alpha(shape, x, y, size))
+        pngReads = pngReads + 1
+        -- "opaquebg": a capture that ignored alpha = true (0.9.4f's corner check)
+        return Color(255, 255, 255, pngMode == "opaquebg" and 255 or shape_alpha(shape, x, y, size))
     end }
 end
 -- JSON (a store keyed by the string written: enough for index.json's round trip; a crafted string is a crafted table)
@@ -619,6 +623,23 @@ do
     check(I.pics.gsa1_obj_ring == nil and ringIcon.Image.mat == "entities/gsa1_obj_ring.png",
         "render.ReadPixel without alpha and a failing PNG: no picture, the icon keeps G-SA1's drawing (%s)",
         tostring(ringIcon.Image.mat))
+    -- 0.9.4f: without alpha from render.ReadPixel the PNG is still written and its own coverage scan passes it (or not)
+    pngMode = "ok"
+    I.pics = {}
+    for _, ic in ipairs({ ringIcon, boxIcon }) do ic:SetMaterial("entities/" .. ic.class .. ".png") end
+    I.Rebuild()
+    frame(300)
+    local fromPng = I.pics.gsa1_obj_ring and I.pics.gsa1_obj_ring.from == "png" and I.pics.gsa1_obj_ring.file ~= nil
+    drawShape = "empty"
+    I.pics = {}
+    for _, ic in ipairs({ ringIcon, boxIcon }) do ic:SetMaterial("entities/" .. ic.class .. ".png") end
+    deletes = {}
+    I.Rebuild()
+    frame(300)
+    local emptyRefused = I.pics.gsa1_obj_ring == nil and #deletes >= 5
+    drawShape = "disc"
+    check(fromPng and emptyRefused, "render.ReadPixel without alpha, the PNG passing its own scan: the picture from the PNG "
+        .. "(%s); an empty PNG refused and deleted (%d deletes) - 0.9.4f keeps this fallback", tostring(fromPng), #deletes)
     alphaMode, pngMode = "rgba", "ok"
     I.Rebuild()
     frame(300)
@@ -907,16 +928,98 @@ do
         I.pics = {}
         ringIcon:SetMaterial("entities/gsa1_obj_ring.png")
         deletes = {}
+        local w0 = #writes
         I.Rebuild()
         frame(300)
-        thinOk = thinOk and I.pics.gsa1_obj_ring == nil and ringIcon.Image.mat == "entities/gsa1_obj_ring.png" and #deletes >= 5
+        local pngs = 0
+        for i = w0 + 1, #writes do
+            -- an object's picture (the tab's own icon, Sonic's 1-up, is not one: it is written with every rebuild)
+            if string.find(writes[i], "%.png$") and not string.find(writes[i], "gsa1_obj_tab_", 1, true) then pngs = pngs + 1 end
+        end
+        -- 0.9.4f hot fix: a picture whose render-target check fails (its alpha read back) is never written as a PNG
+        thinOk = thinOk and I.pics.gsa1_obj_ring == nil and ringIcon.Image.mat == "entities/gsa1_obj_ring.png" and pngs == 0
     end
     drawShape = "disc"
     I.Rebuild()
     frame(300)
     check(thinOk and I.pics.gsa1_obj_ring ~= nil,
-        "in the job: thin rings kept as render target and PNG; an empty and a pale picture refused - PNGs deleted, G-SA1's "
-        .. "drawing stays; drawn again afterwards")
+        "in the job: thin rings kept as render target and PNG; an empty and a pale picture refused - no PNG written for them "
+        .. "(0.9.4f), G-SA1's drawing stays; drawn again afterwards")
+-- 0.9.4f hot fix: changing character does not change the pictures' key (no remaking of every picture: owner, 1 fps)
+do
+    local V = GSA1.ObjView
+    local keep = V and V.KindNow
+    local k1, k2
+    if V then
+        V.KindNow = function() return 0 end
+        k1 = I.Key()
+        V.KindNow = function() return 3 end
+        k2 = I.Key()
+        V.KindNow = keep
+    end
+    check(V == nil or (k1 ~= nil and k1 == k2), "the pictures' key does not follow the character (%s / %s)", tostring(k1),
+        tostring(k2))
+    check(I.COVER_STEP >= 8, "the render-target check reads at most 1,024 pixels (step %d)", I.COVER_STEP)
+    -- end to end: a character change (the showcase kind: cl_objview's V.Think clears its copies) neither changes the key
+    -- nor draws a picture again
+    local keyBefore, capBefore, errBefore = I.key, captures, #M.reported
+    local kindNow = 0
+    local kindKeep = V and V.KindNow
+    if V then V.KindNow = function() return kindNow end end
+    for _, kind in ipairs({ 3, 5, 0 }) do
+        kindNow = kind
+        frame(60)
+    end
+    check(V ~= nil and keyBefore ~= nil and I.key == keyBefore and captures == capBefore and I.job == nil and
+        #I.queue == 0 and #M.reported == errBefore,
+        "end to end: Knuckles, Big, Sonic in turn - the key stays (%s / %s), no picture made again (%d captures), no error",
+        tostring(keyBefore), tostring(I.key), captures - capBefore)
+    -- a character change while a picture waits starts its wait again; a kind that never settles still ends it
+    local keepReady = I.InstancesReady
+    I.InstancesReady = function() return false end
+    local waited0 = I.stats.waited
+    kindNow = 0
+    I.Rebuild()
+    frame(2)
+    local job = I.job
+    local part = math.floor(I.WAIT_MAX * 0.8 * 60)
+    frame(part)
+    kindNow = 3
+    frame(part)
+    local kept = job ~= nil and I.job == job and I.stats.waited == waited0
+    for i = 1, math.floor(I.WAIT_MAX * 2.5 * 60) do
+        kindNow = (i % 2 == 0) and 3 or 5
+        frame(1)
+        if I.stats.waited > waited0 then break end
+    end
+    local ended = I.stats.waited > waited0
+    I.InstancesReady = keepReady
+    kindNow = 0
+    if V then V.KindNow = kindKeep end
+    check(kept and ended, "a character change while a picture waits: its wait starts again (still waiting after 1.6 x "
+        .. "I.WAIT_MAX: %s); a kind that never settles: the wait still ends (%s)", tostring(kept), tostring(ended))
+    -- the PNG's corner check: a capture that ignored alpha (an opaque background) is deleted, the render target kept
+    pngMode = "opaquebg"
+    I.pics = {}
+    deletes = {}
+    I.Rebuild()
+    frame(300)
+    local cornerOk = I.pics.gsa1_obj_ring and I.pics.gsa1_obj_ring.from == "rt" and I.pics.gsa1_obj_ring.file == nil and
+        #deletes >= 5
+    pngMode = "ok"
+    check(cornerOk, "a PNG with an opaque background (a capture that ignored alpha): deleted after its corner check (%d "
+        .. "deletes), the render target stays the picture", #deletes)
+    -- the reads of a whole rebuild: 1,024 render.ReadPixel a picture, a PNG's corners only (no scan with alpha)
+    readCalls, pngReads = 0, 0
+    local cap0 = captures
+    I.Rebuild()
+    frame(300)
+    local n = #I.Classes()
+    check(captures - cap0 >= n and readCalls >= n * 1024 and readCalls <= n * 1024 + 64 and pngReads >= n * 4 and
+        pngReads <= n * 4 + 64,
+        "a whole rebuild of %d pictures (%d captures): %d render.ReadPixel (at most %d), %d PNG reads (0.9.4e: about "
+        .. "16,384 a picture)", n, captures - cap0, readCalls, n * 1024 + 64, pngReads)
+end
 end
 
 -- (f) the key: I.PICTURES is part of it; a session whose first key differs from index.json's deletes the files that index
