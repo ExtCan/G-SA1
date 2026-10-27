@@ -40,6 +40,26 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.4e changes: better lip sync, the mouth shape tester, a hidden wheel and play rate
+
+The owner's notes on 0.9.4c / 0.9.4d (sadc `docs/research/lipsync2_plan.md` with its review and the owner's answers 10.1;
+research `lipsync2_hear.md`, `lipsync2_show.md`).
+
+* **Better hearing** (Faces page, "Sound detection": the new one; the 0.9.4c one stays as a choice): our own classifier v2 with new
+  consonant rules, per-speaker normalisation learned while you talk (session memory only - nothing saved or sent, tested) and an
+  optional "Teach it my vowels" button; on realistic synthetic speech it is right about 15 points more often, shows "ee" far less
+  often and only when sure, and catches "s". Known: very quiet hiss can show a single "s" frame now and then (accepted; tuned next
+  round), a held "mmm" opens the mouth.
+* **Better mouths** (mouth table v2): Sonic's "ah" is his open mouth with fangs instead of his grin (0.9.4c showed his smile on about
+  two thirds of the talking frames), and corrected "eh", "oo" and "s" mouths for Sonic, Tails, Knuckles and Amy.
+* **The mouth shape tester** (Faces page): a button per sound shows that mouth on your character; pick another mouth per sound and
+  per character ("Your mouths", saved in garrysmod/data/gsa1 as a normal setting - no voice data); reset to G-SA1's.
+* **The microphone by name**: the chosen microphone is remembered by its name; speaker outputs ("what your PC plays") are left
+  out of the list; a saved device is moved only when the system flags it a speaker output (your microphone always stays chosen).
+* **Hide the wheel** (Emote wheel page: a switch and a key): the wheel works as usual but draws nothing - for recording.
+* **Play rate**: a speed per wheel slot (0.25x-4x) and an overall speed slider, through the game's own animation rate.
+* No chat line when the character dies (owner note on 0.9.4d; the console and the session log keep it).
+
 ## What 0.9.4d changes: better spawn-menu pictures of the rings, less Lua garbage per frame
 
 The owner (0.9.4b test): "the ring icons in the G-SA1 tab aren't very good, the circle of rings doesn't even have a rendered

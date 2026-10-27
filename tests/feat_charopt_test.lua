@@ -230,7 +230,7 @@ local t_death = M.T + 1 / 60
 frames(1)
 local died = seen.GSA1CharacterDied[#seen.GSA1CharacterDied]
 check(console_has("Sonic drowned") and died and died[1] == C and died[2] == 3, "DEATH cause 3: \"Sonic drowned\" in the "
-    .. "chat and GSA1CharacterDied(C, 3)")
+    .. "console and the log (no chat line since 0.9.4e) and GSA1CharacterDied(C, 3)")
 -- 0.8.0 respawned 2.5 s after the death: the drown animation is the game's own and runs until its restart request
 local early = false
 for _ = 1, 239 do

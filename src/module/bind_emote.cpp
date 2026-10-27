@@ -1,6 +1,7 @@
 // G-SA1 module: the feature "emote" (round 0.9.4a: sadc docs/research/faces_wheel_plan.md 4.5, 4.6, 5.6 with its Review
 // R.9 / R.16 / R.18; faces_wheel_ui.md 6.2; emote_wheel_lib.md 5; libsa1.h "emotes", SA1_API_EMOTE; round 0.9.4b: the end
-// mode HOLD, objects2_plan.md 11.2, libsa1's SA1_API_EMOTE_HOLD). The addon's side is
+// mode HOLD, objects2_plan.md 11.2, libsa1's SA1_API_EMOTE_HOLD; round 0.9.4e, the owner's "being able to change the
+// animation's play rate": the play rate, gsa1_rounds_plan.md 14.1aa, lipsync2_plan.md 5.2's wheel row). The addon's side is
 // gsa1/feat/{sh,cl}_wheel.lua (the emote wheel, its face trigger and the Q-menu page "Emote wheel"); the shared core part
 // is src/core/emote.{hpp,cpp}.
 //
@@ -9,7 +10,7 @@
 // character's own display while the gameplay keeps running underneath; started at the character's next pair; cancelled
 // by movement input and when the gameplay leaves the standing state. Only the entries of the catalogue are accepted.
 //
-// Lua API (feature version 2; GSA1.HasFeature("emote")). id: a ticking character of this client (not a puppet). Keys:
+// Lua API (feature version 3; GSA1.HasFeature("emote")). id: a ticking character of this client (not a puppet). Keys:
 // "a<row>" (an action row) / "x<extra>" (an extra motion: its index among the kind's offered extras, in list order).
 //   gsa1.EmoteList(kind [, form]) -> {n, [i] = {key, source, index, name, label, class, group, frames, play, flags, dup,
 //        dup_key}} | nil, message, code
@@ -19,9 +20,12 @@
 //       gsa1.EMOTE.CLASS_*, group: its word ("stand", "idle", "pose", ...), frames, play: "loop" / "once" / "hold", flags:
 //       gsa1.EMOTE.F_*, dup: the list position (1-based) of the first entry with the same drawn object and motion (0:
 //       none), dup_key its key. Eggman / Tikal: {n = 0}. code "not_ready" before the disc is loaded, "bad_argument".
-//   gsa1.Emote(id, key [, flags]) -> true | nil, reason, code
+//   gsa1.Emote(id, key [, flags [, speed]]) -> true | nil, reason, code
 //       sa1_character_emote with one item, SA1_EMOTE_CHAIN (a once row plays the game's own follow-up chain), link -1 (8
-//       blend frames); flags: gsa1.EMOTE.LOOP (the item loops until the character moves), IN_AIR (may start while not
+//       blend frames); speed (version 3, round 0.9.4e: the wheel's play rate, the slot's x gsa1_wheel_speed): the item's
+//       sa1_emote_item.speed, a multiplier of the game's rate (2 = twice as fast; libsa1 multiplies every entry of the
+//       chain's frames per step by it), gsa1.EMOTE.SPEED_MIN (1/64) .. SPEED_MAX (16); nil or 0 = 1 (the game's rate, as
+//       versions 1 and 2 played); anything else (out of range, not a number) "bad_argument". flags: gsa1.EMOTE.LOOP (the item loops until the character moves), IN_AIR (may start while not
 //       standing), KEEP_INPUT, NO_PROPS, NO_TRAIL, HOLD (version 2, round 0.9.4b: an animation that ends in a pose - its
 //       last entry plays once - stays on its last frame until the character moves, jumps, presses the action button, gets
 //       another emote or EmoteStop; a looping one ignores it; implies NO_TRAIL). reason: libsa1's plain words ("in the
@@ -39,8 +43,9 @@
 //       = the item count), frame the queue head's frame. No table: multiple returns.
 //   gsa1.EMOTE = {LOOP, IN_AIR, KEEP_INPUT, NO_PROPS, NO_TRAIL, CHAIN, STOP_NOW, STOP_BLEND, STATE_NONE, STATE_PLAYING,
 //       STATE_ENDING, ROW, EXTRA, PLAY_DEFAULT, PLAY_ONCE, PLAY_LOOP, MAX_ITEMS, FORM_NORMAL, FORM_SUPER, CLASS_* (15),
-//       F_NEEDS_PROP, F_HOLD, F_SUPER_ONLY, F_BOARD, F_OTHER_OBJECT, F_EXTRA; version 2: HOLD, STATE_HOLDING} - libsa1's
-//       numbers (LOOP is G-SA1's own). F_HOLD is a catalogue flag (the game's hold row: play "hold"); HOLD is the play flag.
+//       F_NEEDS_PROP, F_HOLD, F_SUPER_ONLY, F_BOARD, F_OTHER_OBJECT, F_EXTRA; version 2: HOLD, STATE_HOLDING; version 3:
+//       SPEED_MIN, SPEED_MAX} - libsa1's numbers (LOOP is G-SA1's own; the speed range is sa1_character_emote's check,
+//       libsa1 src/sa1_emote.c). F_HOLD is a catalogue flag (the game's hold row: play "hold"); HOLD is the play flag.
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -77,6 +82,36 @@ bool arg_absent(ILuaBase *L, int i)
 {
     int t = L->GetType(i);
     return t == LT::Nil || t == LT::None;
+}
+
+// round 0.9.4e: the play rate libsa1 accepts for an item (sa1_character_emote: 0 = 1, else 1/64..16; libsa1
+// src/sa1_emote.c's item check) - checked here first, so a bad rate is "bad_argument" before the character is looked up
+const double kEmoteSpeedMin = 1.0 / 64.0;
+const double kEmoteSpeedMax = 16.0;
+
+bool emote_speed_ok(double v)
+{
+    return v == 0.0 || (v >= kEmoteSpeedMin && v <= kEmoteSpeedMax);
+}
+
+// gsa1::emote_play (src/core/emote.cpp, the core's offline path: speed 1) with the item's play rate: the same sa1_emote
+// (one item, SA1_EMOTE_CHAIN, link -1, the LOOP and pass-through flags), only items[0].speed differs (0 = the game's rate)
+sa1_status emote_play_speed(sa1_context *ctx, int32_t id, uint32_t source, uint32_t index, uint32_t flags, float speed)
+{
+    if (!ctx) {
+        return SA1_ERR_NOT_LOADED;
+    }
+    sa1_emote e;
+    std::memset(&e, 0, sizeof e);
+    e.struct_size = sizeof e;
+    e.count = 1;
+    e.items[0].source = source;
+    e.items[0].index = index;
+    e.items[0].play = (flags & gsa1::kEmoteLoop) ? SA1_EMOTE_PLAY_LOOP : SA1_EMOTE_PLAY_DEFAULT;
+    e.items[0].speed = speed;
+    e.link = -1;
+    e.flags = SA1_EMOTE_CHAIN | (flags & gsa1::emote_pass_flags());
+    return sa1_character_emote(ctx, id, &e);
 }
 
 }  // namespace
@@ -121,7 +156,7 @@ GSA1_FN(gsa1_emote_EmoteList)
     return 1;
 }
 
-// gsa1.Emote(id, key [, flags]) -> true | nil, reason, code
+// gsa1.Emote(id, key [, flags [, speed]]) -> true | nil, reason, code
 GSA1_FN(gsa1_emote_Emote)
 {
     std::string key;
@@ -138,6 +173,12 @@ GSA1_FN(gsa1_emote_Emote)
         return push_nil_msg(LUA, "Emote(id, key, flags): flags of gsa1.EMOTE.LOOP | IN_AIR | KEEP_INPUT | NO_PROPS | "
                             "NO_TRAIL | HOLD", "bad_argument");
     }
+    // round 0.9.4e: the play rate (nil / 0 = the game's rate)
+    double speed = 0.0;
+    if (!arg_absent(LUA, 4) && (!arg_number(LUA, 4, speed) || !emote_speed_ok(speed))) {
+        return push_nil_msg(LUA, "Emote(id, key, flags, speed): speed a multiplier of the game's rate, gsa1.EMOTE.SPEED_MIN "
+                            "(1/64) .. SPEED_MAX (16); nil or 0 = 1", "bad_argument");
+    }
     int32_t id = 0;
     gsa1::Character *c = emote_char_arg(LUA, 1, id);
     if (!c) {
@@ -147,7 +188,7 @@ GSA1_FN(gsa1_emote_Emote)
     if (!se || !se->ready()) {
         return push_nil_msg(LUA, "G-SA1 is not initialised", "not_ready");
     }
-    sa1_status st = gsa1::emote_play(se->ctx(), id, source, index, (uint32_t)flags);
+    sa1_status st = emote_play_speed(se->ctx(), id, source, index, (uint32_t)flags, (float)speed);
     if (SA1_FAILED(st)) {
         return push_nil_msg(LUA, scrubbed(gsa1::emote_error(se->ctx(), st)), gsa1::emote_code(st));
     }
@@ -255,6 +296,9 @@ void emote_open(ILuaBase *L, int t)
     // version 2 (round 0.9.4b, objects2_plan.md 11.2): the end mode HOLD and its state
     raw_num(L, c, "HOLD", SA1_EMOTE_HOLD);
     raw_num(L, c, "STATE_HOLDING", SA1_EMOTE_STATE_HOLDING);
+    // version 3 (round 0.9.4e): Emote's play rate, the range libsa1 accepts
+    raw_num(L, c, "SPEED_MIN", kEmoteSpeedMin);
+    raw_num(L, c, "SPEED_MAX", kEmoteSpeedMax);
 #endif
     L->RawSet(t);
 }
@@ -269,9 +313,11 @@ const gsa1::FeatureFn k_emote_fns[] = {
 }  // namespace
 
 // version 1 (0.9.4a): EmoteList, Emote, EmoteStop, EmoteState, gsa1.EMOTE; version 2 (0.9.4b, with libsa1's
-// SA1_API_EMOTE_HOLD): Emote's flag gsa1.EMOTE.HOLD, EmoteState's STATE_HOLDING
+// SA1_API_EMOTE_HOLD): Emote's flag gsa1.EMOTE.HOLD, EmoteState's STATE_HOLDING; version 3 (0.9.4e): Emote's play rate
+// (its 4th argument; sa1_emote_item.speed is libsa1's since SA1_API_EMOTE), gsa1.EMOTE.SPEED_MIN / SPEED_MAX. A libsa1
+// without HOLD stays version 1 (the versions are cumulative); its Emote takes the speed all the same
 #if defined(SA1_API_EMOTE_HOLD)
-GSA1_FEATURE(emote, 2, k_emote_fns, emote_open, nullptr, gsa1::kCloseDefault);
+GSA1_FEATURE(emote, 3, k_emote_fns, emote_open, nullptr, gsa1::kCloseDefault);
 #else
 GSA1_FEATURE(emote, 1, k_emote_fns, emote_open, nullptr, gsa1::kCloseDefault);
 #endif

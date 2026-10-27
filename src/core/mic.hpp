@@ -27,6 +27,16 @@
 // (review R.9). The speaker number ("learn my voice") lives in that State and one published atomic, for the session only:
 // it is never written to a file, a setting or the log, and never sent (owner, phoneme_plan.md 10.1 PQ7); close() - the
 // module's close hook at the end of the session - forgets it. Nothing of the sound is kept beyond the 32 ms ring.
+//
+// Round 0.9.4e (feature "faces" 3; sadc docs/research/lipsync2_plan.md 4.2-4.5 / 5.3 with its Review R.1 / R.3 / R.5):
+// two engines, one static State each - engine 2 the lipsync2 classifier (viseme.hpp, the default), engine 1 0.9.4c's
+// (viseme_v1.hpp, verbatim) - and only the chosen one is fed; the "engine" tune is a pending atomic like the others. The
+// guided warm-up "Teach it my vowels" is a pending step the RECORDPROC applies at the start of its next block (engine 2's
+// State; the speaker learns nothing while it runs). Published besides the frame (atomic 1): the frame's features (atomic 2,
+// the same seq; for the opt-in numbers log), the voice summary and the warm-up's state (one atomic each). PRIVACY (owner
+// PQ7, binding): the learned voice AND the warm-up live in these States and atomics for the session only - no file,
+// setting, cookie, log line or network message ever holds them; close(), "reset_voice" and "adapt" 0 forget both engines'
+// voices and the warm-up. Loopback devices (BASS flag 8: what the PC plays) are flagged by devices() and refused by open2().
 #pragma once
 
 #include <cstdint>
@@ -40,10 +50,17 @@
 #endif
 
 namespace gsa1 {
+namespace viseme {
+struct State;
+}
+namespace viseme_v1 {
+struct State;
+}
 namespace mic {
 
 // BASS 2.4 (bass.h)
 const uint32_t kDeviceEnabled = 1, kDeviceDefault = 2, kDeviceInit = 4;   // BASS_DEVICE_ENABLED / _DEFAULT / _INIT
+const uint32_t kDeviceLoopback = 8;                                       // BASS_DEVICE_LOOPBACK (0.9.4e)
 const uint32_t kSampleFloat = 256;                                        // BASS_SAMPLE_FLOAT
 const uint32_t kRecordPause = 0x8000;                                     // BASS_RECORD_PAUSE
 const int kErrorDriver = 3, kErrorHandle = 5, kErrorInit = 8, kErrorStart = 9, kErrorAlready = 14, kErrorIllParam = 20,
@@ -76,6 +93,7 @@ struct Device {
     std::string name;             // UTF-8
     bool is_default = false;
     bool enabled = false;
+    bool loopback = false;        // 0.9.4e: a WASAPI loopback ("what the PC plays", a speaker output), never a microphone
 };
 
 // tests: a fake function table (nullptr: Garry's Mod's bass.dll again); closes what is open first
@@ -122,8 +140,9 @@ struct VisemeFrame {
 void viseme_on(bool on);
 bool viseme_is_on();
 // a tune, applied at the start of the next block: "gate_min_db" 3..12 (dB), "adapt" 0 / 1 (0 also forgets the learned
-// speaker number), "smooth" 0..3 (0 instant, 1 a 2-of-3 vote, 2 steadier, 3 quick), "reset_voice" (value ignored).
-// false with err ("bad_argument" cases) for another name or a value out of range
+// speaker number), "smooth" 0..3 (0 instant, 1 a 2-of-3 vote, 2 steadier, 3 quick), "reset_voice" (value ignored);
+// 0.9.4e: "engine" 1 (0.9.4c's classifier) or 2 (lipsync2's, the default). false with err ("bad_argument" cases) for
+// another name or a value out of range
 bool viseme_tune(const std::string &name, double value, std::string &err);
 // the newest frame (one atomic load; any thread)
 void viseme_frame(VisemeFrame &out);
@@ -139,6 +158,57 @@ struct VisemeDebug {
 };
 void viseme_debug(VisemeDebug &out);
 void viseme_debug_mark_thread();
+
+// ---- round 0.9.4e (feature "faces" 3; sadc docs/research/lipsync2_plan.md 4.2-4.5 / 5.3 with its Review R.1 / R.3 / R.5)
+// open() with the loopback refusal and a forced re-open. OPEN_LOOPBACK: the device records what the PC plays (a speaker
+// output, BASS's flag 8), err says so in plain words and nothing is opened or closed (what was open stays open). force: the
+// device that is open is opened again (a stalled stream: ChannelStop, RecordFree, RecordInit, RecordStart again); the
+// classifiers keep the speaker's voice (a pending re-init, as for another device). open(device, err) ==
+// (open2(device, false, err) == OPEN_OK).
+enum : int { OPEN_OK = 0, OPEN_FAILED = 1, OPEN_LOOPBACK = 2 };
+int open2(int device, bool force, std::string &err);
+// the sound classifier's engine (the "Sound detection" setting): viseme_tune("engine", 1 | 2), default 2. Engine 1 is
+// 0.9.4c's classifier verbatim (viseme_v1.hpp), engine 2 the lipsync2 classifier (viseme.hpp). The RECORDPROC feeds only
+// the chosen one; at the next block after a change the chosen engine starts again keeping its own voice (the other keeps
+// what it learned, in memory, unfed).
+enum : int { ENGINE_V1 = 1, ENGINE_V2 = 2 };
+int viseme_engine();                  // the engine the RECORDPROC last applied (the tune's value before its first block)
+// the guided warm-up "Teach it my vowels" (engine 2 only; lipsync2_plan.md 4.4): a pending step the RECORDPROC applies at the
+// start of its next block - WARM_AH / _EE / _OO / _OH = viseme::warm_begin(0..3) (the sums restart at AH), WARM_GAP =
+// warm_begin(4) (nothing counted, nothing learned), WARM_DONE = warm_end(800), WARM_CANCEL = warm_cancel. The newest step
+// wins when two arrive within one block. Refused (false, err): engine 1, "adapt" 0, nothing open, a bad step.
+enum : int { WARM_AH = 0, WARM_EE = 1, WARM_OO = 2, WARM_OH = 3, WARM_GAP = 4, WARM_DONE = 5, WARM_CANCEL = 6 };
+bool viseme_warm(int step, std::string &err);
+// the warm-up's state (one atomic): phase -1 none, 0-3 a corner (ah ee oo oh), 4 a gap; the frames each corner counted
+// (0-255, saturating); result 0 none, 1 learned, 2 too short, 3 cancelled, 4 unclear (review R.5)
+struct WarmState {
+    int phase = -1;
+    uint32_t n[4] = {0, 0, 0, 0};
+    int result = 0;
+};
+void viseme_warm_state(WarmState &out);
+// the voice summary (one atomic; SESSION MEMORY ONLY - owner PQ7: never written to a file, a setting, the log or sent):
+// g as viseme_voice's (engine 2: (mu1 + mu2) / 2 of the learned ln F1 / ln F2 means, in 1e-4 steps), the frames learned
+// from, F1 / F2 of the learned means in Hz (4 Hz steps; 0 before anything is learned and with engine 1, which learns one
+// number only), warmed = a warm-up succeeded and was not forgotten since. Nothing learned (or a forget / "adapt" 0 not yet
+// applied): g = the chosen engine's prior_g() exactly, 0 frames, 0 Hz, not warmed. After a warm-up frames restart at 0
+// while warmed is 1 (the fit counts as 800 frames).
+void viseme_voice2(float &g, uint32_t &frames, float &f1_hz, float &f2_hz, bool &warmed);
+// atomic 2 (review R.3): the newest frame's classification features, for the opt-in numbers log only. seq equals atomic
+// 1's (viseme_frame) seq of the same frame: read both and use these only when the two seqs match. cat / raw -1 = none.
+struct VisemeFeatures {
+    float rel_loc = 0, per = 0, nbr = 0, eep = 0;
+    int cat = -1, raw = -1;
+    uint32_t seq = 0;
+    float lowr = 0, zcr = 0;
+};
+void viseme_features(VisemeFeatures &out);
+// the packing (tests): bits 0-15 seq, 16-23 rel_loc (0..255 = 0..-63.75 dB, 0.25 dB steps), 24-30 per, 31-37 nbr, 38-44 eep
+// (0..1 in 1/127), 45-48 cat (15 none), 49-52 raw (15 none), 53-57 lowr (0..1 in 1/31), 58-63 zcr (0..1 in 1/63)
+uint64_t features_pack(const VisemeFeatures &f);
+void features_unpack(uint64_t v, VisemeFeatures &out);
+// tests only: copies of both engines' States (call with no block in flight; the module never calls it)
+void viseme_debug_states(viseme::State *v2, viseme_v1::State *v1);
 
 }  // namespace mic
 }  // namespace gsa1

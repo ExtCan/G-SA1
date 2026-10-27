@@ -24,6 +24,15 @@
 --     microphone or an older module: the 0.9.4a mouth. The voice learning lives in the module's memory for the session
 --     only: nothing of it is saved, logged or sent (the owner's answer PQ7). A 30-second microphone test on the page.
 --   * Session log lines "faces" (the sources chosen, the face animations played, refusals; a summary at the end).
+--   * 0.9.4e, the owner's note "the phoneme detection is pretty bad. it could be better" - worst: wrong shapes (sadc docs/
+--     research/lipsync2_plan.md 4.4, 4.5, 4.8, 4.9, 6.3, 7.1 with its Review R.3 / R.5 / R.6 / R.7 / R.10): the microphone
+--     by NAME (gsa1_lipsync_device_name; resolved to BASS's number at each open, exactly, then with Windows' "3- " renumbering
+--     taken out, then Windows' default; speaker loopbacks never listed nor opened; a saved loopback number moved once; a
+--     stalled stream opened again), "Sound detection" (gsa1_lipsync_hearing: the module's classifier v2 or 0.9.4c's), the
+--     guided warm-up "Teach it my vowels" (F.Warm*: the module learns in its memory for the session only; this file keeps
+--     only the result line's text), the numbers line v2 (gsa1.MicVisemeFeatures of the same frame, only with the log
+--     switch on), the mouth shape tester's hook (feat/cl_mouthtest.lua: F.TesterFrame wins the frame, lip sync yields
+--     without its -1; a face animation ends a kept tester mouth).
 -- Characters without a face (E-102, both Super Sonics) never get a face call.
 GSA1 = GSA1 or {}
 local F = GSA1.Faces
@@ -50,8 +59,19 @@ local cv = {
     listen = GSA1.ConVar("gsa1_lipsync_listen", 0, "Lip sync listens 0 = only while you hold the voice chat key, 1 = always "
         .. "(an open microphone)", 0, 1),
     key = GSA1.ConVar("gsa1_lipsync_key", 0, "Lip sync's talk key (a key code; 0 = the key bound to +voicerecord)", 0, 511),
-    device = GSA1.ConVar("gsa1_lipsync_device", -1, "The microphone for lip sync (-1 = Windows' default; else the number "
-        .. "the Faces page lists)", -1, 63),
+    device = GSA1.ConVar("gsa1_lipsync_device", -1, "G-SA1's cache of the microphone's number (choose by name on the "
+        .. "Faces page)", -1, 63),
+    -- 0.9.4e (lipsync2_plan.md 7.1 / 7.2)
+    device_name = GSA1.ConVar("gsa1_lipsync_device_name", "", "The microphone for lip sync, by its name (empty = Windows' "
+        .. "default). Speaker devices (what your PC plays) are never used"),
+    hearing = GSA1.ConVar("gsa1_lipsync_hearing", 2, "Sound detection: 2 = G-SA1 0.9.4e's (vowels in the middle of words "
+        .. "keep the mouth open, 'ee' only for a real 'ee', 's' told from 'f'), 1 = as in 0.9.4c", 1, 2),
+    custom = GSA1.ConVar("gsa1_lipsync_shapes_custom", 1, "Use my mouths (Faces page > Mouth shape tester); 0 = G-SA1's "
+        .. "mouths for everyone (your choices stay saved in garrysmod/data/gsa1/mouth_shapes.txt)", 0, 1),
+    closeup = GSA1.ConVar("gsa1_mouth_closeup", 1, "A small live picture of your character's face on the Faces page's "
+        .. "mouth shape tester while the page is open", 0, 1),
+    msummary = GSA1.ConVar("gsa1_mouth_summary", "", "Read-only: your own mouths, for the session log (the mouths themselves "
+        .. "are garrysmod/data/gsa1/mouth_shapes.txt)"),
     style = GSA1.ConVar("gsa1_lipsync_style", 2, "The mouth: 0 = it opens with your voice (like Garry's Mod's mouths), "
         .. "1 = the game's talking animations while you talk, 2 = mouth shapes from your voice (G-SA1 hears which kind of "
         .. "sound you make while you hold the talk key and gives the character the matching mouth; needs Voice from "
@@ -71,11 +91,12 @@ local cv = {
     sgate = GSA1.ConVar("gsa1_lipsync_shapes_gate", 6, "Mouth shapes: a sound must be this many dB above the room's own "
         .. "noise to count as speech", 3, 12),
     adapt = GSA1.ConVar("gsa1_lipsync_shapes_adapt", 1, "Mouth shapes learn how high or low your voice is while you talk "
-        .. "(in memory for this session only; nothing is saved or sent)", 0, 1),
+        .. "(in memory for this session only; nothing is saved or sent; also what 'Teach it my vowels' learned)", 0, 1),
     rise = GSA1.ConVar("gsa1_lipsync_shapes_rise", 0.015, "Mouth shapes: seconds the mouth takes to open (the kind of "
         .. "sound decides when it changes; this only smooths its size)", 0.005, 0.06),
     slog = GSA1.ConVar("gsa1_lipsync_shapes_log", 0, "Mouth shapes: one line of numbers per sentence in the session log "
-        .. "(how often each kind of sound came, two averages per vowel, how loud; never the sound)", 0, 1),
+        .. "(how often each kind of sound came, two averages per vowel, how loud and, per kind of sound, how loud, voiced "
+        .. "and hissy it was; never the sound)", 0, 1),
     gain = GSA1.ConVar("gsa1_lipsync_gain", 2, "Lip sync's sensitivity (2 = Garry's Mod's own)", 0.5, 8),
     gate = GSA1.ConVar("gsa1_lipsync_gate", 0.05, "Lip sync ignores sounds quieter than this (0..0.5)", 0, 0.5),
     release = GSA1.ConVar("gsa1_lipsync_release", 0.12, "Seconds the mouth takes to close", 0.03, 0.5),
@@ -262,6 +283,8 @@ function F.PlayAnim(C, anim, why)
         log("%s not played on %s (%s): %s", tostring(anim.name or "the face animation"), C.title or "?", why or "?", no)
         return nil, no
     end
+    -- 0.9.4e: a face animation ends a mouth the tester keeps (lipsync2_plan.md 4.8)
+    if F.TesterStop then F.TesterStop("a face animation") end
     local spec, flags = F.SpecOf(anim, const("HOLD_LAST", 4))
     local r, err = gsa1.FaceSequence(C.id, spec, flags)
     if not r then
@@ -328,6 +351,8 @@ L.talkTime, L.levelSum, L.levelN = L.talkTime or 0, L.levelSum or 0, L.levelN or
 L.hold, L.spurt = L.hold or {}, L.spurt or {}
 F.mtest = F.mtest or { running = false, counts = {}, n = 0 }
 F.MICTEST_SECONDS = 30
+-- 0.9.4e: the vowel warm-up's page state (F.Warm*): the step, its times, the result code and the result line's text only
+F.warm = F.warm or { running = false }
 -- the talk key: gsa1_lipsync_key, else the key bound to +voicerecord (looked up once a second)
 function F.TalkKeyCode()
     local k = cv.key:GetInt()
@@ -350,27 +375,250 @@ function F.TalkKeyDown()
     local code = F.TalkKeyCode()
     return code > 0 and input and input.IsButtonDown and input.IsButtonDown(code) == true or false
 end
-local function mic_device()
-    return cv.device:GetInt()
+-- 0.9.4e: the microphone by its NAME (lipsync2_plan.md 4.5 with review R.6 / R.7). gsa1_lipsync_device_name is the
+-- setting ("" = Windows' default); BASS's number moves whenever a controller, a voice changer or a re-plugged USB
+-- microphone comes or goes, so the name is resolved to the number at each open (gsa1.MicDevices once per open, never per
+-- frame): exactly, then normalised, then Windows' default. Speaker loopbacks (BASS's "what the PC plays" devices) are never
+-- listed nor opened. gsa1_lipsync_device stays as the cache of the last number opened.
+F.MOVE_COOKIE = "gsa1_lipsync_device_094e"
+F.STALL_SECONDS = 1.5            -- MicLevel's blocks unchanged this long while listening: the stream stalled
+F.REOPEN_EVERY = 5               -- s: at most one forced re-open
+F.devMissingLogged = F.devMissingLogged or {}
+-- "Microphone (3- Studio Pro)" -> "microphone (studio pro)": Windows numbers a second instance of a USB device "3- ..." and
+-- renumbers it when the device comes back on another port (review R.6)
+function F.MicNormName(name)
+    local n = string.lower(tostring(name or ""))
+    n = string.gsub(n, "%(%s*%d+%s*%-%s*", "(")
+    return n
 end
--- opens (once per device) and starts / pauses the microphone; false when it cannot be used. While the microphone test
--- runs it always listens (lip sync never pauses it then: phoneme_plan.md 6.3)
+-- BASS's own "Default" entry (its first device: a duplicate of Windows' default)
+local function bass_default_entry(d)
+    return string.lower(tostring(d.name or "")) == "default"
+end
+-- a device the Microphone list offers: enabled, not a loopback (what the PC plays), not BASS's own "Default"
+local function listable(d)
+    return type(d) == "table" and d.index ~= nil and d.enabled ~= false and d.loopback ~= true and not bass_default_entry(d)
+end
+F.MicListable = listable
+-- Windows' own "what the PC plays" recording inputs: listed (with a note), as they are not loopbacks
+local PLAYS_NAMES = { "stereo mix", "what u hear", "wave out mix" }
+function F.MicPlaysName(name)
+    local n = string.lower(tostring(name or ""))
+    for _, p in ipairs(PLAYS_NAMES) do
+        if string.find(n, p, 1, true) then return true end
+    end
+    return false
+end
+-- gsa1.MicDevices() (at each open and at the page's build, never per frame); F.devList / F.devNames keep the last list
+function F.MicDevicesList()
+    if not (have() and gsa1.MicDevices) then return nil, "the module has no microphone list" end
+    local list, err = gsa1.MicDevices()
+    if type(list) ~= "table" then
+        F.devListError = tostring(err)
+        return nil, F.devListError
+    end
+    F.devList, F.devListError = list, nil
+    F.devNames = {}
+    for _, d in ipairs(list) do
+        if d.index ~= nil then F.devNames[d.index] = tostring(d.name) end
+    end
+    return list
+end
+-- Windows' default input as BASS lists it (review R.6): the enabled, non-loopback entry with the default flag other than
+-- BASS's own "Default" entry; nil when the list has none
+function F.MicDefaultName(list)
+    for _, d in ipairs(list or F.devList or {}) do
+        if listable(d) and d.default then return tostring(d.name) end
+    end
+    return nil
+end
+-- "Windows default (Microphone (X))" / "Windows default"
+function F.MicDefaultText(list)
+    local n = F.MicDefaultName(list)
+    return n and ("Windows default (" .. n .. ")") or "Windows default"
+end
+-- the setting's name -> BASS's number now: index (-1 = Windows' default), the device's name, how ("exact", "normalised",
+-- "default", "missing"); the cached number first when its name still matches
+function F.MicResolve(name, list)
+    name = tostring(name or "")
+    list = list or F.devList or {}
+    if name ~= "" then
+        local cached = cv.device:GetInt()
+        for _, d in ipairs(list) do
+            if d.index == cached and listable(d) and d.name == name then return d.index, name, "exact" end
+        end
+        for _, d in ipairs(list) do
+            if listable(d) and d.name == name then return d.index, name, "exact" end
+        end
+        local norm = F.MicNormName(name)
+        for _, d in ipairs(list) do
+            if listable(d) and F.MicNormName(d.name) == norm then return d.index, tostring(d.name), "normalised" end
+        end
+        return -1, F.MicDefaultName(list), "missing"
+    end
+    return -1, F.MicDefaultName(list), "default"
+end
+-- the cache gsa1_lipsync_device (its change callback leaves G-SA1's own writes alone)
+local function cache_index(idx)
+    if cv.device:GetInt() == idx then return end
+    F.devCacheValue = idx
+    cv.device:SetInt(idx)
+end
+local function set_device_name(name)
+    if cv.device_name:GetString() ~= name then cv.device_name:SetString(name) end
+end
+-- 0.9.4e, once per installation (a cookie, as cl_super.lua's 0.9.3b move): a 0.9.4a-0.9.4d number becomes a name. A real
+-- input -> its name; a speaker loopback "Speakers (X)" -> "Microphone (X)" or "Headset Microphone (X)" when exactly one
+-- exists (review R.6: a USB microphone's own speaker output is a loopback next to it), else Windows' default; gone -> Windows'
+-- default. One log line and, when it was moved, the page's note. true when it ran
+function F.MigrateDevice(list)
+    -- owner answer EQ1 (lipsync2_plan.md 10.1, binding): the saved device is moved ONLY when BASS flags it a loopback at run
+    -- time; a real input keeps its choice (by name), whether BASS lists it as enabled or not, and a device that is not
+    -- connected right now changes nothing - the move waits for a start where it is there (0.9.4e verifier)
+    if not (cookie and cookie.GetNumber and cookie.Set) or cookie.GetNumber(F.MOVE_COOKIE, 0) ~= 0 then return false end
+    list = list or F.MicDevicesList()
+    if type(list) ~= "table" then return false end
+    local idx = cv.device:GetInt()
+    if cv.device_name:GetString() ~= "" or idx < 0 then
+        cookie.Set(F.MOVE_COOKIE, "1")
+        return true
+    end
+    local dev
+    for _, d in ipairs(list) do
+        if d.index == idx then
+            dev = d
+            break
+        end
+    end
+    if not dev then
+        if not F.migrateAbsentLogged then
+            F.migrateAbsentLogged = true
+            log("lip sync: the saved microphone %d is not connected now - kept; its name is taken once it is there", idx)
+        end
+        return false
+    end
+    cookie.Set(F.MOVE_COOKIE, "1")
+    if bass_default_entry(dev) then
+        log("lip sync: the microphone is chosen by its name now: %d was Windows' default", idx)
+        return true
+    end
+    if not dev.loopback then
+        set_device_name(tostring(dev.name))
+        log("lip sync: the microphone is chosen by its name now: %d '%s'%s", idx, tostring(dev.name),
+            listable(dev) and "" or " (listed as not enabled - kept)")
+        return true
+    end
+    local to
+    local inner = string.match(tostring(dev.name), "%((.*)%)%s*$")
+    if inner then
+        local want1, want2 = F.MicNormName("Microphone (" .. inner .. ")"), F.MicNormName("Headset Microphone (" ..
+            inner .. ")")
+        local found, n = nil, 0
+        for _, d in ipairs(list) do
+            local nn = listable(d) and F.MicNormName(d.name)
+            if nn and (nn == want1 or nn == want2) then
+                found, n = d, n + 1
+            end
+        end
+        if n == 1 then to = tostring(found.name) end
+    end
+    set_device_name(to or "")
+    local nowText = to and ("'" .. to .. "'") or F.MicDefaultText(list)
+    F.devNote = string.format("Your saved microphone was '%s', which records what your PC plays: %s is used now. Pick "
+        .. "your microphone above.", tostring(dev.name), nowText)
+    log("lip sync: microphone %d '%s' records what the PC plays - not used; %s instead", idx, tostring(dev.name), nowText)
+    return true
+end
+-- a number typed into gsa1_lipsync_device on the console picks that device's name once (a loopback: Windows' default)
+function F.PickDeviceIndex(idx)
+    idx = math.floor(tonumber(idx) or -1)
+    if idx < 0 then
+        set_device_name("")
+        return true
+    end
+    local list = F.MicDevicesList()
+    if type(list) ~= "table" then return false end
+    for _, d in ipairs(list) do
+        if d.index == idx then
+            if d.loopback then
+                log("lip sync: microphone %d '%s' records what the PC plays - not used; Windows' default instead", idx,
+                    tostring(d.name))
+                set_device_name("")
+            else
+                set_device_name(bass_default_entry(d) and "" or tostring(d.name))
+                log("lip sync: microphone %d '%s' chosen by its number", idx, tostring(d.name))
+            end
+            return true
+        end
+    end
+    log("lip sync: there is no microphone %d - Windows' default instead", idx)
+    set_device_name("")
+    return true
+end
+cvars.AddChangeCallback("gsa1_lipsync_device", function(_, old, new)
+    local idx = tonumber(new)
+    if idx == nil then return end
+    if idx == F.devCacheValue then
+        F.devCacheValue = nil
+        return
+    end
+    if tonumber(old) == idx then return end
+    F.PickDeviceIndex(idx)
+end, "gsa1_faces")
+-- opens the device the setting names now (force: the open one again, a stalled stream - the module keeps the voice);
+-- true when it is open. Log lines carry the device's name (a device name is not personal data)
+function F.OpenMic(force)
+    local list = F.MicDevicesList()
+    if list then F.MigrateDevice(list) end
+    local name = cv.device_name:GetString()
+    local idx, devName, how = F.MicResolve(name, list)
+    if how == "missing" then
+        F.devMissing = name
+        if not F.devMissingLogged[name] then
+            F.devMissingLogged[name] = true
+            log("lip sync: the microphone '%s' is not connected - %s instead", name, F.MicDefaultText(list))
+        end
+    else
+        F.devMissing = nil
+    end
+    local ok, err, code
+    if force then
+        ok, err, code = gsa1.MicOpen(idx, true)
+    else
+        ok, err, code = gsa1.MicOpen(idx)
+    end
+    if not ok then
+        L.micFailed, L.micFailedName, L.micFailedCode = tostring(err or "it could not be opened"), name, code
+        if code == "unsupported" then
+            log("lip sync: microphone %d '%s' could not be used: %s", idx, tostring(devName), L.micFailed)
+        else
+            log("lip sync: the microphone failed: %s", L.micFailed)
+        end
+        return false
+    end
+    L.micDevice, L.micOpenName, L.micDevName, L.micHow, L.micFailed, L.micListen = idx, name, devName, how, nil, false
+    L.stallBlocks = nil
+    cache_index(idx)
+    local _, _, state = gsa1.MicLevel()
+    local label = idx < 0 and ("Windows' default" .. (devName and (" '" .. devName .. "'") or "")) or
+        string.format("%d '%s'", idx, tostring(devName))
+    if force then
+        log("lip sync: the microphone stopped sending sound (unplugged?); opened again: %s", label)
+    else
+        log("lip sync: microphone %s opened (%s)", label, tostring(state))
+    end
+    return true
+end
+-- opens (once per device name) and starts / pauses the microphone; false when it cannot be used. While the microphone
+-- test or the vowel warm-up runs it always listens (lip sync never pauses it then: phoneme_plan.md 6.3)
 local function mic_want(on)
     if not (gsa1.MicOpen and gsa1.MicListen) then return false end
-    if F.mtest.running then on = true end
+    if F.mtest.running or (F.warm and F.warm.running) then on = true end
     if on then
-        local dev = mic_device()
-        if L.micDevice ~= dev then
-            if L.micFailed and L.micFailedDevice == dev then return false end
-            local ok, err = gsa1.MicOpen(dev)
-            if not ok then
-                L.micFailed, L.micFailedDevice = tostring(err), dev
-                log("lip sync: the microphone failed: %s", L.micFailed)
-                return false
-            end
-            L.micDevice, L.micFailed, L.micListen = dev, nil, false
-            local _, _, state = gsa1.MicLevel()
-            log("lip sync: microphone %s opened (%s)", dev < 0 and "Windows' default" or tostring(dev), tostring(state))
+        local name = cv.device_name:GetString()
+        if L.micDevice == nil or L.micOpenName ~= name then
+            if L.micFailed and L.micFailedName == name then return false end
+            if not F.OpenMic(false) then return false end
         end
         if not L.micListen then
             local ok = gsa1.MicListen(true)
@@ -384,13 +632,50 @@ local function mic_want(on)
     return false
 end
 F.MicWant = mic_want
+-- 0.9.4e: the stream stalled (MicLevel's 4th value, the blocks since open, unchanged for F.STALL_SECONDS while listening
+-- with the state "on": the USB microphone was pulled out and came back) -> the name resolved again and the device opened
+-- again keeping the voice, at most once every F.REOPEN_EVERY s. Every frame (Think); a module without blocks: nothing
+function F.MicStallThink(now)
+    if not (L.micListen and L.micDevice ~= nil and have() and gsa1.MicLevel) then
+        L.stallBlocks = nil
+        return
+    end
+    local _, _, state, blocks = gsa1.MicLevel()
+    if blocks == nil or state ~= "on" then
+        L.stallBlocks = nil
+        return
+    end
+    if blocks ~= L.stallBlocks then
+        L.stallBlocks, L.stallAt = blocks, now
+        return
+    end
+    if now - L.stallAt < F.STALL_SECONDS - 1e-4 or now - (L.reopenAt or -1e9) < F.REOPEN_EVERY - 1e-4 then return end
+    L.reopenAt = now
+    if F.OpenMic(true) then
+        local ok = gsa1.MicListen(true)
+        L.micListen = ok == true
+    end
+    L.stallBlocks = nil
+end
 local SOURCE_NAMES = { gmod = "Garry's Mod voice", mic = "the microphone" }
 -- 0.9.4c: the microphone failed on the device chosen NOW (a failure of another device no longer keeps Automatic on Garry's
--- Mod's level after a working device is chosen again)
+-- Mod's level after a working device is chosen again); 0.9.4e: by the name
 local function mic_failed()
-    return L.micFailed ~= nil and L.micFailedDevice == mic_device()
+    return L.micFailed ~= nil and L.micFailedName == cv.device_name:GetString()
 end
 F.MicFailed = mic_failed
+-- the device lip sync listens to now, in words: "Microphone (X)" / "Windows default (Microphone (Y))"
+function F.MicNowText()
+    if L.micDevice ~= nil then
+        if L.micDevice < 0 then
+            return L.micDevName and ("Windows default (" .. L.micDevName .. ")") or "Windows default"
+        end
+        return tostring(L.micDevName or ("device " .. L.micDevice))
+    end
+    local idx, devName = F.MicResolve(cv.device_name:GetString(), F.devList)
+    if idx < 0 then return devName and ("Windows default (" .. devName .. ")") or "Windows default" end
+    return tostring(devName)
+end
 local function decide(use, why)
     if L.use ~= use then
         L.use = use
@@ -429,6 +714,14 @@ function F.VisemeTable(kind)
     end
     return t or nil
 end
+-- 0.9.4e: the cached table of a kind after its mouths changed (gsa1.VisemeOverride; nil: every kind)
+function F.VisemeTableReset(kind)
+    if kind == nil then
+        for k in pairs(F.vtab) do F.vtab[k] = nil end
+    else
+        F.vtab[tonumber(kind) or -1] = nil
+    end
+end
 -- the loudness ladder's top: 1 with "bigger mouths", else the kind's last mouth-only key (VisemeTable's ladder_cap; 1 when
 -- the module has no table: an older module's ladder is not capped)
 local function ladder_cap(kind)
@@ -462,11 +755,32 @@ end
 local function tune_gate() return F.Tune("gate_min_db", clamp(cv.sgate:GetFloat(), 3, 12)) end
 local function tune_adapt() return F.Tune("adapt", cv.adapt:GetBool() and 1 or 0) end
 local function tune_smooth() return F.Tune("smooth", F.SHAPES_SMOOTH[steady_of()]) end
--- the saved settings, each time the classifier is switched on (the module's own start values are 6 / 1 / 3; voice_done.txt)
+-- 0.9.4e: "Sound detection" (lipsync2_plan.md 4.3): the module's feature "faces" 3 has both classifiers, v2 (2, the
+-- default) and 0.9.4c's (1), the vowel warm-up and the per-frame features; an older module hears the 0.9.4c way
+local function hearing_ok()
+    if not shapes_ok() or gsa1.MicVisemeTune == nil then return false end
+    local f = gsa1.FEATURES
+    return type(f) == "table" and (tonumber(f.faces) or 0) >= 3
+end
+F.HearingOk = hearing_ok
+local function hearing_of()
+    return math.floor(clamp(cv.hearing:GetInt(), 1, 2))
+end
+local function tune_engine()
+    if not hearing_ok() then return false end
+    return F.Tune("engine", hearing_of())
+end
+-- the hearing in use: 2 / 1 (an older module: 1, the 0.9.4c way)
+function F.HearingTag()
+    return hearing_ok() and hearing_of() or 1
+end
+-- the saved settings, each time the classifier is switched on (the module's own start values are 6 / 1 / 3; voice_done.txt;
+-- 0.9.4e: and the engine, 2)
 function F.SendTunes()
     tune_gate()
     tune_adapt()
     tune_smooth()
+    tune_engine()
 end
 local function changed_num(old, new)
     return tonumber(old) ~= tonumber(new)
@@ -475,22 +789,41 @@ cvars.AddChangeCallback("gsa1_lipsync_shapes_gate", function(_, old, new)
     if changed_num(old, new) then tune_gate() end
 end, "gsa1_faces")
 cvars.AddChangeCallback("gsa1_lipsync_shapes_adapt", function(_, old, new)
-    if changed_num(old, new) then tune_adapt() end
+    if changed_num(old, new) then
+        -- the warm-up needs the learning (4.4): it stops
+        if F.warm and F.warm.running then F.WarmStop("'Learn my voice' changed") end
+        tune_adapt()
+        -- learning off also forgets what the warm-up learned (lipsync2_plan.md 4.4): the page's result line goes
+        if not cv.adapt:GetBool() and F.warm then F.warm.text, F.warm.result = nil, nil end
+    end
 end, "gsa1_faces")
 cvars.AddChangeCallback("gsa1_lipsync_shapes_steady", function(_, old, new)
     if changed_num(old, new) then tune_smooth() end
 end, "gsa1_faces")
--- "Forget my voice": the module's speaker number back to the adult prior (nothing of the learning is kept anywhere)
+cvars.AddChangeCallback("gsa1_lipsync_hearing", function(_, old, new)
+    if not changed_num(old, new) then return end
+    if F.warm and F.warm.running then F.WarmStop("'Sound detection' changed") end
+    if tune_engine() then
+        log("lip sync: sound detection %s", hearing_of() == 2 and "G-SA1 0.9.4e" or "as in 0.9.4c")
+    end
+end, "gsa1_faces")
+-- "Forget my voice": the module's speaker number back to the adult prior (nothing of the learning is kept anywhere);
+-- 0.9.4e: also what the warm-up learned (the module forgets it with the voice), so its page line goes
 function F.ForgetVoice()
     local ok = F.Tune("reset_voice", 0)
     if ok then log("lip sync: the voice learning was reset (it learns again while you talk)") end
+    if F.warm then
+        if F.warm.running then F.WarmStop("the voice was forgotten") end
+        F.warm.text, F.warm.result = nil, nil
+    end
     return ok
 end
 
--- the classifier on (style 2 with the microphone, or the microphone test: review R.18) or off; one call per change
+-- the classifier on (style 2 with the microphone, the microphone test: review R.18, or the vowel warm-up) or off; one
+-- call per change
 local function vis_apply()
     if not shapes_ok() then return end
-    local want = L.visWant == true or F.mtest.running
+    local want = L.visWant == true or F.mtest.running or (F.warm and F.warm.running) or false
     if want == (L.visSent == true) then return end
     gsa1.MicVisemeOn(want)
     L.visSent = want
@@ -498,11 +831,24 @@ local function vis_apply()
 end
 F.VisApply = vis_apply
 
--- the end of a talk spurt: its line of numbers (only with gsa1_lipsync_shapes_log 1, off by default: review R.10)
+-- 0.9.4e: the spurt line's mouths tag: "G-SA1's v2" (the module's table version), or "yours (ah, ee)" for the rows the
+-- player chose for this kind (gsa1.VisemeTable's row.custom)
+function F.MouthsTag(kind)
+    local t = kind ~= nil and F.VisemeTable(kind) or nil
+    if type(t) ~= "table" then return "G-SA1's" end
+    local mine = {}
+    for c = 2, F.VISEME_COUNT - 1 do
+        if type(t[c]) == "table" and t[c].custom == true then mine[#mine + 1] = F.VISEME_WORDS[c] end
+    end
+    if #mine > 0 then return "yours (" .. table.concat(mine, ", ") .. ")" end
+    return "G-SA1's v" .. tostring(tonumber(t.table_version) or 1)
+end
+-- the end of a talk spurt: its line of numbers (only with gsa1_lipsync_shapes_log 1, off by default: review R.10); 0.9.4e:
+-- with the hearing and the mouths tags
 local function end_spurt()
     local sp = L.spurt
     if cv.slog:GetBool() and sp.n and sp.n > 0 then
-        local line = F.SpurtLine(sp)
+        local line = F.SpurtLine(sp, F.HearingTag(), F.MouthsTag(L.spurtKind))
         if line then log("%s", line) end
     end
     F.SpurtReset(sp)
@@ -515,6 +861,18 @@ local function stop_talking()
     L.hold.shown, L.hold.v, L.hold.vc = nil, nil, nil
 end
 F.StopTalking = stop_talking
+-- 0.9.4e (lipsync2_plan.md 4.8): the mouth shape tester drew this frame's mouth - lip sync ends its talk spurt WITHOUT its
+-- -1 (the tester's call is the frame's last before the pair, so no -1 may close the tester's mouth) and leaves the
+-- microphone as it is; talking starts again cleanly once the tester lets go
+function F.LipSyncYield(C, now)
+    if L.talking then
+        end_spurt()
+        L.talking, L.sentId = false, nil
+        L.hold.shown, L.hold.v, L.hold.vc = nil, nil, nil
+    end
+    L.s, L.quiet = 0, 1e9
+    L.last = now or SysTime()
+end
 
 -- style 2, one frame (phoneme_plan.md 4.2 step 3 and 4.4): the classifier's newest class held (F.HoldClass), the openness
 -- (F.Smooth with the shapes' rise; the hang does not start while the shown class is a sound), the variant (F.Variant), the
@@ -558,8 +916,20 @@ local function shapes_frame(C, now, dt, held)
     end
     L.talking, L.sentId, L.sentStyle = true, C.id, F.STYLE_LADDER
     L.shown, L.variant, L.mouthA, L.mouthB, L.mouthW = shown, variant, a, b, w
+    L.spurtKind = C.kind
     L.talkTime, L.levelSum, L.levelN = L.talkTime + dt, L.levelSum + s, L.levelN + 1
-    if cv.slog:GetBool() then F.SpurtAdd(L.spurt, newest, f1, f2, s, raw, dt) end
+    if cv.slog:GetBool() then
+        -- 0.9.4e (4.9, review R.3): the classifier's features of the same 10 ms frame (atomic 2, one load), only while the
+        -- numbers log is on and its seq is this frame's
+        if seq ~= nil and gsa1.MicVisemeFeatures then
+            local rl, per, nbr, eep, _, rcls, fseq, lowr, zcr = gsa1.MicVisemeFeatures()
+            if fseq ~= nil and fseq == seq then
+                F.SpurtAdd(L.spurt, newest, f1, f2, s, raw, dt, rl, per, nbr, eep, rcls, lowr, zcr)
+                return
+            end
+        end
+        F.SpurtAdd(L.spurt, newest, f1, f2, s, raw, dt)
+    end
 end
 
 -- one frame: the source's level, smoothed, sent while talking; one -1 when talking ends (styles 0 / 1; style 2 above)
@@ -586,8 +956,8 @@ function F.LipSyncFrame(C, now)
     local vol = speaking and ply.VoiceVolume ~= nil and (tonumber(ply:VoiceVolume()) or 0) or 0
     if speaking and vol > 0.01 then L.gmodSeen = now end
     local always = cv.listen:GetInt() == 1
-    -- the microphone test listens without the key (the mouth follows it then)
-    local held = always or F.mtest.running or F.TalkKeyDown()
+    -- the microphone test and the vowel warm-up listen without the key (the mouth follows them then)
+    local held = always or F.mtest.running or F.warm.running or F.TalkKeyDown()
     local source = cv.source:GetInt()
     if held and not L.keyDown then L.pressAt = now end
     L.keyDown = held
@@ -677,6 +1047,11 @@ function F.MicTestStart(now)
         T.note = "The microphone test needs G-SA1 module 0.9.4c."
         return false, T.note
     end
+    -- 0.9.4e: the test and the vowel warm-up both listen without the key: one at a time
+    if F.warm.running then
+        T.note = "'Teach it my vowels' is listening: wait for it (or stop it) first."
+        return false, T.note
+    end
     T.running = true
     if not mic_want(true) then
         T.running = false
@@ -744,9 +1119,155 @@ function F.MicTestLines(now)
     return { "Listens for 30 s without the talk key: say a, e, i, o, u and see what it hears. Nothing is stored." }
 end
 
+-- 0.9.4e: the guided warm-up "Teach it my vowels" (lipsync2_plan.md 4.4 with review R.1 / R.5) --------------------------
+-- about 10 s of listening without the talk key (as the microphone test does), the classifier on; at each step's start the
+-- module gets the step (gsa1.MicVisemeWarmup "gap" / "ah" / "ee" / "oo" / "oh" / "done"), then the page waits for the
+-- result. The module learns in its memory for this session only; the page keeps the result code and its line's text,
+-- never a number of it (the owner's answer PQ7: no file, ConVar, cookie, log number or net message). One log line,
+-- without numbers. With or without a character; not while the microphone test runs (and the reverse).
+function F.WarmOk()
+    if not have() then return false, "needs the G-SA1 module" end
+    if not (hearing_ok() and gsa1.MicVisemeWarmup and gsa1.MicVisemeWarmupState) then
+        return false, "needs G-SA1 module 0.9.4e"
+    end
+    if hearing_of() ~= 2 then return false, "needs 'Sound detection' G-SA1 0.9.4e" end
+    if not cv.adapt:GetBool() then return false, "needs 'Learn my voice'" end
+    return true
+end
+local function warm_finish(W, result, line)
+    W.running, W.step = false, nil
+    W.result = result
+    W.text = line or F.WARM_RESULT_TEXT[result] or "Stopped"
+    vis_apply()
+    -- the microphone back to what lip sync wants (as after the microphone test: paused unless lip sync listens now)
+    local now = SysTime()
+    if not (F.mtest.running or (L.keyDown and L.frameAt and now - L.frameAt < 0.5 and L.use == "mic" and
+            cv.lipsync:GetBool())) then
+        mic_want(false)
+    end
+    log("lip sync: vowel warm-up %s (this session only)", F.WARM_LOG_WORD[result] or "stopped")
+end
+-- step i of F.WARM_STEPS from now: the module's call; false (the warm-up ended) when the module refuses it
+local function warm_step(W, i, now)
+    local st = F.WARM_STEPS[i]
+    W.step, W.stepAt = i, now
+    local ok, err = gsa1.MicVisemeWarmup(st.call)
+    if not ok then
+        if i > 1 then gsa1.MicVisemeWarmup("cancel") end
+        warm_finish(W, F.WARM_CANCELLED, "Stopped: " .. tostring(err or "the module refused it"))
+        return false
+    end
+    return true
+end
+function F.WarmStart(now)
+    local W = F.warm
+    now = now or SysTime()
+    if W.running then return true end
+    local ok, why = F.WarmOk()
+    if not ok then
+        W.text = "Teach it my vowels " .. why .. "."
+        return false, W.text
+    end
+    if F.mtest.running then
+        W.text = "The microphone test is listening: wait for it (or stop it) first."
+        return false, W.text
+    end
+    W.running = true
+    if not mic_want(true) then
+        W.running = false
+        W.text = "The microphone failed: " .. tostring(L.micFailed or "it could not be opened")
+        return false, W.text
+    end
+    vis_apply()
+    W.startAt, W.seenAt, W.text, W.result, W.sawPhase = now, now, nil, nil, false
+    if not warm_step(W, 1, now) then return false, W.text end
+    return true
+end
+-- the button "Stop", the page closing, the microphone failing, "Sound detection" / "Learn my voice" changing
+function F.WarmStop(why)
+    local W = F.warm
+    if not W.running then return false end
+    if have() and gsa1.MicVisemeWarmup then gsa1.MicVisemeWarmup("cancel") end
+    warm_finish(W, F.WARM_CANCELLED, "Stopped (" .. tostring(why or "stopped") .. ")")
+    return true
+end
+-- the page's button tells the warm-up every frame it is shown (as the microphone test's)
+function F.WarmSeen(now)
+    F.warm.seenAt = now or SysTime()
+end
+-- every frame (the Think hook; also without a character)
+function F.WarmThink(now)
+    local W = F.warm
+    if not W.running then return end
+    if now - (W.seenAt or now) > 0.5 then return F.WarmStop("the page closed") end
+    local ok, why = F.WarmOk()
+    if not ok then return F.WarmStop(why) end
+    if mic_failed() or not L.micListen then return F.WarmStop("the microphone failed") end
+    local phase, n1, n2, n3, _, result = gsa1.MicVisemeWarmupState()
+    phase, result = tonumber(phase) or -1, tonumber(result) or 0
+    if phase >= 0 then W.sawPhase = true end
+    local st = F.WARM_STEPS[W.step]
+    if st.call ~= "done" then
+        if now - W.stepAt >= st.secs - 1e-4 then warm_step(W, W.step + 1, now) end
+        return
+    end
+    -- "done" was sent: the result once the module applied it (phase back to -1 after this warm-up's own steps)
+    if W.sawPhase and phase < 0 and (result == F.WARM_LEARNED or result == F.WARM_SHORT or result == F.WARM_UNCLEAR) then
+        local line
+        if result == F.WARM_SHORT then
+            line = string.format("%s (heard: ah %d, ee %d, oo %d)", F.WARM_RESULT_TEXT[F.WARM_SHORT], tonumber(n1) or 0,
+                tonumber(n2) or 0, tonumber(n3) or 0)
+        end
+        return warm_finish(W, result, line)
+    end
+    if now - W.stepAt >= F.WARM_RESULT_WAIT - 1e-4 then
+        return warm_finish(W, F.WARM_CANCELLED, "Stopped (the module gave no result)")
+    end
+end
+-- the bar's share (0..1)
+function F.WarmProgress(now)
+    local W = F.warm
+    if not W.running then return 0 end
+    return math.min(math.max(((now or SysTime()) - (W.startAt or 0)) / math.max(F.WARM_SECONDS, 1e-3), 0), 1)
+end
+-- the page's lines: the prompt, the frames heard per sound and the live sound while it runs (read from the module, not
+-- kept); else the result line or the help
+function F.WarmLines(now)
+    local W = F.warm
+    now = now or SysTime()
+    if W.running then
+        local st = F.WARM_STEPS[W.step] or F.WARM_STEPS[1]
+        local out = { st.text }
+        local _, n1, n2, n3, n4 = gsa1.MicVisemeWarmupState()
+        out[2] = string.format("Heard: ah %d, ee %d, oo %d, oh %d", tonumber(n1) or 0, tonumber(n2) or 0, tonumber(n3) or 0,
+            tonumber(n4) or 0)
+        local cls = tonumber((gsa1.MicViseme())) or -1
+        out[3] = "Sound now: " .. ((cls >= 0 and cls < F.VISEME_COUNT) and F.SHAPE_TEXT[math.floor(cls)] or "-")
+        return out
+    end
+    if W.text then return { W.text } end
+    local ok, why = F.WarmOk()
+    if not ok then return { "Teach it my vowels " .. why .. "." } end
+    return { "Say each sound when asked (about 10 s). Kept only until you leave the game; nothing is saved or sent." }
+end
+-- in words, for gsa1_lipsync_status (no number)
+function F.WarmStateText()
+    local W = F.warm
+    if W.running then return "listening (" .. tostring((F.WARM_STEPS[W.step] or {}).step or "?") .. ")" end
+    if W.result then return F.WARM_LOG_WORD[W.result] or "stopped" end
+    return "not used this session"
+end
+
+-- 0.9.4e (lipsync2_plan.md 4.8): the mouth shape tester (feat/cl_mouthtest.lua) draws first; while it shows a mouth,
+-- lip sync yields (no -1 from it); else lip sync's frame as in 0.9.4c
 hook.Add("GSA1PreTick", "gsa1_faces", function(C)
     if not C or not have() then return end
-    F.LipSyncFrame(C, SysTime())
+    local now = SysTime()
+    if F.TesterFrame and F.TesterFrame(C, now) then
+        F.LipSyncYield(C, now)
+    else
+        F.LipSyncFrame(C, now)
+    end
 end)
 
 -- the hotkeys and the switch key: edge-triggered, not while a menu, the cursor or the chat has the input
@@ -783,8 +1304,11 @@ local function keys_think()
         if down and not F.keyDown[i] then F.Hotkey(i, C) end
         F.keyDown[i] = down
     end
-    -- 0.9.4c: the microphone test runs with or without a character
-    F.MicTestThink(SysTime())
+    -- 0.9.4c: the microphone test runs with or without a character; 0.9.4e: so do the vowel warm-up and the stall check
+    local now = SysTime()
+    F.MicTestThink(now)
+    F.WarmThink(now)
+    F.MicStallThink(now)
 end
 hook.Add("Think", "gsa1_faces", GSA1.Guard and GSA1.Guard("Faces", keys_think) or keys_think)
 
@@ -865,7 +1389,8 @@ function F.MeterLines()
     out[#out + 1] = string.format("Garry's Mod voice: speaking %s, level %.2f", speaking and "yes" or "no", vol)
     if have() and gsa1.MicLevel then
         local lv, _, state = gsa1.MicLevel()
-        local dev = L.micDevice ~= nil and (L.micDevice < 0 and "Windows' default" or ("device " .. L.micDevice)) or nil
+        -- 0.9.4e: the device by its name
+        local dev = L.micDevice ~= nil and F.MicNowText() or nil
         if state == "on" then
             out[#out + 1] = string.format("Microphone: %.2f (%s)", tonumber(lv) or 0, dev or "?")
         elseif L.micFailed then
@@ -898,9 +1423,11 @@ end
 function F.VoiceText()
     if not cv.adapt:GetBool() then return "voice learning off" end
     if not (F.ShapesOk() and gsa1.MicVisemeVoice) then return "voice -" end
-    local g, frames = gsa1.MicVisemeVoice()
+    -- 0.9.4e: the fifth value says the vowel warm-up taught it this session (shown, never written)
+    local g, frames, _, _, warmed = gsa1.MicVisemeVoice()
     g, frames = tonumber(g) or 0, tonumber(frames) or 0
-    return string.format("voice %.2f (%s)", g, frames > 0 and "learned" or "not learned yet")
+    return string.format("voice %.2f (%s%s)", g, frames > 0 and "learned" or "not learned yet",
+        (tonumber(warmed) or 0) ~= 0 and ", vowels taught" or "")
 end
 -- "Sound now: AH (open) - level 0.72 - F1 720 F2 1240 - voice 6.83 (learned)" (phoneme_plan.md 7.1); F.soundCls = the class
 -- the page's nine words light up (the page asks at most 10 times a second: review R.6 / R.18)
@@ -933,10 +1460,8 @@ function F.LoudLines()
 end
 -- the device lip sync listens to, in words
 local function device_text()
-    local d = L.micDevice
-    if d == nil then d = cv.device:GetInt() end
-    if d < 0 then return "Windows' default" end
-    return (F.devNames and F.devNames[d]) or ("device " .. tostring(d))
+    -- 0.9.4e: by its name ("Windows default (Microphone (X))")
+    return F.MicNowText()
 end
 -- phoneme_plan.md 4.7: which way the mouth goes in style 2, and why it only opens with the voice (nil in styles 0 / 1)
 function F.ShapesStatus(C)
@@ -1003,7 +1528,13 @@ concommand.Add("gsa1_lipsync_status", function()
     for _, l in ipairs(F.MeterLines()) do print("[G-SA1] " .. l) end
     local shapes = F.ShapesStatus()
     if shapes then print("[G-SA1] " .. shapes) end
-end, nil, "G-SA1: what lip sync hears now (the style, the source, the last sound, the voice)")
+    -- 0.9.4e: the device's name, the hearing, the warm-up's state in words (never a learned number)
+    print("[G-SA1] Microphone: " .. F.MicNowText() .. (cv.device_name:GetString() ~= "" and (" (chosen: '" ..
+        cv.device_name:GetString() .. "')") or " (chosen: Windows default)"))
+    print("[G-SA1] Sound detection: " .. (F.HearingTag() == 2 and "G-SA1 0.9.4e" or "as in 0.9.4c") ..
+        "; Teach it my vowels: " .. F.WarmStateText())
+end, nil, "G-SA1: what lip sync hears now (the style, the source, the last sound, the voice, the microphone, the "
+    .. "sound detection)")
 concommand.Add("gsa1_lipsync_forget_voice", function()
     if not F.ForgetVoice() then print("[G-SA1] lip sync: the voice learning needs G-SA1 module 0.9.4c") end
 end, nil, "G-SA1: lip sync forgets how high or low your voice is (it learns it again while you talk; nothing is kept)")
@@ -1186,7 +1717,8 @@ local function choice_combo(panel, label, cvname, choices)
         if v == self.gsa1Value then return end
         self.gsa1Value = v
         for _, ch in ipairs(choices) do
-            if tostring(ch[1]) == v or tonumber(ch[1]) == tonumber(v) then
+            -- 0.9.4e: names (the microphone) compare as text; numbers also as numbers ("2" = "2.0")
+            if tostring(ch[1]) == v or (type(ch[1]) == "number" and tonumber(ch[1]) == tonumber(v)) then
                 self:SetText(ch[2])
                 return
             end
@@ -1195,6 +1727,7 @@ local function choice_combo(panel, label, cvname, choices)
     end
     return combo
 end
+F.PageChoiceCombo = choice_combo
 local function live_label(panel, lines_fn, every)
     local lbl = panel:Help("...")
     local baseThink = lbl.Think
@@ -1213,6 +1746,7 @@ local function live_label(panel, lines_fn, every)
     end
     return lbl
 end
+F.PageLiveLabel = live_label
 local function binder(panel, cvname, label)
     if label then panel:Help(label) end
     local b = vgui.Create("DBinder", panel)
@@ -1246,6 +1780,7 @@ local function button_row(panel, defs)
     for _, b in ipairs(buttons) do F.pageButtons[b.gsa1Name] = b end
     return row, buttons
 end
+F.PageButtonRow = button_row
 
 -- the maker: character, expressions, the animation's entries, its settings, the library
 local function maker(panel)
@@ -1532,6 +2067,104 @@ local function mic_test_button(panel)
     F.ui.micTest = b
     return b
 end
+-- 0.9.4e: the button "Teach it my vowels" with its countdown (while it is shown it tells the warm-up the page is open),
+-- greyed with engine 1, "Learn my voice" off or an older module; its progress bar
+local function warm_button(panel)
+    local b = vgui.Create("DButton")
+    b:SetText("Teach it my vowels (about 10 s, this session only)")
+    if b.SetTall then b:SetTall(24) end
+    b.gsa1Role = "warmup"
+    b.DoClick = function()
+        if F.warm.running then F.WarmStop("stopped") else F.WarmStart(SysTime()) end
+    end
+    local baseThink = b.Think
+    b.Think = function(self)
+        if baseThink then baseThink(self) end
+        local now = SysTime()
+        local secs = -1
+        if F.warm.running then
+            F.WarmSeen(now)
+            secs = math.max(math.ceil((F.warm.startAt or now) + F.WARM_SECONDS - now), 0)
+        end
+        local usable = F.warm.running or F.WarmOk()
+        if usable ~= self.gsa1Usable then
+            self.gsa1Usable = usable
+            if self.SetEnabled then self:SetEnabled(usable and true or false) end
+        end
+        if secs ~= self.gsa1Secs then
+            self.gsa1Secs = secs
+            self:SetText(secs >= 0 and string.format("Listening: %d s (press to stop)", secs) or
+                "Teach it my vowels (about 10 s, this session only)")
+        end
+    end
+    panel:AddItem(b)
+    F.ui = F.ui or {}
+    F.ui.warmup = b
+    local bar = vgui.Create("DPanel")
+    bar:SetTall(8)
+    bar.gsa1Role = "warmbar"
+    bar.Paint = function(self, w, h)
+        if not F.warm.running then return end
+        surface.SetDrawColor(30, 30, 30, 255)
+        surface.DrawRect(0, 0, w, h)
+        surface.SetDrawColor(80, 160, 230, 255)
+        surface.DrawRect(0, 0, math.floor(w * F.WarmProgress(SysTime())), h)
+    end
+    panel:AddItem(bar)
+    return b
+end
+-- 0.9.4e: the "Microphone" combo by name (lipsync2_plan.md 4.5 / 7.1 with review R.6 / R.7): Windows default, then every
+-- enabled device that is not a loopback nor BASS's own "Default"; Windows' "Stereo Mix"-like inputs with a note; a saved
+-- name that is not connected stays shown
+function F.MicChoices()
+    local choices = { { "", "Windows default" } }
+    local name = cv.device_name:GetString()
+    local seen, left = false, 0
+    for _, d in ipairs(type(F.devList) == "table" and F.devList or {}) do
+        if listable(d) then
+            local n = tostring(d.name)
+            choices[#choices + 1] = { n, n .. (F.MicPlaysName(n) and " (records what your PC plays)" or "") }
+            if n == name then seen = true end
+        elseif type(d) == "table" and d.loopback == true and d.enabled ~= false then
+            left = left + 1
+        end
+    end
+    if name ~= "" and not seen then choices[#choices + 1] = { name, name .. " (not connected)" } end
+    return choices, left
+end
+-- "Listening to: Microphone (X)" / "Listening to: Windows default (Microphone (Y))", the loopbacks left out, the notes
+function F.MicListeningLines()
+    local out = {}
+    if F.devListError then out[#out + 1] = "Microphones: " .. F.devListError end
+    if mic_failed() then
+        out[#out + 1] = "The microphone could not be used: " .. tostring(L.micFailed)
+    else
+        out[#out + 1] = "Listening to: " .. F.MicNowText()
+    end
+    local _, left = F.MicChoices()
+    if left > 0 then
+        out[#out + 1] = string.format("%d device%s that record%s what your PC plays %s not listed", left, left == 1 and ""
+            or "s", left == 1 and "s" or "", left == 1 and "is" or "are")
+    end
+    if F.devNote then out[#out + 1] = F.devNote end
+    if F.devMissing and F.devMissing == cv.device_name:GetString() then
+        out[#out + 1] = string.format("Your microphone '%s' is not connected: Windows' default is used", F.devMissing)
+    end
+    return out
+end
+local function mic_rows(panel)
+    if have() then
+        F.MicDevicesList()
+        F.MigrateDevice(F.devList)
+    end
+    local choices = F.MicChoices()
+    local combo = choice_combo(panel, "Microphone", "gsa1_lipsync_device_name", choices)
+    combo.gsa1Role = "microphone"
+    panel:ControlHelp("Pick your microphone by its name. Speaker devices (what your PC plays) are not listed. Voice "
+        .. "changers (virtual microphones) pass their effects on, which changes the vowels G-SA1 hears: pick the real "
+        .. "microphone.")
+    live_label(panel, F.MicListeningLines, 0.5).gsa1Role = "listening"
+end
 -- the Lip sync section's rows of phoneme_plan.md 7.1, in its order after "Microphone"
 local function shapes_rows(panel)
     local ok = F.ShapesOk()
@@ -1572,19 +2205,37 @@ local function shapes_rows(panel)
     panel:NumSlider("Ignore background noise below (dB)", "gsa1_lipsync_shapes_gate", 3, 12, 1)
     panel:ControlHelp("How far above the room's own noise a sound must be to count as speech. Raise it if the mouth moves "
         .. "on keyboard clicks or a fan.")
+    -- 0.9.4e (lipsync2_plan.md 7.1): "Sound detection" and "Teach it my vowels"
+    local hok = F.HearingOk()
+    local hearing = choice_combo(panel, "Sound detection", "gsa1_lipsync_hearing", { { 2, hok and "G-SA1 0.9.4e (better)"
+        or "G-SA1 0.9.4e (needs module 0.9.4e)" }, { 1, "As in 0.9.4c" } })
+    hearing.gsa1Role = "hearing"
+    if not hok then
+        if hearing.SetEnabled then hearing:SetEnabled(false) end
+        panel:ControlHelp("Sound detection needs G-SA1 module 0.9.4e: this module hears the 0.9.4c way.")
+    end
+    panel:ControlHelp("0.9.4e: vowels in the middle of words keep the mouth open, 'ee' only for a real 'ee', 's' told from "
+        .. "'f'. As in 0.9.4c: the old way, to compare.")
+    warm_button(panel)
+    live_label(panel, F.WarmLines, 0.25).gsa1Role = "warmline"
+    panel:ControlHelp("Say a long 'ahh', 'eee', 'ooo' (as in 'you') and 'ohh' (as in 'go') when asked. It helps most with "
+        .. "'oo' and 'oh' (British voices). Kept only until you leave the game; nothing is saved or sent. 'Forget my "
+        .. "voice' forgets it too.")
     panel:CheckBox("Learn my voice (how high or low it is; nothing is saved)", "gsa1_lipsync_shapes_adapt")
     panel:Button("Forget my voice", "gsa1_lipsync_forget_voice")
     panel:ControlHelp("It adjusts within 1-2 seconds of talking, every session, in memory only (nothing is saved or "
-        .. "sent). Forget it if someone else talks into your microphone.")
+        .. "sent). Forget it if someone else talks into your microphone. (Also what 'Teach it my vowels' learned.)")
     panel:NumSlider("Mouth opens in (s)", "gsa1_lipsync_shapes_rise", 0.005, 0.06, 3)
     panel:ControlHelp("With mouth shapes the kind of sound decides when the mouth changes; this only smooths its size.")
     panel:CheckBox("Log my voice's numbers for tuning (never the sound)", "gsa1_lipsync_shapes_log")
     panel:ControlHelp("One line per sentence in the session log: how often each kind of sound came, the averages of two "
-        .. "numbers per vowel, how loud. Nothing else.")
+        .. "numbers per vowel, how loud and, per kind of sound, how loud, voiced and hissy it was. Nothing else.")
     local now = live_label(panel, F.SoundNowLines, 0.1)
     now.gsa1Role = "soundnow"
     sound_words(panel)
     live_label(panel, F.CharacterShapesLines, 1).gsa1Role = "character"
+    -- 0.9.4e: the mouth shape tester and your mouths (feat/cl_mouthtest.lua; lipsync2_plan.md 4.8 / 7.2)
+    if F.TesterRows then F.TesterRows(panel) end
     mic_test_button(panel)
     live_label(panel, F.MicTestLines, 0.25).gsa1Role = "mictestline"
     live_label(panel, function() return { F.ShapesStatus() or "" } end, 0.5).gsa1Role = "shapesstatus"
@@ -1620,22 +2271,8 @@ function F.BuildPage(panel)
         { 1, "Always (open microphone)" } })
     binder(panel, "gsa1_lipsync_key", "Talk key (none = your voice chat key)")
     panel:Button("Use my voice chat key", "gsa1_lipsync_key", "0")
-    local devs = { { -1, "Windows default" } }
-    local derr
-    if have() and gsa1.MicDevices then
-        local list, err = gsa1.MicDevices()
-        if type(list) == "table" then
-            F.devNames = {}
-            for _, d in ipairs(list) do
-                if d.enabled then devs[#devs + 1] = { d.index, tostring(d.name) .. (d.default and " (default)" or "") } end
-                if d.index ~= nil then F.devNames[d.index] = tostring(d.name) end
-            end
-        else
-            derr = tostring(err)
-        end
-    end
-    choice_combo(panel, "Microphone", "gsa1_lipsync_device", devs)
-    if derr then panel:ControlHelp("Microphones: " .. derr) end
+    -- 0.9.4e: the microphone by its name (gsa1_lipsync_device is G-SA1's cache of the number: no control of its own)
+    mic_rows(panel)
     shapes_rows(panel)
     panel:NumSlider("Sensitivity", "gsa1_lipsync_gain", 0.5, 8, 2)
     panel:ControlHelp("2 is Garry's Mod's own.")

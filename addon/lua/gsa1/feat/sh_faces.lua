@@ -19,6 +19,11 @@
 -- Round 0.9.4c (sadc docs/research/phoneme_plan.md 4.2-4.4, 4.8, 6.3 with its Review R.1 / R.5 / R.6 / R.10 and the owner's
 -- answers 10.1): lip sync's style 2, "mouth shapes from your voice" - F.Smooth's optional rise, the pure helpers of the
 -- style (F.HoldClass, F.Variant, the per-spurt numbers F.SpurtAdd / F.SpurtLine, F.TableText) and its constants.
+-- Round 0.9.4e (sadc docs/research/lipsync2_plan.md 4.4, 4.8, 4.9 with its Review R.3 / R.5): the guided warm-up's steps
+-- (F.WARM_STEPS), the numbers line v2 (medians over the sound frames, the closing pause, per raw class the classifier's
+-- rel_loc / per / nbr / lowr / zcr, the "ee" near misses, the hearing and mouths tags), F.TableText marking the player's
+-- own mouths "(yours)", the mouth shape tester's constants (feat/cl_mouthtest.lua). Still numbers and class names only:
+-- never a learned voice number or a warm-up count (the owner's answer PQ7).
 GSA1 = GSA1 or {}
 local F = GSA1.Faces or {}
 GSA1.Faces = F
@@ -373,21 +378,57 @@ end
 -- off by default): how often each class came, the mean F1 / F2 of each vowel class, the openness and level medians -
 -- numbers and class names only. Never the sound, and never the voice learning's numbers (the owner, PQ7: nothing of the
 -- learning is written anywhere). sp: one table reused from spurt to spurt (F.SpurtReset makes no new table after its first).
+-- 0.9.4e (lipsync2_plan.md 4.9 with review R.3): the openness and level medians over the SOUND frames (class not SIL;
+-- 0.9.4c's "level median 0.01" came from the silent frames) with their count; the closing pause (the SIL frames after the
+-- spurt's last sound); per RAW class of the module's atomic 2 (the classifier's own decision of that 10 ms frame, before
+-- the vote and the hold; not SIL) the medians of rel_loc (dB), per, nbr, lowr and zcr; "ee near" = frames counted as
+-- another vowel whose "ee" posterior was 0.35-0.55 (the gate's near misses); the hearing and mouths tags. Histograms in
+-- tables made once (no per-frame allocation).
 F.SPURT_BINS = 50
+F.SPURT_LOC_BINS = 64            -- rel_loc: 1 dB bins, 0 .. -63 dB (a median is the bin's upper end: -4.6 dB reads -4)
+F.SPURT_FEAT_BINS = 101          -- per / nbr / lowr / zcr: 0.01 bins, 0 .. 1 (a median is the bin's lower end: .90)
+F.EE_NEAR_LO, F.EE_NEAR_HI = 0.35, 0.55
+F.SPURT_FEATS = { "loc", "per", "nbr", "lowr", "zcr" }
+local function zero(h, n)
+    for i = 0, n - 1 do h[i] = 0 end
+    return h
+end
 function F.SpurtReset(sp)
     sp.n, sp.time = 0, 0
     sp.count, sp.f1, sp.f2, sp.fn = sp.count or {}, sp.f1 or {}, sp.f2 or {}, sp.fn or {}
     for c = 0, F.VISEME_COUNT - 1 do sp.count[c], sp.f1[c], sp.f2[c], sp.fn[c] = 0, 0, 0, 0 end
     sp.hs, sp.hr = sp.hs or {}, sp.hr or {}
     for i = 0, F.SPURT_BINS - 1 do sp.hs[i], sp.hr[i] = 0, 0 end
+    sp.sound, sp.tail, sp.near = 0, 0, 0
+    -- per raw class 1..8: { n, [1] = rel_loc bins, [2..5] = per / nbr / lowr / zcr bins }
+    sp.feat = sp.feat or {}
+    for c = 1, F.VISEME_COUNT - 1 do
+        local fc = sp.feat[c]
+        if not fc then
+            fc = { n = 1 }
+            for k = 1, 5 do fc[k] = {} end
+            sp.feat[c] = fc
+        end
+        if fc.n > 0 then
+            zero(fc[1], F.SPURT_LOC_BINS)
+            for k = 2, 5 do zero(fc[k], F.SPURT_FEAT_BINS) end
+            fc.n = 0
+        end
+    end
     return sp
 end
 local function bin_of(v)
     return math.min(math.max(math.floor((tonumber(v) or 0) * F.SPURT_BINS), 0), F.SPURT_BINS - 1)
 end
--- one frame of a spurt: the classifier's class (cls < 0: SIL), its F1 / F2 (Hz, 0 = none), the openness s, the level raw
-function F.SpurtAdd(sp, cls, f1, f2, s, raw, dt)
-    if sp.n == nil then F.SpurtReset(sp) end
+-- a feature 0..1 -> its 0.01 bin (1e-6: 0.95 is 94.999... in binary)
+local function feat_bin(v)
+    return math.min(math.max(math.floor((tonumber(v) or 0) * 100 + 1e-6), 0), F.SPURT_FEAT_BINS - 1)
+end
+-- one frame of a spurt: the class counted (cls < 0: SIL), its F1 / F2 (Hz, 0 = none), the openness s, the level raw;
+-- 0.9.4e, optional (gsa1.MicVisemeFeatures of the same frame): rel_loc (dB, <= 0), per, nbr, eep (the "ee" posterior),
+-- rcls (the raw class), lowr, zcr - left out when the frame has none
+function F.SpurtAdd(sp, cls, f1, f2, s, raw, dt, rel_loc, per, nbr, eep, rcls, lowr, zcr)
+    if sp.n == nil or sp.feat == nil then F.SpurtReset(sp) end
     cls = tonumber(cls) or -1
     if cls < 0 or cls >= F.VISEME_COUNT then cls = F.SIL end
     cls = math.floor(cls)
@@ -398,27 +439,69 @@ function F.SpurtAdd(sp, cls, f1, f2, s, raw, dt)
     if cls >= 2 and cls <= 6 and f1 > 0 and f2 > 0 then
         sp.f1[cls], sp.f2[cls], sp.fn[cls] = sp.f1[cls] + f1, sp.f2[cls] + f2, sp.fn[cls] + 1
     end
-    local i = bin_of(s)
-    sp.hs[i] = sp.hs[i] + 1
-    i = bin_of(raw)
-    sp.hr[i] = sp.hr[i] + 1
+    if cls == F.SIL then
+        sp.tail = sp.tail + 1
+    else
+        sp.tail = 0
+        sp.sound = sp.sound + 1
+        local i = bin_of(s)
+        sp.hs[i] = sp.hs[i] + 1
+        i = bin_of(raw)
+        sp.hr[i] = sp.hr[i] + 1
+    end
+    rcls = tonumber(rcls)
+    if rcls ~= nil and rcls >= 1 and rcls < F.VISEME_COUNT and rcls == math.floor(rcls) and tonumber(rel_loc) then
+        local fc = sp.feat[rcls]
+        fc.n = fc.n + 1
+        local li = math.min(math.max(math.floor(-tonumber(rel_loc) + 1e-6), 0), F.SPURT_LOC_BINS - 1)
+        fc[1][li] = fc[1][li] + 1
+        local b = feat_bin(per)
+        fc[2][b] = fc[2][b] + 1
+        b = feat_bin(nbr)
+        fc[3][b] = fc[3][b] + 1
+        b = feat_bin(lowr)
+        fc[4][b] = fc[4][b] + 1
+        b = feat_bin(zcr)
+        fc[5][b] = fc[5][b] + 1
+    end
+    eep = tonumber(eep)
+    if eep and eep >= F.EE_NEAR_LO and eep <= F.EE_NEAR_HI and cls >= 2 and cls <= 6 and cls ~= 4 then
+        sp.near = sp.near + 1
+    end
+end
+-- the median bin of a histogram h[0 .. nb - 1] of n values (its index)
+local function median_index(h, n, nb)
+    if n <= 0 then return 0 end
+    local acc = 0
+    for i = 0, nb - 1 do
+        acc = acc + (h[i] or 0)
+        if acc * 2 >= n then return i end
+    end
+    return nb - 1
 end
 local function median_of(h, n)
     if n <= 0 then return 0 end
-    local acc = 0
-    for i = 0, F.SPURT_BINS - 1 do
-        acc = acc + (h[i] or 0)
-        if acc * 2 >= n then return (i + 0.5) / F.SPURT_BINS end
-    end
-    return 1
+    return (median_index(h, n, F.SPURT_BINS) + 0.5) / F.SPURT_BINS
 end
--- "lip sync spurt: 1.4 s, 84 frames: SIL 10%, MBP 5%, ...; F1/F2 Hz AA 712/1240 n42, ...; openness median 0.97, level
--- median 0.71" | nil (no frame)
-function F.SpurtLine(sp)
+F.SpurtMedian = median_of
+-- ".71" / "1.00"
+local function frac2(v)
+    local t = string.format("%.2f", v)
+    if string.sub(t, 1, 2) == "0." then t = string.sub(t, 2) end
+    return t
+end
+-- "lip sync spurt: 1.4 s, 84 frames (hearing 2, mouths G-SA1's v2): SIL 31% (closing pause 17%), MBP 6%, ...; F1/F2 Hz AA
+-- 712/1240 n42, ...; loc/per/nbr/lowr/zcr MBP -9/.71/.55/.81/.06, ...; ee near 3; openness median 0.97, level median 0.71
+-- (of 58 sound frames)" | nil (no frame). hearing (1 / 2) and mouths ("G-SA1's v2", "yours (ah, ee)"): the tags, optional
+function F.SpurtLine(sp, hearing, mouths)
     if not sp.n or sp.n <= 0 then return nil end
     local parts = {}
     for c = 0, F.VISEME_COUNT - 1 do
-        parts[#parts + 1] = string.format("%s %d%%", F.VISEME_NAMES[c], math.floor(100 * sp.count[c] / sp.n + 0.5))
+        local p = string.format("%s %d%%", F.VISEME_NAMES[c], math.floor(100 * sp.count[c] / sp.n + 0.5))
+        if c == F.SIL then
+            p = p .. string.format(" (closing pause %d%%)", math.floor(100 * (sp.tail or 0) / sp.n + 0.5))
+        end
+        parts[#parts + 1] = p
     end
     local vow = {}
     for c = 2, 6 do
@@ -427,10 +510,69 @@ function F.SpurtLine(sp)
                 math.floor(sp.f2[c] / sp.fn[c] + 0.5), sp.fn[c])
         end
     end
-    return string.format("lip sync spurt: %.1f s, %d frames: %s; F1/F2 Hz %s; openness median %.2f, level median %.2f",
-        sp.time, sp.n, table.concat(parts, ", "), #vow > 0 and table.concat(vow, ", ") or "none",
-        median_of(sp.hs, sp.n), median_of(sp.hr, sp.n))
+    local feats = {}
+    for c = 1, F.VISEME_COUNT - 1 do
+        local fc = sp.feat and sp.feat[c]
+        if fc and fc.n > 0 then
+            local nb = F.SPURT_FEAT_BINS
+            feats[#feats + 1] = string.format("%s %d/%s/%s/%s/%s", F.VISEME_NAMES[c],
+                -median_index(fc[1], fc.n, F.SPURT_LOC_BINS), frac2(median_index(fc[2], fc.n, nb) / 100),
+                frac2(median_index(fc[3], fc.n, nb) / 100), frac2(median_index(fc[4], fc.n, nb) / 100),
+                frac2(median_index(fc[5], fc.n, nb) / 100))
+        end
+    end
+    local tags = ""
+    if hearing ~= nil or mouths ~= nil then
+        tags = string.format(" (hearing %s, mouths %s)", tostring(hearing or "?"), tostring(mouths or "?"))
+    end
+    local sound = sp.sound or 0
+    return string.format("lip sync spurt: %.1f s, %d frames%s: %s; F1/F2 Hz %s; loc/per/nbr/lowr/zcr %s; ee near %d; "
+        .. "openness median %.2f, level median %.2f (of %d sound frames)", sp.time, sp.n, tags, table.concat(parts, ", "),
+        #vow > 0 and table.concat(vow, ", ") or "none", #feats > 0 and table.concat(feats, ", ") or "none", sp.near or 0,
+        median_of(sp.hs, sound), median_of(sp.hr, sound), sound)
 end
+
+-- 0.9.4e, the guided warm-up "Teach it my vowels" (lipsync2_plan.md 4.4 with review R.1 / R.5): the page's steps, their
+-- seconds, the prompt and the module call at each step's start (gsa1.MicVisemeWarmup). The module learns nothing in the
+-- "ready" second and the gaps (phase 4); after "done" the page waits up to F.WARM_RESULT_WAIT s for the result. The page
+-- keeps no number of it: only the result line's text (the owner's answer PQ7)
+F.WARM_STEPS = {
+    { step = "ready", secs = 1.0, text = "Get ready: say a long 'ahh' when the bar fills", call = "gap" },
+    { step = "ah", secs = 2.0, text = "Say 'ahh' (as in 'father')", call = "ah" },
+    { step = "gap", secs = 0.6, text = "Breathe", call = "gap" },
+    { step = "ee", secs = 2.0, text = "Say 'eee' (as in 'see')", call = "ee" },
+    { step = "gap", secs = 0.6, text = "Breathe", call = "gap" },
+    { step = "oo", secs = 2.0, text = "Say your normal 'ooo' (as in 'you')", call = "oo" },
+    { step = "gap", secs = 0.6, text = "Breathe", call = "gap" },
+    { step = "oh", secs = 2.0, text = "Say 'ohh' (as in 'go')", call = "oh" },
+    { step = "done", secs = 0, text = "Listening done: working it out", call = "done" },
+}
+F.WARM_RESULT_WAIT = 0.5
+F.WARM_SECONDS = 0
+for _, st in ipairs(F.WARM_STEPS) do F.WARM_SECONDS = F.WARM_SECONDS + st.secs end
+-- the module's result codes (gsa1.MicVisemeWarmupState's 6th value) -> the page's line (review R.5: 4 "unclear")
+F.WARM_LEARNED, F.WARM_SHORT, F.WARM_CANCELLED, F.WARM_UNCLEAR = 1, 2, 3, 4
+F.WARM_RESULT_TEXT = {
+    [1] = "Learned for this session. Talk normally: 'oo' and 'oh' should round better.",
+    [2] = "Too short - say each sound for the whole two seconds",
+    [3] = "Stopped",
+    [4] = "The sounds did not come out as ah, ee and oo - try again, one sound per prompt",
+}
+F.WARM_LOG_WORD = { [1] = "learned", [2] = "too short", [3] = "stopped", [4] = "unclear" }
+
+-- 0.9.4e, the mouth shape tester (lipsync2_plan.md 4.8; feat/cl_mouthtest.lua): a clicked mouth stays F.TESTER_KEEP s,
+-- the tester lets go F.TESTER_LETGO s after nothing is pointed at, "Play all" shows each sound F.TESTER_PLAY s; "Show as"
+-- normal / quiet / loud = the openness s and the variant gsa1.VisemeMouth gets (as talking draws them)
+F.TESTER_KEEP = 20
+F.TESTER_LETGO = 0.15
+F.TESTER_PLAY = 0.5
+F.TESTER_SHOW = 3                -- gsa1_mouth_show: seconds
+F.TESTER_SOUNDS = { 1, 2, 3, 4, 5, 6, 7, 8 }   -- m b p, ah, eh, ee, oh, oo, s z sh, f v th
+F.TESTER_SHOWAS = {
+    [0] = { name = "normal", text = "normal talking", s = 1, variant = 0 },
+    [1] = { name = "quiet", text = "quiet", s = 0.35, variant = 1 },
+    [2] = { name = "loud", text = "loud", s = 1, variant = 2 },
+}
 
 -- the Faces page's "This character" line from gsa1.VisemeTable(kind) (phoneme_plan.md 5.5: rows [0..8] = { a, b, w, how =
 -- "closed" / "scales" / "fixed" / "ladder", expression, quiet, loud, plain }; a, b, w named or in 1..3): "ah 4>16 (30 %),
@@ -444,12 +586,25 @@ local function entry_text(e)
     if w < 0.999 then t = t .. string.format(" (%d %%)", math.floor(w * 100 + 0.5)) end
     return " " .. t
 end
+-- 0.9.4e: a row of the player's own mouths (gsa1.VisemeTable's row.custom, feature "faces" 3) is marked "(yours)"
+F.TableEntryText = entry_text
 function F.TableText(t, kind)
-    if tonumber(kind) == 7 then return "one mouth shape: it opens more or less with each sound" end
+    if tonumber(kind) == 7 then
+        local text = "one mouth shape: it opens more or less with each sound"
+        if type(t) == "table" then
+            local mine = {}
+            for c = 2, F.VISEME_COUNT - 1 do
+                if type(t[c]) == "table" and t[c].custom == true then mine[#mine + 1] = F.VISEME_WORDS[c] end
+            end
+            if #mine > 0 then text = text .. " (yours: " .. table.concat(mine, ", ") .. ")" end
+        end
+        return text
+    end
     if type(t) ~= "table" then return nil end
     local out, last = {}, nil
     for c = 2, F.VISEME_COUNT - 1 do
         local x = entry_text(t[c])
+        if type(t[c]) == "table" and t[c].custom == true then x = x .. " (yours)" end
         if last and last.text == x then
             last.words = last.words .. " / " .. F.VISEME_WORDS[c]
         else

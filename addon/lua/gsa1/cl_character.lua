@@ -596,7 +596,8 @@ local function on_event(C, e, now)
             local cause = tonumber(e.arg) or 0
             C.death = { cause = cause, step = e.step or 0, at = now }
             local what = C.timeUp and "ran out of time" or (DEATH_TEXT[cause] or "died")
-            GSA1.Chat("%s %s", C.title, what)
+            -- console and session log only (owner, 0.9.4d: "the chat message that appears when dying doesn't need to exist")
+            GSA1.Msg("%s %s", C.title, what)
             game_log("%s %s (death cause %d, step %d) at (%.0f %.0f %.0f)%s", C.title, what, cause, e.step or 0, e.x or 0,
                 e.y or 0, e.z or 0, (e.id or 0) ~= 0 and string.format(", by host object %d", e.id) or "")
             -- the game plays its death through (the drown: about 4 s) and asks for the restart itself; the respawn

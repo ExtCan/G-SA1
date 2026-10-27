@@ -239,7 +239,13 @@ local WANT = {
     gsa1_lipsync_shapes_loud = { "0.8", 0.5, 1 }, gsa1_lipsync_shapes_steady = { "0", 0, 2 },
     gsa1_lipsync_shapes_gate = { "6", 3, 12 }, gsa1_lipsync_shapes_adapt = { "1", 0, 1 },
     gsa1_lipsync_shapes_rise = { "0.015", 0.005, 0.06 }, gsa1_lipsync_shapes_log = { "0", 0, 1 },
+    -- 0.9.4e (lipsync2_plan.md 7.1 / 7.2): the microphone by its name (the "Microphone" combo's ConVar now), "Sound
+    -- detection", "Use my mouths" (its control is the mouth shape tester's: tests/feat_mouthtest_test.lua L12)
+    gsa1_lipsync_device_name = { "" }, gsa1_lipsync_hearing = { "2", 1, 2 }, gsa1_lipsync_shapes_custom = { "1", 0, 1 },
 }
+-- 0.9.4e: no control on this page (lipsync2_plan.md 7.1): gsa1_lipsync_device is G-SA1's cache of the microphone's number;
+-- gsa1_lipsync_shapes_custom's checkbox is on the tester's sub-form (feat/cl_mouthtest.lua, not loaded by this test)
+local NO_CONTROL_HERE = { gsa1_lipsync_device = true, gsa1_lipsync_shapes_custom = true }
 for i = 1, 10 do
     WANT["gsa1_face_hotkey_" .. i] = { "0", 0, 511 }
     WANT["gsa1_face_hotkey_anim_" .. i] = { "" }
@@ -258,10 +264,10 @@ for name in pairs(GSA1.CONVARS) do
     if string.find(name, "^gsa1_face") or string.find(name, "^gsa1_lipsync") then mine = mine + 1 end
 end
 table.sort(bad)
-check(#bad == 0 and mine == nwant and nwant == 43, "%d client settings with the plan's defaults (7.2): event faces off, no "
-    .. "keys, lip sync on, automatic, push-to-talk, Windows' default microphone, the mouth shapes from the voice (0.9.4c), "
-    .. "gain 2, gate 0.05, release 0.12 s, hang 0.6 s%s (%d)", nwant, #bad > 0 and (": wrong " .. table.concat(bad, " "))
-    or "", mine)
+check(#bad == 0 and mine == nwant and nwant == 46, "%d client settings with the plan's defaults (7.2): event faces off, no "
+    .. "keys, lip sync on, automatic, push-to-talk, Windows' default microphone (by name, 0.9.4e), the mouth shapes from "
+    .. "the voice (0.9.4c), gain 2, gate 0.05, release 0.12 s, hang 0.6 s%s (%d)", nwant, #bad > 0 and (": wrong " ..
+    table.concat(bad, " ")) or "", mine)
 
 GSA1.LoadModule()
 GSA1.World.state, GSA1.World.info = "applied", { min_z = -10000 }
@@ -318,7 +324,7 @@ if entry then
         end
     end
     local missing = {}
-    for name in pairs(WANT) do if not bound[name] then missing[#missing + 1] = name end end
+    for name in pairs(WANT) do if not bound[name] and not NO_CONTROL_HERE[name] then missing[#missing + 1] = name end end
     table.sort(missing)
     local tx = page_texts()
     check(pok and #missing == 0 and bound["gsa1_face_event_key#none"] and string.find(tx, "60 = 1 second", 1, true) ~= nil,

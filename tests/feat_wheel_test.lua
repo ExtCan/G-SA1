@@ -47,6 +47,39 @@
 --   (21) the design: the highlighted slot lit in the accent colour (Sonic blue; gold for Super Sonic) and fading in, a
 --        gold marker on slots with a face animation, the highlighted animation's name in the big font in the centre, the
 --        page markers, the open animation and the fade after closing (nothing drawn after it).
+--   round 0.9.4e (gsa1_rounds_plan.md 14.1aa; the owner: "An option for hiding the wheel for recording purposes would be
+--   great, also being able to change the animation's play rate"):
+--   (22) "Hide the wheel" (gsa1_wheel_hidden 1): the HUD draws nothing - no polygon, text, rectangle, colour or font, no
+--        fade after the close, no toast - while the mouse, the right stick, keys 1-8, the release, the face trigger and the
+--        centre work exactly as usual (the same calls as shown); shown again, the same sequence draws (negative control);
+--   (23) the toggle key (gsa1_wheel_hide_key) flips it once per press (held: once; a menu open: not), turning it on shows
+--        nothing, turning it off one small note (notification.AddLegacy), both logged; gsa1_wheel_hide_toggle the same; the
+--        wheel key, the face trigger and the character's keys are refused as the hide key;
+--   (24) the play rate: the slot's (W.SPEEDS) x gsa1_wheel_speed reaches gsa1.Emote's 4th argument (2 x 1 = 2, 2 x 1.5 = 3,
+--        1 x 0.5 = 0.5, 0.25 x 0.25 = 1/16, 4 x 4 = 16), the face animation is played as before (no rate), the page's rate
+--        box sets it (the file's 9th column; 1x writes none; 8 refused), the centre and the toast say it; a module without
+--        feature "emote" 3 gets 0.9.4d's three arguments and the page says why;
+--   (25) an old (0.9.4d) wheel file without speeds loads as 1x everywhere (Emote gets 1) and prints back unchanged; bad
+--        speeds are bad lines; 0.9.4d's own reader (build/release_0.9.4d's sh_wheel.lua, when present) reads a new file with
+--        rates (it ignores the 9th column).
+--   API NOTES (round 0.9.4e, lane 094e-gsa1-wheel; files: feat/sh_wheel.lua, feat/cl_wheel.lua, src/module/bind_emote.cpp,
+--   this test, tests/feat_emote_binding_test.cpp):
+--     module  gsa1.FEATURES.emote = 3 (with libsa1's SA1_API_EMOTE_HOLD; without it 1, as before). gsa1.Emote(id, key
+--             [, flags [, speed]]): speed = sa1_emote_item.speed, a multiplier of the game's rate for every entry of the
+--             item's chain; nil or 0 = 1 (versions 1 / 2 behaviour); gsa1.EMOTE.SPEED_MIN = 1/64, SPEED_MAX = 16; outside,
+--             or not a number: nil, message, "bad_argument" (checked before the character). bind_emote.cpp builds the
+--             sa1_emote itself (emote_play_speed: the core's gsa1::emote_play plus the speed; src/core/emote.* unchanged).
+--     Lua     W.SPEEDS {0.25 .. 4}, W.SPEED_MIN / MAX 0.25 / 4, W.LIB_SPEED_MIN / MAX 1/64 / 16, W.SPEED_NEEDS {emote 3,
+--             0.9.4e}; W.SlotSpeed(slot), W.PlayRate(slot, global) (slot x global, clamped to libsa1's range),
+--             W.SpeedText(v) ("2x"), W.ParseSpeed(text) (the file's 9th column), W.SpeedSupported(); slot.speed (nil =
+--             1x). W.PlayBody sends the rate only when the module has emote 3. W.ToggleHidden(how) (the note rule: none
+--             when hiding, one notification.AddLegacy line when showing again), W.HideKeyThink() (Think hook
+--             "gsa1_wheel_hide"), W.Hidden(); console gsa1_wheel_hide_toggle; the editor's E.SetSpeed(v), E.SpeedNote(),
+--             E.speedCombo, E.speedNote.
+--     ConVars gsa1_wheel_hidden 0 (check box), gsa1_wheel_hide_key 0 (binder + "No hide key"), gsa1_wheel_speed 1
+--             (slider 0.25-4) - all on Q menu > Options > G-SA1 > Emote wheel; the per-slot rate is a combo box there.
+--     file    data/gsa1/emote_wheel.txt: an optional 9th column "speed" (written only for an animation slot not at 1x;
+--             0.25-4; anything else a bad line); files without it load as 1x; 0.9.4d's reader ignores it.
 --   and task 3 / review R.18: every W.DEFAULTS slot of the 8 entries resolves by name to an offered entry that played in
 --   feat_emote_test.cpp (its build/<target>/emote_lists.txt; skipped with a note when the file is missing), and the
 --   generated greyed rows (cl_wheel_rows.lua) are exactly the table rows the disc's catalogue leaves out.
@@ -78,7 +111,7 @@ end
 
 -- the mock module's feature "emote" ------------------------------------------------------------------------------------------
 GSA1 = nil
-local G = M.module({ features = { emote = 2 } })
+local G = M.module({ features = { emote = 3 } })       -- 0.9.4e: the play rate
 local R = { calls = {}, bad = {}, refuse = nil, state = {}, pad = { connected = false, raw = 0, rx = 0, ry = 0, lx = 0, ly = 0,
             yaw = 0, pitch = 0, reset = false } }
 local function rec(name, ...) R.calls[#R.calls + 1] = { name, ... } end
@@ -96,7 +129,8 @@ end
 G.EMOTE = { LOOP = 0x100, IN_AIR = 4, KEEP_INPUT = 8, NO_PROPS = 0x10, NO_TRAIL = 2, CHAIN = 1, STOP_NOW = 0,
             STOP_BLEND = 1, STATE_NONE = 0, STATE_PLAYING = 1, STATE_ENDING = 2, ROW = 0, EXTRA = 1, FORM_NORMAL = 0,
             FORM_SUPER = 1, F_NEEDS_PROP = 1, F_HOLD = 2, F_SUPER_ONLY = 4, F_BOARD = 8, F_OTHER_OBJECT = 0x10,
-            F_EXTRA = 0x20, HOLD = 0x20, STATE_HOLDING = 3 }      -- version 2 (0.9.4b): HOLD, STATE_HOLDING
+            F_EXTRA = 0x20, HOLD = 0x20, STATE_HOLDING = 3,       -- version 2 (0.9.4b): HOLD, STATE_HOLDING
+            SPEED_MIN = 1 / 64, SPEED_MAX = 16 }                  -- version 3 (0.9.4e): Emote's play rate
 -- the catalogues: { key, name, frames, play, group, dup (1-based position of the first, 0 none) } per (kind, form)
 local function L(rows)
     local out = { n = #rows }
@@ -166,11 +200,15 @@ function G.EmoteList(kind, form)
     end
     return out
 end
-function G.Emote(id, key, flags)
-    rec("Emote", id, key, flags)
+function G.Emote(id, key, flags, speed, ...)
+    rec("Emote", id, key, flags, speed)
     local known = 0x100 + 4 + 8 + 0x10 + 2 + (G.EMOTE.HOLD and 0x20 or 0)
+    -- 0.9.4e (bind_emote.cpp): speed nil, 0 (= 1) or 1/64..16; only with feature "emote" 3
+    local speed_ok = speed == nil or (type(speed) == "number" and (speed == 0 or (speed >= 1 / 64 and speed <= 16)) and
+        (tonumber(G.FEATURES.emote) or 0) >= 3)
     if not (int_in(id, 1, 1e9) and type(key) == "string" and string.match(key, "^[ax]%d+$") and
-        (flags == nil or (int_in(flags, 0, 0xFFFF) and bit.band(flags, bit.bnot(known)) == 0))) then
+        (flags == nil or (int_in(flags, 0, 0xFFFF) and bit.band(flags, bit.bnot(known)) == 0)) and speed_ok and
+        select("#", ...) == 0) then
         R.bad[#R.bad + 1] = "Emote"
         return nil, "unknown animation key", "bad_argument"
     end
@@ -279,6 +317,7 @@ local WANT = {
     gsa1_wheel_air = { "0", 0, 1 }, gsa1_wheel_tap = { "0", 0, 1 }, gsa1_wheel_toast = { "1", 0, 1 },
     gsa1_wheel_summary = { "", nil, nil },
     gsa1_wheel_font = { "0", 0, 3 },                -- 0.9.4b
+    gsa1_wheel_hidden = { "0", 0, 1 }, gsa1_wheel_hide_key = { "0", 0, 511 }, gsa1_wheel_speed = { "1", 0.25, 4 },  -- 0.9.4e
 }
 local bad = {}
 for name, w in pairs(WANT) do
@@ -290,10 +329,10 @@ end
 local mine = 0
 for name in pairs(GSA1.CONVARS) do if string.find(name, "^gsa1_wheel") then mine = mine + 1 end end
 table.sort(bad)
-check(#bad == 0 and mine == 16, "(1) 16 client settings with faces_wheel_plan.md 7.1's defaults (TAB, D-pad down, the left "
+check(#bad == 0 and mine == 19, "(1) 19 client settings with faces_wheel_plan.md 7.1's defaults (TAB, D-pad down, the left "
     .. "mouse button and LT, sensitivity 1, dead zone 0.5, keep 0.5 s, size 1, background 0.75, moving on, in the air off, "
-    .. "tap off, the toast on, the read-only mirror; 0.9.4b: the font 0 = Roboto)%s (%d)", #bad > 0 and (": wrong " ..
-    table.concat(bad, " ")) or "", mine)
+    .. "tap off, the toast on, the read-only mirror; 0.9.4b: the font 0 = Roboto; 0.9.4e: hidden 0, no hide key, play rate "
+    .. "1)%s (%d)", #bad > 0 and (": wrong " .. table.concat(bad, " ")) or "", mine)
 
 -- the page: every setting has a control (vgui stand-ins record the calls)
 local made = {}
@@ -353,6 +392,7 @@ if entry then
             if (c[1] == "CheckBox" or c[1] == "NumSlider") and type(c[3]) == "string" then bound[c[3]] = true end
             if c[1] == "Button" and c[3] == "gsa1_wheel_key" then bound.key_none = true end
             if c[1] == "Button" and c[3] == "gsa1_wheel_face_key" then bound.face_none = true end
+            if c[1] == "Button" and c[3] == "gsa1_wheel_hide_key" then bound.hide_none = true end      -- 0.9.4e
         end
         if P.convar then bound[P.convar] = true end
         if P.kind == "ComboBox" and P.OnSelect then combos[#combos + 1] = P end
@@ -379,10 +419,11 @@ if entry then
     end
     table.sort(missing)
     local status = table.concat(W.StatusLines(E), "\n")
-    check(#missing == 0 and bound.key_none and bound.face_none and string.find(status, "your changed wheels", 1, true) ~= nil,
-        "(1) every setting has a control on the page (check boxes, sliders, two key binders with \"No key\", the two "
-        .. "controller combos) and the status shows the read-only mirror%s", #missing > 0 and (": missing " ..
-        table.concat(missing, " ")) or "")
+    check(#missing == 0 and bound.key_none and bound.face_none and bound.hide_none and
+        string.find(status, "your changed wheels", 1, true) ~= nil,
+        "(1) every setting has a control on the page (check boxes, sliders, three key binders with \"No key\" - 0.9.4e: the "
+        .. "hide key -, the two controller combos) and the status shows the read-only mirror%s", #missing > 0 and
+        (": missing " .. table.concat(missing, " ")) or "")
 end
 
 -- a character ------------------------------------------------------------------------------------------------------------------
@@ -1258,6 +1299,335 @@ check(g1 > 0.5 and g1 < 0.99 and g2 > 0.05 and g2 < 0.5 and g1b < 0.02 and g2b >
     "(21) the highlight fades from slot 1 to slot 2 (first frame %.2f / %.2f, then %.2f / %.2f); the mouse shows a pointer; "
     .. "Sonic turned Super lights the wheel in gold; all %d shapes run clockwise on screen (%d do not)", g1, g2, g1b, g2b,
     shapes, wrong_way)
+
+end
+-- 22. "Hide the wheel" (round 0.9.4e): it works as usual and draws nothing --------------------------------------------------
+local function trigger_click22()
+    keys[MOUSE_LEFT] = true
+    frames(1)
+    keys[MOUSE_LEFT] = nil
+end
+-- one run of the wheel with every input (the same for hidden and shown): what played and what was drawn
+local function wheel_run()
+    W.ResetEntry("sonic")
+    reset_calls()
+    R.state = {}
+    polys = 0
+    reset_drawn()
+    local fonts0 = #fonts_made
+    W.fontMade, W.fontH, W.geo = {}, nil, nil
+    W.toastText, W.toastUntil = nil, 0
+    local out = {}
+    -- the mouse lights slot 1, the release plays it
+    open()
+    M.run_hook("HUDPaint")
+    local cmd = newcmd()
+    out.mouse = M.run_hook("InputMouseApply", cmd, 0, -400, Angle())
+    out.mouseZero = cmd.mx == 0 and cmd.my == 0
+    out.sel1 = W.sel
+    for _ = 1, 10 do
+        M.frame()
+        M.run_hook("HUDPaint")
+    end
+    release()
+    out.fadeAfterRelease = W.fadeFrom ~= nil
+    for _ = 1, 3 do
+        M.frame()
+        M.run_hook("HUDPaint")
+    end
+    -- the right stick lights slot 3 (right), the release plays it
+    R.state = {}
+    R.pad = { connected = true, raw = 0, rx = 1, ry = 0, lx = 0, ly = 0, yaw = 0, pitch = 0, reset = false }
+    open()
+    frames(1)
+    out.stick = W.sel
+    M.run_hook("HUDPaint")
+    release()
+    R.pad = { connected = false, raw = 0, rx = 0, ry = 0, lx = 0, ly = 0, yaw = 0, pitch = 0, reset = false }
+    -- key 5 lights slot 5, the face trigger plays its animation with its face (slot 5: a70 with Shock)
+    R.state = {}
+    open()
+    keys[(KEY_1 or 2) + 4] = true
+    frames(1)
+    keys[(KEY_1 or 2) + 4] = nil
+    out.key5 = W.sel
+    M.run_hook("HUDPaint")
+    trigger_click22()
+    out.closedByFace = not W.open
+    release()
+    -- the centre: the face trigger plays only the centre's face animation (Happy)
+    open()
+    W.sel = 0
+    M.run_hook("HUDPaint")
+    trigger_click22()
+    release()
+    for _ = 1, 3 do
+        M.frame()
+        M.run_hook("HUDPaint")
+    end
+    local e, f = {}, {}
+    for _, c in ipairs(calls_of("Emote")) do e[#e + 1] = c[3] end
+    for _, c in ipairs(calls_of("FacePlay")) do f[#f + 1] = c[3] end
+    out.emotes, out.faces = table.concat(e, " "), table.concat(f, " ")
+    out.polys, out.texts, out.rects, out.colours = polys, #drawn.texts, drawn.rects, #drawn.colours
+    out.fonts = #fonts_made - fonts0
+    out.toastShown = (W.toastUntil or 0) > SysTime()
+    R.state = {}
+    return out
+end
+do
+RunConsoleCommand("gsa1_wheel_hidden", "1")
+local h = wheel_run()
+local hlog = log_has("emote%s+played s_kimepose0")
+RunConsoleCommand("gsa1_wheel_hidden", "0")
+local v = wheel_run()
+check(h.mouse == true and h.mouseZero and h.sel1 == 1 and h.stick == 3 and h.key5 == 5 and h.closedByFace and
+    h.emotes == "a75 a5 a70" and h.faces == "Shock Happy" and h.emotes == v.emotes and h.faces == v.faces and hlog,
+    "(22) hidden, the wheel works exactly as usual: the mouse lights slot %s (the mouse zeroed), the right stick slot %s, "
+    .. "key 5 slot %s, the releases and the face trigger play %s with the faces %s, the centre's face alone (shown: %s / "
+    .. "%s - the same calls); the session log still says what played", tostring(h.sel1), tostring(h.stick),
+    tostring(h.key5), h.emotes, h.faces, v.emotes, v.faces)
+check(h.polys == 0 and h.texts == 0 and h.rects == 0 and h.colours == 0 and h.fonts == 0 and not h.fadeAfterRelease and
+    not h.toastShown and v.polys > 100 and v.texts > 20 and v.fadeAfterRelease and v.toastShown,
+    "(22) hidden, the HUD draws nothing: %d polygons, %d texts, %d rectangles, %d colours, %d fonts made, no fade after the "
+    .. "release, no toast (shown, the same run draws %d polygons and %d texts, fades out and shows the toast)", h.polys,
+    h.texts, h.rects, h.colours, h.fonts, v.polys, v.texts)
+-- hidden while the toast and the fade are on screen: both end at once
+W.ResetEntry("sonic")
+reset_calls()
+open()
+W.sel = 1
+release()
+local before = (W.toastUntil or 0) > SysTime() and W.fadeFrom ~= nil
+RunConsoleCommand("gsa1_wheel_hidden", "1")
+polys = 0
+reset_drawn()
+M.run_hook("HUDPaint")
+RunConsoleCommand("gsa1_wheel_hidden", "0")
+M.run_hook("HUDPaint")
+local after = polys == 0 and #drawn.texts == 0 and W.fadeFrom == nil and (W.toastUntil or 0) <= SysTime()
+R.state = {}
+check(before and after, "(22) hiding while the fade and the toast are on screen ends both at once (nothing drawn then, "
+    .. "nothing left over when it is shown again)")
+
+end
+-- 23. the hide key (round 0.9.4e) -------------------------------------------------------------------------------------------------
+do
+local notes = {}
+local prevNotification = notification
+notification = { AddLegacy = function(text, kind, len) notes[#notes + 1] = { text = text, len = len } end }
+local KEY_H = 18
+RunConsoleCommand("gsa1_wheel_hide_key", tostring(KEY_H))
+local set = M.convars.gsa1_wheel_hide_key.v
+local function press(n)
+    keys[KEY_H] = true
+    frames(n or 1)
+    keys[KEY_H] = nil
+    frames(1)
+end
+press(1)
+local h1, n1 = M.convars.gsa1_wheel_hidden.v, #notes
+local logOn = log_has("emote%s+wheel hidden by the hide key")
+press(5)                                        -- held 5 frames: one toggle
+local h2, n2 = M.convars.gsa1_wheel_hidden.v, #notes
+local noteText = notes[1] and notes[1].text or ""
+local logOff = log_has("emote%s+wheel shown by the hide key")
+cursor = true                                   -- a menu has the input: the key does nothing
+press(1)
+local h3 = M.convars.gsa1_wheel_hidden.v
+cursor = false
+-- the console command: the same toggle and the same rule
+M.cmds.gsa1_wheel_hide_toggle(nil, "gsa1_wheel_hide_toggle", {}, "")
+local h4, n4 = M.convars.gsa1_wheel_hidden.v, #notes
+M.cmds.gsa1_wheel_hide_toggle(nil, "gsa1_wheel_hide_toggle", {}, "")
+local h5, n5 = M.convars.gsa1_wheel_hidden.v, #notes
+-- refused as the hide key: the wheel key, the face trigger, the jump key (the old key stays); the wheel key and the face
+-- trigger refuse the hide key
+RunConsoleCommand("gsa1_wheel_hide_key", "67")
+local r1 = M.convars.gsa1_wheel_hide_key.v
+RunConsoleCommand("gsa1_wheel_hide_key", "107")
+local r2 = M.convars.gsa1_wheel_hide_key.v
+RunConsoleCommand("gsa1_wheel_hide_key", "65")
+local r3 = M.convars.gsa1_wheel_hide_key.v
+RunConsoleCommand("gsa1_wheel_key", tostring(KEY_H))
+local r4 = M.convars.gsa1_wheel_key.v
+RunConsoleCommand("gsa1_wheel_face_key", tostring(KEY_H))
+local r5 = M.convars.gsa1_wheel_face_key.v
+-- the wheel works while the hide key is held (no interference) and "No hide key" (0) stops the key
+RunConsoleCommand("gsa1_wheel_hide_key", "0")
+press(1)
+local h6 = M.convars.gsa1_wheel_hidden.v
+notification = prevNotification
+check(set == "18" and h1 == "1" and n1 == 0 and logOn and h2 == "0" and n2 == 1 and
+    string.find(noteText, "shown again", 1, true) and logOff and h3 == "0" and h4 == "1" and n4 == 1 and h5 == "0" and
+    n5 == 2 and h6 == "0",
+    "(23) the hide key: a press hides (%s) and shows NOTHING (%d notes), held it toggles once (%s), turning it off shows one "
+    .. "small note (\"%s\"), both logged; with a menu open it does nothing (%s); gsa1_wheel_hide_toggle the same (%s, %d "
+    .. "notes; %s, %d); key 0 does nothing (%s)", h1, n1, h2, noteText, h3, h4, n4, h5, n5, h6)
+check(r1 == "18" and r2 == "18" and r3 == "18" and r4 == "67" and r5 == "107",
+    "(23) refused as the hide key: the wheel key, the face trigger, the jump key (it stays %s, %s, %s); the wheel key and "
+    .. "the face trigger refuse the hide key (%s, %s)", r1, r2, r3, r4, r5)
+
+end
+-- 24. the play rate (round 0.9.4e): the slot's x gsa1_wheel_speed reaches gsa1.Emote's 4th argument ---------------------------
+do
+W.ResetEntry("sonic")
+local w24 = W.Edit("sonic")
+w24.pages[1][1].speed = 2              -- a75 s_kimepose0 (Happy)
+w24.pages[1][2].speed = 0.25           -- a3 s_wait3
+w24.pages[1][4].speed = 4              -- a26 s_rollfly
+W.Save()
+local function play_slot(sel)
+    R.state = {}
+    reset_calls()
+    open()
+    W.sel = sel
+    release()
+    local e = emotes()[1]
+    R.state = {}
+    return e
+end
+local function rate_of(e) return e and e[5] end
+local a1 = play_slot(1)
+local toast24 = W.toastText or ""
+local log24 = log_has("played s_kimepose0 %(#75%) from page 1 slot 1 of Sonic's wheel %(release%), holds its last pose, at 2x")
+RunConsoleCommand("gsa1_wheel_speed", "1.5")
+local a2 = play_slot(1)
+RunConsoleCommand("gsa1_wheel_speed", "0.5")
+local a3 = play_slot(3)                -- a26 s_rollfly: own 1x
+RunConsoleCommand("gsa1_wheel_speed", "0.25")
+local a4 = play_slot(2)                -- 0.25 x 0.25
+RunConsoleCommand("gsa1_wheel_speed", "4")
+local a5 = play_slot(4)                -- 4 x 4 = 16 (libsa1's top)
+RunConsoleCommand("gsa1_wheel_speed", "1")
+-- the face trigger: the body at its rate, the face animation as before (no rate: it keeps its own timing)
+reset_calls()
+open()
+W.sel = 1
+keys[MOUSE_LEFT] = true
+frames(1)
+keys[MOUSE_LEFT] = nil
+release()
+local fe, ff = emotes()[1], calls_of("FacePlay")[1]
+R.state = {}
+-- the centre line of the open wheel says the rate
+open()
+W.sel = 1
+local lines = W.CentreLines()
+W.Close("test", false)
+release()
+check(rate_of(a1) == 2 and a1[4] == G.EMOTE.HOLD and string.find(toast24, "at 2x", 1, true) and log24 and
+    rate_of(a2) == 3 and rate_of(a3) == 0.5 and math.abs((rate_of(a4) or 0) - 1 / 16) < 1e-9 and rate_of(a5) == 16 and
+    fe and rate_of(fe) == 2 and ff and ff[3] == "Happy" and #ff == 4 and string.find(lines[3] or "", "at 2x", 1, true),
+    "(24) the slot's rate x gsa1_wheel_speed reaches gsa1.Emote's 4th argument: 2 x 1 = %s (with HOLD; the toast \"%s\" "
+    .. "and the log say it), 2 x 1.5 = %s, 1 x 0.5 = %s, 0.25 x 0.25 = %s, 4 x 4 = %s; the face trigger: the body at %s, "
+    .. "the face animation Faces.Play(C, %s, wheel) as before; the centre: \"%s\"", tostring(rate_of(a1)), toast24,
+    tostring(rate_of(a2)), tostring(rate_of(a3)), tostring(rate_of(a4)), tostring(rate_of(a5)),
+    tostring(fe and rate_of(fe)), tostring(ff and ff[3]), tostring(lines[3]))
+-- the page: the rate box of the selected slot, the file's 9th column
+build_page()
+E.SetEntry("sonic")
+E.Select(3)                            -- a5 s_wait_a1 (Blink)
+local box = E.speedCombo
+local nchoices = box and box.choices and #box.choices or 0
+local boxOk = box ~= nil and box.OnSelect ~= nil and nchoices == 8
+if box and box.OnSelect then box.OnSelect(box, 6, "2x", "2") end
+local file24 = M.files[W.FILE] or ""
+local col9 = string.find(file24, "sonic\t1\t3\ta5\ts_wait_a1\tBlink\t-\t\t2\n", 1, true) ~= nil
+local note24 = E.SpeedNote()
+local refused = E.SetSpeed(8) == false and W.WheelOf("sonic").pages[1][3].speed == 2
+E.SetSpeed(1)
+local file24b = M.files[W.FILE] or ""
+local back1 = string.find(file24b, "sonic\t1\t3\ta5\ts_wait_a1\tBlink\t-\t\n", 1, true) ~= nil
+W.data = nil
+W.Load()
+local kept = W.WheelOf("sonic").pages[1][1].speed == 2 and W.WheelOf("sonic").pages[1][3].speed == nil
+check(boxOk and col9 and refused and back1 and kept and string.find(note24, "keeps its own timing", 1, true),
+    "(24) the page's \"Play rate\" box (%d choices 0.25x-4x) sets the selected slot: the file's 9th column \"2\"; 1x writes "
+    .. "none; 8 is refused; kept after a reload; the note: \"%s\"", nchoices, note24)
+-- a module without the play rate (feature "emote" 2, 0.9.4d): three arguments, as before; the page says why
+G.FEATURES.emote = 2
+W.ResetHave()
+local o1 = play_slot(1)
+local oldNote = E.SpeedNote()
+local oldStatus = table.concat(W.StatusLines(E), "\n")
+G.FEATURES.emote = 3
+W.ResetHave()
+check(o1 and o1[3] == "a75" and o1[4] == G.EMOTE.HOLD and o1[5] == nil and string.find(oldNote, "0.9.4e", 1, true) and
+    string.find(oldStatus, "0.9.4e", 1, true),
+    "(24) a module with feature \"emote\" 2 gets Emote(id, a75, HOLD) without a rate (%s) and the page says play rates "
+    .. "need 0.9.4e", tostring(o1 and o1[5]))
+W.ResetEntry("sonic")
+
+end
+-- 25. an old wheel file (0.9.4d: no speeds) loads as 1x; the 9th column; 0.9.4d's reader --------------------------------------
+do
+local old = table.concat({
+    "# G-SA1 emote wheel (0.9.4d)", "version\t1",
+    "sonic\t1\t1\ta75\ts_kimepose0\tHappy\t-\t",
+    "sonic\t1\t2\ta3\ts_wait3\t-\tloop\t",
+    "sonic\t1\t3\ta26\ts_rollfly\tSurprised\tnohold\t",
+    "sonic\t0\t0\t-\t-\tBlink\t-\t",
+}, "\n") .. "\n"
+M.files[W.FILE] = old
+W.data = nil
+W.Load()
+local ws = W.WheelOf("sonic")
+local all1 = true
+for p = 1, W.PAGES do
+    for sl = 1, W.SLOTS do
+        local o = ws.pages[p][sl]
+        if o.speed ~= nil or W.SlotSpeed(o) ~= 1 then all1 = false end
+    end
+end
+R.state = {}
+reset_calls()
+open()
+W.sel = 2
+release()
+local e25 = emotes()[1]
+R.state = {}
+local out = W.Serialize(W.data)
+local same = true
+for line in string.gmatch(old, "[^\n]+") do
+    if string.sub(line, 1, 6) == "sonic\t" and not string.find(out, line .. "\n", 1, true) then same = false end
+end
+-- the speed column: good and bad values
+local p1, b1 = W.Parse("sonic\t1\t1\ta75\ts_kimepose0\t-\t-\t\t0.5\nsonic\t1\t2\ta3\ts_wait3\t-\t-\t\t1\n")
+local p2, b2 = W.Parse("sonic\t1\t1\ta75\ts_kimepose0\t-\t-\t\t8\nsonic\t1\t2\ta3\ts_wait3\t-\t-\t\tfast\n" ..
+    "sonic\t1\t3\ta3\ts_wait3\t-\t-\t\t-1\nsonic\t1\t4\ta3\ts_wait3\t-\t-\t\t1e1\n")
+local good = b1 == 0 and p1.sonic and p1.sonic.pages[1][1].speed == 0.5 and p1.sonic.pages[1][2].speed == nil
+check(all1 and e25 and e25[3] == "a3" and e25[4] == 0x100 and e25[5] == 1 and same and good and b2 == 4,
+    "(25) a 0.9.4d wheel file without speeds loads as 1x everywhere (slot 2 plays Emote(a3, LOOP, %s)) and its slot lines "
+    .. "print back unchanged; the 9th column \"0.5\" reads 0.5, \"1\" nothing; 8, \"fast\", -1 and 1e1 are bad lines (%d of 4)",
+    tostring(e25 and e25[5]), b2)
+-- 0.9.4d's own reader takes a file with rates (it reads columns 1-8): loaded in a sandbox from the frozen release
+local oldsrc = host_read(tests .. "/../build/release_0.9.4d/addon/lua/gsa1/feat/sh_wheel.lua")
+if not oldsrc then
+    info("build/release_0.9.4d/addon/lua/gsa1/feat/sh_wheel.lua is not here: 0.9.4d's reader is not checked")
+else
+    local mine = GSA1
+    local W2
+    local okOld, errOld = pcall(function()
+        GSA1 = { CHARACTERS = mine.CHARACTERS }
+        host_load(oldsrc, "sh_wheel_094d.lua")()
+        W2 = GSA1.Wheel
+    end)
+    GSA1 = mine
+    local wr = W.EmptyWheel()
+    wr.pages[1][1] = { body = "a75", name = "s_kimepose0", face = "Happy", speed = 2 }
+    wr.pages[1][2] = { body = "a3", name = "s_wait3", loop = true, speed = 0.5 }
+    local newText = W.Serialize({ sonic = wr })
+    local o, ob = nil, -1
+    if okOld and W2 and W2.Parse then o, ob = W2.Parse(newText) end
+    check(okOld and o and ob == 0 and o.sonic and o.sonic.pages[1][1].body == "a75" and o.sonic.pages[1][1].face == "Happy" and
+        o.sonic.pages[1][2].loop == true and string.find(newText, "\t2\n", 1, true) ~= nil,
+        "(25) 0.9.4d's reader (the frozen release's sh_wheel.lua) takes a file with rates: %s bad lines, the slots kept "
+        .. "(it ignores the 9th column)%s", tostring(ob), okOld and "" or (": " .. tostring(errOld)))
+end
+M.files[W.FILE] = nil
+W.data = nil
+W.Load()
 
 end
 -- the key refusal ----------------------------------------------------------------------------------------------------------------

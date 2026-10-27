@@ -32,6 +32,28 @@
 --   P14 privacy (the owner's answer PQ7, BINDING): the voice learning is never written (no DATA file, ConVar, cookie or log
 --       line holds the learned number) nor sent (no net message), the Lua keeps no copy of it, and a new session starts
 --       without it.
+-- Round 0.9.4e (sadc docs/research/lipsync2_plan.md 6.3 with its Review R.3 / R.4c / R.5 / R.6 / R.7; the mock is feature
+-- "faces" 3 now; device names are invented, never the owner's):
+--   P13 the contract is REQUIRED as soon as src/module/bind_faces.cpp declares GSA1_FEATURE(faces, 3: faces2_api.txt must
+--       exist, say faces 3 and match this mock in every 0.9.4e function, return, tune and field (a stale 0.9.4c file fails).
+--   P14w privacy of the learning AND the vowel warm-up: a warm-up and 20 s of talking with distinctive learned numbers -> no
+--       file (but the session log), cookie, sqlite, PData, ConVar, console command, net write or log line holds any of them
+--       or a warm-up count; the Lua keeps none; a new session starts unwarmed and tells the module nothing learned.
+--   P15 the microphone by name: the combo by name (no loopback, no BASS "Default"), resolved at each open after the numbers
+--       shift, the "3- " renumbering matched (review R.6), "Windows default (<name>)", a vanished name -> Windows' default and
+--       the note, the one-time move of a saved number (a loopback "Speakers (Y)" -> "Microphone (Y)"; a loopback without
+--       one -> Windows' default; a real input -> its name; once), the open line with the name, "unsupported" in words.
+--   P16 a stalled stream (MicLevel's blocks frozen 1.5 s while listening): one MicOpen(index, true) and one log line, at
+--       most once in 5 s.
+--   P17 Sound detection: ("engine", 2) with the saved tunes when the classifier starts, ("engine", 1) on a change; greyed
+--       without feature "faces" 3 (and no engine tune then).
+--   P18 the vowel warm-up: its MicVisemeWarmup calls at lipsync2_plan.md 4.4's times, listening without the talk key and
+--       the analysis on during it and restored after, the results 1-4 (review R.5) as page lines, one log line without
+--       numbers, Stop / the page closing -> "cancel", the microphone test and the warm-up exclude each other, greyed with
+--       engine 1, "Learn my voice" off or an older module.
+--   P19 the numbers line v2 (review R.3): medians over the sound frames (70 % SIL no longer gives 0.01), the closing pause,
+--       per raw class the medians of rel_loc / per / nbr / lowr / zcr, "ee near", the tags; MicVisemeFeatures read only with
+--       the switch on and used only when its seq is the frame's; never a MicVisemeVoice or warm-up number.
 --   lua_host tests/feat_phonemes_test.lua <tests dir> <addon/lua dir>
 --
 -- API NOTES (094c-gsa1-lipsync; the Lua side of phoneme_plan.md 5.5 as used):
@@ -48,6 +70,15 @@
 --   0; FaceLevel gets the 4th argument only when it is not 0; cap = VisemeTable(kind).ladder_cap with big off, else 1); the
 --   hang's end: ONE gsa1.FaceLevel(id, -1, 0). Styles 0 / 1 as 0.9.4a; style 0 also gets the flag and the cap. Style 2 falls
 --   back to style 0 with Garry's Mod's source, a failed microphone or a module without feature "faces" 2 / FACE.MOUTH.
+--   0.9.4e (094e-gsa1-lua): ConVars gsa1_lipsync_device_name "" (the microphone by its name; gsa1_lipsync_device is the
+--   cache of the number), gsa1_lipsync_hearing 2 (1..2, "Sound detection"). At each open: gsa1.MicDevices() once, the name
+--   matched exactly, then normalised (lower case, a "<digits>- " after the "(" taken out), else -1 (Windows' default);
+--   loopbacks and BASS's "Default" never offered nor opened; gsa1.MicOpen(index) (a stalled stream: MicOpen(index, true),
+--   MicLevel's 4th value = blocks); the cookie gsa1_lipsync_device_094e moves a saved number once. F.SendTunes adds
+--   ("engine", hearing) with faces 3. The warm-up: F.WarmStart / F.WarmStop / F.WarmThink / F.WarmSeen / F.WarmLines,
+--   gsa1.MicVisemeWarmup("gap" | "ah" | "ee" | "oo" | "oh" | "done" | "cancel") at F.WARM_STEPS' times, the result from
+--   gsa1.MicVisemeWarmupState() (phase -1 again, result 1 / 2 / 4); only the result line's text is kept. The numbers line:
+--   gsa1.MicVisemeFeatures() of the frame whose MicViseme seq it carries, only with gsa1_lipsync_shapes_log 1.
 --   gsa1.MicVisemeOn(true) when style 2 first uses the microphone (then the three saved tunes, each time it is switched on:
 --   gate_min_db, adapt, smooth = F.SHAPES_SMOOTH[steady] 3 / 2 / 0), (false) when the style, the source or lip sync
 --   changes, or the character leaves; one MicVisemeTune per change of _gate / _adapt / _steady; "reset_voice" from the
@@ -95,12 +126,33 @@ for _, n in ipairs({ "WriteFloat", "WriteUInt", "WriteString", "WriteBool", "Wri
     end
 end
 
--- the mock module with the feature "faces" 2 ---------------------------------------------------------------------------------
+-- Garry's Mod's cvars.AddChangeCallback replaces a callback of the same identifier (the addon loaded again - P14, P14w -
+-- must not run its callbacks twice); lua_mock.lua appends, so this file follows the documented rule
+do
+    local ids = {}
+    cvars.AddChangeCallback = function(name, fn, id)
+        M.cvcb[name] = M.cvcb[name] or {}
+        local key = id ~= nil and (name .. "|" .. tostring(id)) or nil
+        if key and ids[key] then
+            M.cvcb[name][ids[key]] = fn
+            return
+        end
+        table.insert(M.cvcb[name], fn)
+        if key then ids[key] = #M.cvcb[name] end
+    end
+end
+
+-- the mock module with the feature "faces" 3 ---------------------------------------------------------------------------------
 GSA1 = nil
-local G = M.module({ features = { faces = 2 } })
-local R = { calls = {}, bad = {}, mic = { open = false, listen = false, level = 0, fail = nil },
+local G = M.module({ features = { faces = 3 } })
+local R = { calls = {}, bad = {}, mic = { open = false, listen = false, level = 0, fail = nil, blocks = 0, stall = false },
             vis = { on = false, cls = -1, level = 0, f1 = 0, f2 = 0, conf = 0, seq = 0 },
-            voice = { g = 6.83, frames = 120 } }
+            -- the learned voice (distinctive numbers the privacy checks look for: never in a file, setting, log or message)
+            voice = { g = 6.83, frames = 120, f1 = 611, f2 = 1733, warmed = 0 },
+            tune = { engine = 2, adapt = 1 }, devCalls = 0,
+            warm = { phase = -1, n = { 0, 0, 0, 0 }, result = 0, next = 1, rate = 1, calls = {} },
+            feat = { rl = -4, per = 0.9, nbr = 0.95, eep = 0.1, cat = 1, raw = 2, lowr = 0.5, zcr = 0.1, seqOff = 0,
+                     calls = 0 } }
 local function rec(name, ...)
     local c = { name, ... }
     R.calls[#R.calls + 1] = c
@@ -121,7 +173,15 @@ local MOCK_API = {
     MicViseme = { args = {}, rets = { "cls", "level", "f1", "f2", "conf", "seq" } },
     MicVisemeOn = { args = { "on" } },
     MicVisemeTune = { args = { "name", "value" } },
-    MicVisemeVoice = { args = {}, rets = { "g", "frames" } },
+    MicVisemeVoice = { args = {}, rets = { "g", "frames", "f1", "f2", "warmed" } },
+    -- 0.9.4e (lipsync2_plan.md 5.5)
+    MicDevices = { args = {} },
+    MicOpen = { args = { "device", "[force]" } },
+    MicLevel = { args = {}, rets = { "level", "peak", "state", "blocks" } },
+    MicVisemeWarmup = { args = { "step" } },
+    MicVisemeWarmupState = { args = {}, rets = { "phase", "n_ah", "n_ee", "n_oo", "n_oh", "result" } },
+    MicVisemeFeatures = { args = {}, rets = { "rel_loc", "per", "nbr", "eep", "cat", "raw", "seq", "lowr", "zcr" } },
+    VisemeOverride = { args = { "kind", "spec" } },
     VisemeMouth = { args = { "kind", "cls", "s", "size", "variant", "big" }, rets = { "a", "b", "w" } },
     VisemeTable = { args = { "kind" } },
     FaceMouth = { args = { "id", "key_a", "key_b", "weight", "[flags]" } },
@@ -129,7 +189,7 @@ local MOCK_API = {
 }
 local MOCK_CONST = { ["FACE.SAME_PAIR"] = SAME_PAIR, ["FACE.MOUTH"] = 1, ["VISEME.SIL"] = 0, ["VISEME.MBP"] = 1,
                      ["VISEME.AA"] = 2, ["VISEME.EH"] = 3, ["VISEME.EE"] = 4, ["VISEME.OH"] = 5, ["VISEME.OO"] = 6,
-                     ["VISEME.SS"] = 7, ["VISEME.FV"] = 8, ["VISEME.COUNT"] = 9, ["FEATURES.faces"] = 2 }
+                     ["VISEME.SS"] = 7, ["VISEME.FV"] = 8, ["VISEME.COUNT"] = 9, ["FEATURES.faces"] = 3 }
 
 local kinds = {}
 local create = G.Create
@@ -205,7 +265,8 @@ end
 function G.VisemeTable(kind)
     rec("VisemeTable", kind)
     if FV_LEVEL[kind] == nil then return nil end
-    local t = { floor = (kind == 0 or kind == 3) and 0.8 or 0, ladder_cap = LADDER_CAP[kind], fv_level = FV_LEVEL[kind] }
+    local t = { floor = (kind == 0 or kind == 3) and 0.8 or 0, ladder_cap = LADDER_CAP[kind], fv_level = FV_LEVEL[kind],
+                table_version = 2, custom_spec = "", mouth_at = { forward = 4, up = 30 } }
     for c = 0, 8 do
         if c <= 1 then
             t[c] = { a = 0, b = 0, w = 0, how = "closed", expression = false }
@@ -216,17 +277,50 @@ function G.VisemeTable(kind)
             t[c] = { a = kind == 7 and 0 or e[1], b = kind == 7 and 4 or e[2], w = e[3], how = e[1] == 0 and "scales" or
                      "fixed", expression = c == 2 }
         end
+        t[c].custom = false
     end
     return t
 end
-function G.MicDevices()
-    return { { index = 0, name = "Headset Microphone", default = true, enabled = true },
-             { index = 1, name = "Line In", default = false, enabled = true } }
+function G.VisemeOverride(kind, spec)
+    rec("VisemeOverride", kind, spec)
+    if FV_LEVEL[kind] == nil then return nil, "this character has no face in the game", "unsupported" end
+    return true
 end
-function G.MicOpen(dev)
-    rec("MicOpen", dev)
+-- invented device names (review R.7): BASS's "Default", Windows' default input, other inputs, then the loopbacks
+local DEVS_A = {
+    { index = 0, name = "Default", default = true, enabled = true, loopback = false },
+    { index = 1, name = "Microphone (Test USB Mic)", default = true, enabled = true, loopback = false },
+    { index = 2, name = "Line In (Test Card)", default = false, enabled = true, loopback = false },
+    { index = 3, name = "Stereo Mix (Test Card)", default = false, enabled = true, loopback = false },
+    { index = 4, name = "Speakers (Test Card)", default = false, enabled = true, loopback = true },
+    { index = 5, name = "Speakers (Test Headphones)", default = false, enabled = true, loopback = true },
+}
+R.devs = DEVS_A
+function G.MicDevices()
+    R.devCalls = R.devCalls + 1
+    local out = {}
+    for i, d in ipairs(R.devs) do
+        out[i] = { index = d.index, name = d.name, default = d.default, enabled = d.enabled, loopback = d.loopback }
+    end
+    return out
+end
+local function dev_of(i)
+    for _, d in ipairs(R.devs) do
+        if d.index == i then return d end
+    end
+end
+function G.MicOpen(dev, force)
+    rec("MicOpen", dev, force)
+    if not int_in(dev, -1, 63) or not (force == nil or type(force) == "boolean") then
+        bad("MicOpen", tostring(dev) .. " " .. tostring(force))
+    end
+    local d = dev_of(dev)
+    if (d and d.loopback) or R.mic.unsupported == dev then
+        return nil, "that device records what your PC plays (a speaker output), not a microphone", "unsupported"
+    end
+    if dev >= 0 and not d then return nil, "no microphone " .. tostring(dev), "error" end
     if R.mic.fail then return nil, R.mic.fail, "error" end
-    R.mic.open = true
+    R.mic.open, R.mic.dev, R.mic.blocks = true, dev, 0
     return true
 end
 function G.MicListen(on)
@@ -241,9 +335,10 @@ function G.MicClose()
     return true
 end
 function G.MicLevel()
-    if not R.mic.open then return 0, 0, "off" end
-    if not R.mic.listen then return 0, 0, "paused" end
-    return R.mic.level, R.mic.level, "on"
+    if not R.mic.open then return 0, 0, "off", 0 end
+    if not R.mic.listen then return 0, 0, "paused", R.mic.blocks end
+    if not R.mic.stall then R.mic.blocks = R.mic.blocks + 1 end
+    return R.mic.level, R.mic.level, "on", R.mic.blocks
 end
 function G.MicViseme()
     rec("MicViseme")
@@ -257,23 +352,60 @@ function G.MicVisemeOn(on)
     R.vis.on = on == true
     return true
 end
-local TUNES = { gate_min_db = { 3, 12 }, adapt = { 0, 1 }, smooth = { 0, 3 } }
+local TUNES = { gate_min_db = { 3, 12 }, adapt = { 0, 1 }, smooth = { 0, 3 }, engine = { 1, 2 } }
 function G.MicVisemeTune(name, value)
     rec("MicVisemeTune", name, value)
     if name == "reset_voice" then
-        R.voice.frames = 0
+        R.voice.frames, R.voice.warmed = 0, 0
+        R.warm.phase, R.warm.result = -1, 0
         return true
     end
     local r = TUNES[name]
-    if not r or not num_in(value, r[1], r[2]) then
+    if not r or not num_in(value, r[1], r[2]) or (name == "engine" and G.FEATURES.faces < 3) then
         bad("MicVisemeTune", tostring(name) .. " " .. tostring(value))
         return nil, "MicVisemeTune(name, value)", "bad_argument"
     end
+    if name == "engine" or name == "adapt" then R.tune[name] = value end
     return true
 end
 function G.MicVisemeVoice()
     rec("MicVisemeVoice")
-    return R.voice.g, R.voice.frames
+    return R.voice.g, R.voice.frames, R.voice.f1, R.voice.f2, R.voice.warmed
+end
+-- 0.9.4e: the per-frame features (atomic 2) of the newest frame; seqOff makes their seq another frame's
+function G.MicVisemeFeatures()
+    R.feat.calls = R.feat.calls + 1
+    local f = R.feat
+    return f.rl, f.per, f.nbr, f.eep, f.cat, f.raw, (R.vis.seq + f.seqOff) % 65536, f.lowr, f.zcr
+end
+-- 0.9.4e: the vowel warm-up (as the module: a step applies at once here; "done" gives R.warm.next)
+local WARM_PHASE = { ah = 0, ee = 1, oo = 2, oh = 3, gap = 4 }
+function G.MicVisemeWarmup(step)
+    rec("MicVisemeWarmup", step)
+    R.warm.calls[#R.warm.calls + 1] = { step = step, t = M.T }
+    local W = R.warm
+    if WARM_PHASE[step] == nil and step ~= "done" and step ~= "cancel" then
+        return nil, "MicVisemeWarmup: no step " .. tostring(step), "bad_argument"
+    end
+    if step ~= "cancel" then
+        if R.tune.engine ~= 2 then return nil, "needs 'Sound detection' 0.9.4e", "unsupported" end
+        if R.tune.adapt ~= 1 then return nil, "needs 'Learn my voice'", "unsupported" end
+        if not R.mic.open then return nil, "the microphone is not open", "unsupported" end
+    end
+    if step == "ah" then W.n = { 0, 0, 0, 0 } end
+    if step == "done" then
+        W.phase, W.result = -1, W.next
+        if W.next == 1 then R.voice.warmed = 1 end
+    elseif step == "cancel" then
+        W.phase, W.result = -1, 3
+    else
+        W.phase = WARM_PHASE[step]
+    end
+    return true
+end
+function G.MicVisemeWarmupState()
+    local W = R.warm
+    return W.phase, W.n[1], W.n[2], W.n[3], W.n[4], W.result
 end
 
 -- call lists
@@ -413,6 +545,8 @@ local WANT = {
     gsa1_lipsync_shapes_steady = { "0", 0, 2 }, gsa1_lipsync_shapes_gate = { "6", 3, 12 },
     gsa1_lipsync_shapes_adapt = { "1", 0, 1 }, gsa1_lipsync_shapes_rise = { "0.015", 0.005, 0.06 },
     gsa1_lipsync_shapes_log = { "0", 0, 1 },
+    -- 0.9.4e (lipsync2_plan.md 7.1): the microphone by name, "Sound detection"
+    gsa1_lipsync_device_name = { "", nil, nil }, gsa1_lipsync_hearing = { "2", 1, 2 },
 }
 local wrong = {}
 for name, w in pairs(WANT) do
@@ -606,6 +740,10 @@ local LEVEL = { [0] = 0, 0.3, 0.7, 0.7, 0.7, 0.7, 0.7, 0.5, 0.2 }
 local function frame(cls, level)
     vis(cls, level or LEVEL[cls], F1[cls] or 0, F2[cls] or 0)
     M.frame(1 / 60)
+    local W = R.warm
+    if W.phase >= 0 and W.phase <= 3 and R.mic.listen and R.vis.on then
+        W.n[W.phase + 1] = math.min(W.n[W.phase + 1] + W.rate, 255)
+    end
 end
 -- frames of silence until talking ended (at most n), the number of frames run
 local function quiet(n)
@@ -666,11 +804,11 @@ keys[KEY_X] = true
 frame(0)
 local opens, on1 = calls_since(m0, "MicOpen"), calls_since(m0, "MicVisemeOn")
 local tunes = calls_since(m0, "MicVisemeTune")
-local tunesOk = #tunes == 3 and tunes[1][2] == "gate_min_db" and tunes[1][3] == 6 and tunes[2][2] == "adapt" and
-    tunes[2][3] == 1 and tunes[3][2] == "smooth" and tunes[3][3] == 3
+local tunesOk = #tunes == 4 and tunes[1][2] == "gate_min_db" and tunes[1][3] == 6 and tunes[2][2] == "adapt" and
+    tunes[2][3] == 1 and tunes[3][2] == "smooth" and tunes[3][3] == 3 and tunes[4][2] == "engine" and tunes[4][3] == 2
 check(#opens == 1 and R.mic.listen and #on1 == 1 and on1[1][2] == true and tunesOk, "P7 style 2 + Automatic: MicOpen at "
     .. "the first held frame (no 0.5 s wait), listening; P9 MicVisemeOn(true) once, then the three saved tunes (gate_min_db "
-    .. "6, adapt 1, smooth 3)")
+    .. "6, adapt 1, smooth 3) and P17 the engine 2")
 check(#logs_with("mouth shapes need the microphone's sound") == 1, "P7 one log line for the source decision")
 for _ = 1, 5 do frame(0) end
 
@@ -933,9 +1071,9 @@ do
     local on3, tun3 = calls_since(m, "MicVisemeOn"), #calls_since(m, "MicVisemeTune")
     local seqOk = #off1 == 1 and off1[1][2] == false and #on2 == 1 and on2[1][2] == true and #off2 == 1 and
         off2[1][2] == false and #on3 == 1 and on3[1][2] == true
-    check(seqOk and tun2 == 3 and tun3 == 3, "P9 MicVisemeOn(false) once when the style changes to 0, (true) once back in "
-        .. "style 2, (false) once when lip sync goes off, (true) once when it is back; the three saved tunes after each "
-        .. "(true) (the module starts from its own values: voice_done.txt)")
+    check(seqOk and tun2 == 4 and tun3 == 4, "P9 MicVisemeOn(false) once when the style changes to 0, (true) once back in "
+        .. "style 2, (false) once when lip sync goes off, (true) once when it is back; the saved tunes after each (true): "
+        .. "the three of 0.9.4c and the engine (the module starts from its own values: voice_done.txt)")
     m = mark()
     RunConsoleCommand("gsa1_lipsync_shapes_gate", "9")
     RunConsoleCommand("gsa1_lipsync_shapes_adapt", "0")
@@ -981,7 +1119,9 @@ do
     local numbersOnly = #mine == 2
     for _, l in ipairs(mine) do
         local rest = l
-        for _, wd in ipairs({ "lip sync spurt", "frames", "F1/F2 Hz", "openness median", "level median", "none", "SIL",
+        -- 0.9.4e: the line v2's words (lipsync2_plan.md 4.9): the tags, the closing pause, the features' names, ee near
+        for _, wd in ipairs({ "lip sync spurt", "sound frames", "frames", "F1/F2 Hz", "openness median", "level median",
+            "none", "closing pause", "loc/per/nbr/lowr/zcr", "ee near", "hearing", "mouths G-SA1's v", "of", "SIL",
             "MBP", "AA", "EH", "EE", "OH", "OO", "SS", "FV" }) do
             rest = string.gsub(rest, (string.gsub(wd, "%p", "%%%0")), "")
         end
@@ -1022,7 +1162,8 @@ do
     lv, fm = calls_since(m, "FaceLevel", C.id), calls_since(m, "FaceMouth", C.id)
     status = F.ShapesStatus() or ""
     local opensC = calls_since(m, "MicOpen")
-    check(#opensC == 1 and opensC[1][2] == 1 and #lv > 10 and #fm == 0 and string.find(status,
+    check(#opensC == 1 and opensC[1][2] == 1 and M.convars.gsa1_lipsync_device_name.v == "Microphone (Test USB Mic)" and
+        #lv > 10 and #fm == 0 and string.find(status,
         "The microphone failed: the device is busy; the mouth only opens with the voice", 1, true) ~= nil,
         "P7 the microphone failing: Garry's Mod's level on the 0.9.4a mouth (%d FaceLevel) and the status line \"%s\"",
         #lv, status)
@@ -1045,7 +1186,7 @@ do
     build_page()
     local mouthOld = page_role("mouth")
     local third = mouthOld and mouthOld.choices[3] and mouthOld.choices[3][1] or ""
-    G.MicViseme, G.FEATURES.faces = savedMV, 2
+    G.MicViseme, G.FEATURES.faces = savedMV, 3
     check(#lv > 10 and #calls_since(m, "FaceMouth") == 0 and #calls_since(m, "VisemeMouth") == 0 and
         status == "Mouth shapes need G-SA1 module 0.9.4c" and third == "Mouth shapes from your voice (needs module 0.9.4c)"
         and #logs_with("mouth shapes need G-SA1 module 0.9.4c") == 1, "P7 an older module (feature \"faces\" 1): style 0 "
@@ -1209,7 +1350,8 @@ do
     scan(F, 0)
     local tunesOnly = true
     for _, x in ipairs(calls_since(0, "MicVisemeTune")) do
-        tunesOnly = tunesOnly and (x[2] == "gate_min_db" or x[2] == "adapt" or x[2] == "smooth" or x[2] == "reset_voice")
+        tunesOnly = tunesOnly and (x[2] == "gate_min_db" or x[2] == "adapt" or x[2] == "smooth" or x[2] == "reset_voice" or
+            x[2] == "engine")
     end
     check(holds(lineNow) and holds(meter) and #where == 0 and copies == 0 and tunesOnly, "P14 the voice learning (6.83 "
         .. "here) is shown on the page and the console only: no DATA file, ConVar, cookie, log line (also with the numbers "
@@ -1224,21 +1366,603 @@ do
         .. "voice to start from (it starts from its adult prior)")
 end
 
+-- 0.9.4e ---------------------------------------------------------------------------------------------------------------------------
+-- the page again (after P14's reload of cl_faces.lua) and a few helpers
+local function role_think(r)
+    local P = page_role(r)
+    if P and rawget(P, "Think") then
+        P.gsa1Next = nil
+        P.Think(P)
+    end
+    return P
+end
+local function digits_in(text)
+    return string.find(tostring(text), "%d") ~= nil
+end
+F = GSA1.Faces
+L = F.lip
+for _ = 1, 3 do frame(0) end
+
+-- P17. Sound detection ----------------------------------------------------------------------------------------------------------
+do
+    keys[KEY_X] = false
+    RunConsoleCommand("gsa1_lipsync_style", "0")
+    for _ = 1, 3 do frame(0) end
+    RunConsoleCommand("gsa1_lipsync_style", "2")
+    local m = mark()
+    keys[KEY_X] = true
+    frame(0)
+    local tunes = calls_since(m, "MicVisemeTune")
+    local started = #tunes == 4 and tunes[4][2] == "engine" and tunes[4][3] == 2
+    m = mark()
+    RunConsoleCommand("gsa1_lipsync_hearing", "1")
+    local t1 = calls_since(m, "MicVisemeTune")
+    local changed = #t1 == 1 and t1[1][2] == "engine" and t1[1][3] == 1 and R.tune.engine == 1 and
+        #logs_with("lip sync: sound detection as in 0.9.4c") == 1
+    RunConsoleCommand("gsa1_lipsync_hearing", "2")
+    keys[KEY_X] = false
+    quiet()
+    build_page()
+    local hc = page_role("hearing")
+    local okCombo = hc ~= nil and hc.enabled ~= false and rawget(hc, "gsa1ConVar") == "gsa1_lipsync_hearing" and
+        #hc.choices == 2 and hc.choices[1][2] == "2" and hc.choices[2][2] == "1"
+    -- an older module (faces 2): the combo greyed, no engine tune
+    G.FEATURES.faces = 2
+    build_page()
+    local hc2 = page_role("hearing")
+    local greyed = hc2 ~= nil and hc2.enabled == false and string.find(page_texts(), "needs G-SA1 module 0.9.4e", 1, true) ~=
+        nil
+    keys[KEY_X] = true
+    RunConsoleCommand("gsa1_lipsync_style", "0")
+    frame(0)
+    RunConsoleCommand("gsa1_lipsync_style", "2")
+    m = mark()
+    frame(0)
+    local noEngine = true
+    for _, x in ipairs(calls_since(m, "MicVisemeTune")) do noEngine = noEngine and x[2] ~= "engine" end
+    keys[KEY_X] = false
+    quiet()
+    G.FEATURES.faces = 3
+    for _ = 1, 3 do frame(0) end
+    check(started and changed, "P17 Sound detection: (\"engine\", 2) with the saved tunes when the classifier starts, "
+        .. "(\"engine\", 1) and one log line on a change")
+    check(okCombo and greyed and noEngine, "P17 the \"Sound detection\" combo (2 / 1) on the page; greyed \"needs G-SA1 "
+        .. "module 0.9.4e\" and no engine tune with feature \"faces\" 2")
+end
+
+-- P15. the microphone by name ---------------------------------------------------------------------------------------------------
+do
+    local DEVS_B = {        -- a re-plug later: the numbers moved, Windows renumbered the USB device "3-" -> "4-"
+        { index = 0, name = "Default", default = true, enabled = true, loopback = false },
+        { index = 1, name = "Headset Microphone (Test Pad)", default = false, enabled = true, loopback = false },
+        { index = 2, name = "Microphone (Test USB Mic)", default = true, enabled = true, loopback = false },
+        { index = 3, name = "Microphone (4- Studio Pro)", default = false, enabled = true, loopback = false },
+        { index = 4, name = "Line In (Test Card)", default = false, enabled = true, loopback = false },
+        { index = 5, name = "Speakers (4- Studio Pro)", default = false, enabled = true, loopback = true },
+        { index = 6, name = "Speakers (Test Card)", default = false, enabled = true, loopback = true },
+    }
+    local DEVS_C = {        -- the owner's case, invented names: index 6 a loopback whose own microphone is listed
+        { index = 0, name = "Default", default = true, enabled = true, loopback = false },
+        { index = 1, name = "Microphone (Voice Box)", default = true, enabled = true, loopback = false },
+        { index = 2, name = "Microphone (3- Studio Pro)", default = false, enabled = true, loopback = false },
+        { index = 3, name = "Stereo Mix (Test Card)", default = false, enabled = true, loopback = false },
+        { index = 4, name = "Line In (Test Card)", default = false, enabled = true, loopback = false },
+        { index = 5, name = "Speakers (Test Card)", default = false, enabled = true, loopback = true },
+        { index = 6, name = "Speakers (3- Studio Pro)", default = false, enabled = true, loopback = true },
+    }
+    local function open_now()
+        local m = mark()
+        local ok = F.OpenMic(false)
+        local o = calls_since(m, "MicOpen")
+        return ok, o[#o] and o[#o][2], #o
+    end
+    -- (a) the combo by name; the lines
+    R.devs = DEVS_A
+    RunConsoleCommand("gsa1_lipsync_device_name", "")
+    build_page()
+    local mc = page_role("microphone")
+    local names = {}
+    for _, ch in ipairs(mc and mc.choices or {}) do names[#names + 1] = ch[1] end
+    local listed = table.concat(names, " | ")
+    local comboOk = mc ~= nil and rawget(mc, "gsa1ConVar") == "gsa1_lipsync_device_name" and #mc.choices == 4 and
+        mc.choices[1][1] == "Windows default" and mc.choices[1][2] == "" and string.find(listed, "Speakers", 1, true) == nil
+        and string.find(listed, "| Default", 1, true) == nil and mc.choices[4][1] ==
+        "Stereo Mix (Test Card) (records what your PC plays)" and mc.choices[4][2] == "Stereo Mix (Test Card)"
+    local lines = table.concat(F.MicListeningLines(), " / ")
+    local linesOk = string.find(lines, "Listening to: Windows default (Microphone (Test USB Mic))", 1, true) ~= nil and
+        string.find(lines, "2 devices that record what your PC plays are not listed", 1, true) ~= nil
+    check(comboOk and linesOk, "P15 the \"Microphone\" combo lists names (%s), no loopback, no BASS \"Default\", Stereo "
+        .. "Mix with its note; \"%s\"", listed, lines)
+    check(string.find(page_texts(), "Pick your microphone by its name. Speaker devices (what your PC plays) are not listed. "
+        .. "Voice changers (virtual microphones) pass their effects on, which changes the vowels G-SA1 hears: pick the real "
+        .. "microphone.", 1, true) ~= nil, "P15 the help line of lipsync2_plan.md 7.1, in general words (review R.7)")
+    -- (b) a name resolves to its number after the numbers moved
+    RunConsoleCommand("gsa1_lipsync_device_name", "Line In (Test Card)")
+    local okb1, idx1 = open_now()
+    R.devs = DEVS_B
+    local okb2, idx2 = open_now()
+    check(okb1 and idx1 == 2 and okb2 and idx2 == 4 and M.convars.gsa1_lipsync_device.v == "4", "P15 \"Line In (Test "
+        .. "Card)\" opens number %s, then %s after the numbers moved (the cache gsa1_lipsync_device %s)", tostring(idx1),
+        tostring(idx2), M.convars.gsa1_lipsync_device.v)
+    -- (c) review R.6: "Microphone (3- Studio Pro)" saved, "Microphone (4- Studio Pro)" present
+    RunConsoleCommand("gsa1_lipsync_device_name", "Microphone (3- Studio Pro)")
+    local n0 = #logs_with("opened")
+    local okc, idxc = open_now()
+    local openLines = logs_with("opened")
+    check(okc and idxc == 3 and #openLines == n0 + 1 and string.find(openLines[#openLines],
+        "microphone 3 'Microphone (4- Studio Pro)' opened", 1, true) ~= nil, "P15 review R.6: the saved \"Microphone (3- "
+        .. "Studio Pro)\" opens \"Microphone (4- Studio Pro)\" (number %s); the open line carries the name: %s",
+        tostring(idxc), tostring(openLines[#openLines]))
+    -- (d) Windows' default shown and logged as the device it is
+    RunConsoleCommand("gsa1_lipsync_device_name", "")
+    local okd, idxd = open_now()
+    local dl = logs_with("opened")
+    check(okd and idxd == -1 and string.find(dl[#dl], "Windows' default 'Microphone (Test USB Mic)' opened", 1, true) ~=
+        nil and F.MicNowText() == "Windows default (Microphone (Test USB Mic))", "P15 \"Windows default\" is shown and "
+        .. "logged with the device it is now (%s)", F.MicNowText())
+    -- (e) a vanished name: Windows' default and the note, one log line per name per session
+    RunConsoleCommand("gsa1_lipsync_device_name", "Microphone (Gone Mic)")
+    local oke, idxe = open_now()
+    open_now()
+    local el = table.concat(F.MicListeningLines(), " / ")
+    check(oke and idxe == -1 and string.find(el, "Your microphone 'Microphone (Gone Mic)' is not connected: Windows' "
+        .. "default is used", 1, true) ~= nil and #logs_with("the microphone 'Microphone (Gone Mic)' is not connected") ==
+        1, "P15 a microphone that is not connected: MicOpen(-1), the page's note, one log line (%s)", el)
+    -- (f) the one-time move (cookie gsa1_lipsync_device_094e)
+    local function move_case(devs, idx)
+        jar[F.MOVE_COOKIE] = nil
+        R.devs = devs
+        F.devNote = nil
+        RunConsoleCommand("gsa1_lipsync_device_name", "")
+        F.devCacheValue = idx
+        RunConsoleCommand("gsa1_lipsync_device", tostring(idx))
+        local l0 = #logs
+        local ok, opened = open_now()
+        return ok, opened, M.convars.gsa1_lipsync_device_name.v, F.devNote, #logs - l0
+    end
+    -- the owner's case: index 6 = "Speakers (3- Studio Pro)", its microphone "Microphone (3- Studio Pro)" is listed
+    local ok6, op6, name6, note6 = move_case(DEVS_C, 6)
+    check(ok6 and name6 == "Microphone (3- Studio Pro)" and op6 == 2 and note6 ~= nil and string.find(note6, "Your saved "
+        .. "microphone was 'Speakers (3- Studio Pro)', which records what your PC plays: 'Microphone (3- Studio Pro)' is "
+        .. "used now", 1, true) ~= nil, "P15 review R.6: a saved loopback \"Speakers (Y)\" moves to \"Microphone (Y)\" "
+        .. "(number %s) with the note \"%s\"", tostring(op6), tostring(note6))
+    -- a loopback without its microphone: Windows' default, the note, one log line
+    local ok5, op5, name5, note5 = move_case(DEVS_C, 5)
+    local moveLog = logs_with("microphone 5 'Speakers (Test Card)' records what the PC plays - not used")
+    check(ok5 and name5 == "" and op5 == -1 and note5 ~= nil and string.find(note5, "Windows default (Microphone (Voice "
+        .. "Box)) is used now", 1, true) ~= nil and #moveLog == 1, "P15 a saved loopback number without its microphone: "
+        .. "Windows' default (MicOpen(-1)), the note \"%s\", one log line", tostring(note5))
+    -- a real input's number -> its name; a second load changes nothing
+    local ok4, op4, name4, _, nlog4 = move_case(DEVS_C, 4)
+    RunConsoleCommand("gsa1_lipsync_device_name", "Microphone (Voice Box)")
+    local again = F.MigrateDevice(DEVS_C)
+    check(ok4 and name4 == "Line In (Test Card)" and op4 == 4 and again == false and
+        M.convars.gsa1_lipsync_device_name.v == "Microphone (Voice Box)", "P15 a saved real input's number becomes its "
+        .. "name (\"%s\"); a second load changes nothing", tostring(name4))
+    -- owner answer EQ1 (0.9.4e verifier): a REAL input listed as not enabled keeps the choice (its name, no "records what
+    -- your PC plays" note); a saved device that is not connected changes nothing and the move waits (no cookie)
+    local DEVS_D = {
+        { index = 0, name = "Default", default = true, enabled = true, loopback = false },
+        { index = 1, name = "Microphone (Voice Box)", default = true, enabled = true, loopback = false },
+        { index = 6, name = "Microphone (3- Example Mic)", default = false, enabled = false, loopback = false },
+    }
+    jar[F.MOVE_COOKIE] = nil
+    F.devNote = nil
+    RunConsoleCommand("gsa1_lipsync_device_name", "")
+    RunConsoleCommand("gsa1_lipsync_device", "6")
+    local dRan = F.MigrateDevice(DEVS_D)
+    local dName, dNote = M.convars.gsa1_lipsync_device_name.v, F.devNote
+    local DEVS_E = {
+        { index = 0, name = "Default", default = true, enabled = true, loopback = false },
+        { index = 1, name = "Microphone (Voice Box)", default = true, enabled = true, loopback = false },
+    }
+    jar[F.MOVE_COOKIE] = nil
+    F.devNote = nil
+    RunConsoleCommand("gsa1_lipsync_device_name", "")
+    RunConsoleCommand("gsa1_lipsync_device", "6")
+    local eRan = F.MigrateDevice(DEVS_E)
+    local eName, eCookie, eNote = M.convars.gsa1_lipsync_device_name.v, jar[F.MOVE_COOKIE], F.devNote
+    local eLater = F.MigrateDevice(DEVS_D)
+    local eLaterName = M.convars.gsa1_lipsync_device_name.v
+    check(dRan == true and dName == "Microphone (3- Example Mic)" and dNote == nil and eRan == false and eName == "" and
+        eCookie == nil and eNote == nil and eLater == true and eLaterName == "Microphone (3- Example Mic)",
+        "EQ1: a real input listed as not enabled keeps its choice (\"%s\", no speaker note); an unplugged saved microphone "
+        .. "changes nothing and the move waits (cookie %s), then takes its name when it is back (\"%s\")", tostring(dName),
+        tostring(eCookie), tostring(eLaterName))
+    -- (g) a number typed on the console picks that device's name (a loopback: Windows' default)
+    R.devs = DEVS_C
+    RunConsoleCommand("gsa1_lipsync_device", "2")
+    local typed2 = M.convars.gsa1_lipsync_device_name.v
+    RunConsoleCommand("gsa1_lipsync_device", "6")
+    local typed6 = M.convars.gsa1_lipsync_device_name.v
+    check(typed2 == "Microphone (3- Studio Pro)" and typed6 == "", "P15 a number typed into gsa1_lipsync_device picks "
+        .. "that device's name once (2: \"%s\"; the loopback 6: Windows' default)", typed2)
+    -- (h) MicOpen's "unsupported" -> a plain-word failure on the page and in the status
+    RunConsoleCommand("gsa1_lipsync_device_name", "Line In (Test Card)")
+    R.mic.unsupported = 4
+    local okh = open_now()
+    local hl = table.concat(F.MicListeningLines(), " / ")
+    local hs = F.ShapesStatus() or ""
+    R.mic.unsupported = nil
+    check(okh == false and string.find(hl, "The microphone could not be used: that device records what your PC plays "
+        .. "(a speaker output), not a microphone", 1, true) ~= nil and string.find(hs, "The microphone failed: that device "
+        .. "records what your PC plays", 1, true) ~= nil, "P15 MicOpen's \"unsupported\" in plain words: \"%s\"", hl)
+    -- back to the first list and Windows' default
+    R.devs = DEVS_A
+    RunConsoleCommand("gsa1_lipsync_device_name", "")
+    F.OpenMic(false)
+    for _ = 1, 3 do frame(0) end
+end
+
+-- P16. a stalled stream -----------------------------------------------------------------------------------------------------
+do
+    keys[KEY_X] = true
+    for _ = 1, 10 do frame(2) end
+    local m = mark()
+    local l0 = #logs_with("stopped sending sound")
+    R.mic.stall = true
+    local firstAt, n = nil, 0
+    for i = 1, 60 * 8 do
+        local b = mark()
+        frame(2)
+        for _, x in ipairs(calls_since(b, "MicOpen")) do
+            if x[3] == true then
+                n = n + 1
+                firstAt = firstAt or i
+            end
+        end
+    end
+    R.mic.stall = false
+    local reopens = {}
+    for _, x in ipairs(calls_since(m, "MicOpen")) do reopens[#reopens + 1] = tostring(x[2]) .. "/" .. tostring(x[3]) end
+    local logsN = #logs_with("stopped sending sound") - l0
+    keys[KEY_X] = false
+    quiet()
+    check(firstAt ~= nil and firstAt >= 89 and firstAt <= 92 and n == 2 and logsN == 2 and R.mic.listen == false,
+        "P16 blocks frozen 1.5 s while listening: MicOpen(index, true) after %s frames, at most once in 5 s (%d in 8 s: %s), "
+        .. "one log line each", tostring(firstAt), n, table.concat(reopens, " "))
+    keys[KEY_X] = true
+    local m2 = mark()
+    for _ = 1, 240 do frame(2) end
+    keys[KEY_X] = false
+    quiet()
+    local forced = 0
+    for _, x in ipairs(calls_since(m2, "MicOpen")) do if x[3] == true then forced = forced + 1 end end
+    check(forced == 0, "P16 a stream that sends: no re-open (%d)", forced)
+end
+
+-- P18. the vowel warm-up -------------------------------------------------------------------------------------------------------
+do
+    RunConsoleCommand("gsa1_lipsync_style", "0")
+    keys[KEY_X] = false
+    for _ = 1, 5 do frame(0) end
+    build_page()
+    local wb = page_role("warmup")
+    local function wframe(cls, think)
+        if think ~= false then wb.Think(wb) end
+        frame(cls or 0)
+    end
+    local visBefore, listenBefore = R.vis.on, R.mic.listen
+    -- result 1 (learned)
+    R.warm.next, R.warm.calls = 1, {}
+    local l0 = #logs
+    local t0 = M.T
+    wb.DoClick(wb)
+    local during = R.mic.listen and R.vis.on and F.warm.running
+    local midLines
+    for i = 1, 60 * 12 do
+        wframe(i < 60 * 11 and 2 or 0)
+        if i == 60 * 5 then midLines = table.concat(F.WarmLines(), " / ") end
+        if not F.warm.running then break end
+    end
+    local steps, times = {}, {}
+    for _, c in ipairs(R.warm.calls) do
+        steps[#steps + 1] = c.step
+        times[#times + 1] = string.format("%.2f", c.t - t0)
+    end
+    local WANT_T = { 0, 1.0, 3.0, 3.6, 5.6, 6.2, 8.2, 8.8, 10.8 }
+    local timesOk = #R.warm.calls == 9
+    for i, c in ipairs(R.warm.calls) do
+        timesOk = timesOk and WANT_T[i] ~= nil and math.abs((c.t - t0) - WANT_T[i]) <= 1 / 60 + 1e-6
+    end
+    local learnedLog = logs_with("lip sync: vowel warm-up learned (this session only)")
+    local myLogs = {}
+    for i = l0 + 1, #logs do
+        if string.find(logs[i].text, "warm-up", 1, true) then myLogs[#myLogs + 1] = logs[i].text end
+    end
+    check(table.concat(steps, " ") == "gap ah gap ee gap oo gap oh done" and timesOk, "P18 MicVisemeWarmup %s at %s s "
+        .. "(lipsync2_plan.md 4.4: 0, 1, 3, 3.6, 5.6, 6.2, 8.2, 8.8, 10.8)", table.concat(steps, " "), table.concat(times,
+        " "))
+    check(during and not F.warm.running and R.vis.on == visBefore and R.mic.listen == listenBefore, "P18 listening without "
+        .. "the talk key and the analysis on during it, both restored after (classifier %s, listening %s)",
+        tostring(R.vis.on), tostring(R.mic.listen))
+    check(F.WarmLines()[1] == F.WARM_RESULT_TEXT[1] and #learnedLog == 1 and #myLogs == 1 and not digits_in(myLogs[1]) and
+        midLines ~= nil and string.find(midLines, "Heard: ah", 1, true) ~= nil, "P18 result 1: \"%s\"; one log line "
+        .. "without numbers (%s); while it ran: \"%s\"", F.WarmLines()[1], tostring(myLogs[1]), tostring(midLines))
+    -- result 2 (too short, with the counts on the page only), 4 (unclear)
+    local function run_to_end(nextResult, rate)
+        R.warm.next, R.warm.rate, R.warm.calls = nextResult, rate or 1, {}
+        F.WarmStart(M.T)
+        for _ = 1, 60 * 12 do
+            wframe(2)
+            if not F.warm.running then break end
+        end
+        R.warm.rate = 1
+        return F.WarmLines()[1]
+    end
+    local short = run_to_end(2)
+    local unclear = run_to_end(4)
+    local shortLog = logs_with("vowel warm-up too short (this session only)")
+    check(string.find(short, "Too short - say each sound for the whole two seconds (heard: ah ", 1, true) == 1 and
+        unclear == F.WARM_RESULT_TEXT[4] and #shortLog == 1 and #logs_with("vowel warm-up unclear (this session only)") ==
+        1, "P18 result 2: \"%s\"; result 4 (review R.5): \"%s\"", short, unclear)
+    -- Stop and the page closing -> "cancel" (result 3)
+    R.warm.calls = {}
+    wb.DoClick(wb)
+    for _ = 1, 90 do wframe(2) end
+    wb.DoClick(wb)
+    local stopCalls = {}
+    for _, c in ipairs(R.warm.calls) do stopCalls[#stopCalls + 1] = c.step end
+    local stopLine = F.WarmLines()[1]
+    R.warm.calls = {}
+    wb.DoClick(wb)
+    for _ = 1, 60 do wframe(2, false) end
+    local closeCalls = {}
+    for _, c in ipairs(R.warm.calls) do closeCalls[#closeCalls + 1] = c.step end
+    check(stopCalls[#stopCalls] == "cancel" and string.find(stopLine, "Stopped", 1, true) == 1 and
+        closeCalls[#closeCalls] == "cancel" and not F.warm.running and string.find(F.WarmLines()[1], "the page closed", 1,
+        true) ~= nil, "P18 Stop (%s) and the page closing (%s) end with \"cancel\": \"%s\"", table.concat(stopCalls, " "),
+        table.concat(closeCalls, " "), stopLine)
+    -- the microphone test and the warm-up exclude each other
+    local mt = page_role("mictest")
+    F.WarmStart(M.T)
+    local okT = F.MicTestStart(M.T)
+    F.WarmStop("test")
+    mt.DoClick(mt)
+    local okW = F.WarmStart(M.T)
+    local wText = F.WarmLines()[1]
+    mt.DoClick(mt)
+    for _ = 1, 5 do frame(0) end
+    check(okT == false and okW == false and not F.mtest.running and string.find(wText, "microphone test", 1, true) ~= nil,
+        "P18 the warm-up and the microphone test refuse each other (\"%s\")", wText)
+    -- greyed with engine 1, "Learn my voice" off, an older module
+    local function greyed_now()
+        wb.Think(wb)
+        return wb.enabled == false and F.WarmStart(M.T) == false and not F.warm.running
+    end
+    RunConsoleCommand("gsa1_lipsync_hearing", "1")
+    local g1 = greyed_now()
+    RunConsoleCommand("gsa1_lipsync_hearing", "2")
+    RunConsoleCommand("gsa1_lipsync_shapes_adapt", "0")
+    local g2 = greyed_now()
+    RunConsoleCommand("gsa1_lipsync_shapes_adapt", "1")
+    G.FEATURES.faces = 2
+    local g3 = greyed_now()
+    G.FEATURES.faces = 3
+    wb.Think(wb)
+    check(g1 and g2 and g3 and wb.enabled == true, "P18 the button greyed with \"As in 0.9.4c\", \"Learn my voice\" off and "
+        .. "an older module; usable again after")
+    -- "Forget my voice" also clears the page's result
+    F.warm.text, F.warm.result = F.WARM_RESULT_TEXT[1], 1
+    M.cmds["gsa1_lipsync_forget_voice"](nil, "gsa1_lipsync_forget_voice", {}, "")
+    check(F.warm.result == nil and F.WarmLines()[1] ~= F.WARM_RESULT_TEXT[1], "P18 \"Forget my voice\" also clears the "
+        .. "warm-up's result line")
+    RunConsoleCommand("gsa1_lipsync_style", "2")
+    for _ = 1, 3 do frame(0) end
+end
+
+-- P19. the numbers line v2 -----------------------------------------------------------------------------------------------------
+do
+    keys[KEY_X] = true
+    for _ = 1, 3 do frame(0) end
+    -- with the switch off: MicVisemeFeatures is never read
+    RunConsoleCommand("gsa1_lipsync_shapes_log", "0")
+    local f0 = R.feat.calls
+    for _ = 1, 20 do frame(2) end
+    quiet()
+    local offReads = R.feat.calls - f0
+    RunConsoleCommand("gsa1_lipsync_shapes_log", "1")
+    local n0 = #logs_with("lip sync spurt:")
+    -- a spurt with 70 % silence: AA frames then a long pause inside the spurt (shorter than the hang) and the hang
+    R.feat.rl, R.feat.per, R.feat.nbr, R.feat.lowr, R.feat.zcr, R.feat.raw, R.feat.eep = -4, 0.9, 0.95, 0.5, 0.1, 2, 0.45
+    for i = 1, 12 do frame(2) end
+    R.feat.raw, R.feat.rl, R.feat.per, R.feat.nbr, R.feat.lowr, R.feat.zcr, R.feat.eep = 7, -14, 0.3, 0.08, 0.04, 0.66, 0
+    for i = 1, 6 do frame(7) end
+    quiet()
+    -- the same with the features of ANOTHER frame (their seq is not the frame's): not used
+    R.feat.seqOff = 1
+    for i = 1, 10 do frame(2) end
+    quiet()
+    R.feat.seqOff = 0
+    RunConsoleCommand("gsa1_lipsync_shapes_log", "0")
+    keys[KEY_X] = false
+    local lines = logs_with("lip sync spurt:")
+    local l1, l2 = lines[n0 + 1] or "", lines[n0 + 2] or ""
+    info("P19 lines: %s | %s", l1, l2)
+    local lv = tonumber(string.match(l1, "level median ([%d%.]+)")) or 0
+    local soundN = tonumber(string.match(l1, "%(of (%d+) sound frames%)")) or -1
+    local closing = tonumber(string.match(l1, "SIL %d+%% %(closing pause (%d+)%%%)")) or -1
+    local okLine = string.find(l1, "(hearing 2, mouths G-SA1's v2)", 1, true) ~= nil and lv > 0.5 and soundN == 18 and
+        closing >= 60 and string.find(l1, "AA -4/.90/.95/.50/.10", 1, true) ~= nil and
+        string.find(l1, "SS -14/.30/.08/.04/.66", 1, true) ~= nil and string.find(l1, "ee near 12", 1, true) ~= nil
+    check(offReads == 0, "P19 the switch off: MicVisemeFeatures never read (%d)", offReads)
+    check(okLine, "P19 the line v2: the tags, the medians over the %s sound frames (level %.2f, not 0.01), the closing pause "
+        .. "%s %%, per raw class rel_loc / per / nbr / lowr / zcr (AA -4/.90/.95/.50/.10, SS -14/.30/.08/.04/.66), ee near "
+        .. "12", tostring(soundN), lv, tostring(closing))
+    check(string.find(l2, "loc/per/nbr/lowr/zcr none", 1, true) ~= nil, "P19 features of another frame (seq not the "
+        .. "frame's) are not used")
+    local voiceIn = false
+    for _, l in ipairs({ l1, l2 }) do
+        for _, v in ipairs({ "6.83", "611", "1733" }) do
+            if string.find(l, v, 1, true) then voiceIn = true end
+        end
+    end
+    check(not voiceIn, "P19 no learned voice number in the lines")
+    for _ = 1, 3 do frame(0) end
+end
+
+-- P14w. privacy of the learning and the vowel warm-up (the owner's answer PQ7) ----------------------------------------------------
+do
+    -- distinctive numbers: the learned voice and the warm-up's counts
+    R.voice.g, R.voice.f1, R.voice.f2, R.voice.frames = 6.83, 611, 1733, 120
+    local WCOUNT = { 173, 191, 157, 149 }
+    local SECRET = { "6.83", "611", "1733", "173", "191", "157", "149" }
+    local function holds(text)
+        text = tostring(text)
+        for _, v in ipairs(SECRET) do
+            if string.find(text, v, 1, true) then return v end
+        end
+        return nil
+    end
+    -- every way out watched: files, cookies, sqlite, PData, ConVars, console commands, net, the log
+    local outs = {}
+    local function out(kind, ...)
+        local t = {}
+        for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end
+        outs[#outs + 1] = { kind = kind, text = table.concat(t, " ") }
+    end
+    local saved = { write = file.Write, append = file.Append, mkdir = file.CreateDir, set = cookie.Set, rcc = RunConsoleCommand }
+    file.Write = function(p, s2) out("file.Write " .. tostring(p), s2) return saved.write(p, s2) end
+    file.Append = function(p, s2) out("file.Append " .. tostring(p), s2) return saved.append(p, s2) end
+    file.CreateDir = function(p) out("file.CreateDir", p) end
+    cookie.Set = function(k, v) out("cookie.Set", k, v) return saved.set(k, v) end
+    sql = { Query = function(q) out("sql.Query", q) end, QueryValue = function(q) out("sql.QueryValue", q) end }
+    util.SetPData = function(...) out("util.SetPData", ...) end
+    M.player.SetPData = function(_, ...) out("SetPData", ...) end
+    RunConsoleCommand = function(...) out("RunConsoleCommand", ...) return saved.rcc(...) end
+    local netSaved = {}
+    for _, n in ipairs({ "Start", "WriteString", "WriteFloat", "WriteUInt", "WriteBool", "WriteDouble", "WriteInt",
+                         "WriteData", "WriteTable", "SendToServer" }) do
+        netSaved[n] = net[n]
+        net[n] = function(...)
+            out("net." .. n, ...)
+            if netSaved[n] then return netSaved[n](...) end
+        end
+    end
+    local cvBefore = {}
+    for n, c in pairs(M.convars) do cvBefore[n] = c.v end
+    -- a warm-up (learned) with these counts, then 20 s of talking
+    RunConsoleCommand("gsa1_lipsync_style", "2")
+    RunConsoleCommand("gsa1_lipsync_shapes_log", "1")
+    build_page()
+    local wb = page_role("warmup")
+    R.warm.next = 1
+    wb.DoClick(wb)
+    for _ = 1, 60 * 12 do
+        wb.Think(wb)
+        if R.warm.phase >= 0 and R.warm.phase <= 3 then R.warm.n[R.warm.phase + 1] = WCOUNT[R.warm.phase + 1] end
+        frame(0)
+        F.WarmLines()
+        if not F.warm.running then break end
+    end
+    local learned = F.warm.result == 1
+    keys[KEY_X] = true
+    for i = 1, 60 * 20 do
+        frame((i % 40 < 30) and ((i % 7) + 2) or 0)
+        if i % 30 == 0 then
+            F.SoundNowLines()
+            F.MeterLines()
+        end
+    end
+    M.cmds["gsa1_lipsync_status"](nil, "gsa1_lipsync_status", {}, "")
+    keys[KEY_X] = false
+    quiet()
+    RunConsoleCommand("gsa1_lipsync_shapes_log", "0")
+    GSA1.LogFlush()
+    -- restore the watchers
+    file.Write, file.Append, file.CreateDir, cookie.Set, RunConsoleCommand = saved.write, saved.append, saved.mkdir,
+        saved.set, saved.rcc
+    for n, f in pairs(netSaved) do net[n] = f end
+    local where = {}
+    local VOICE = { "6.83", "611", "1733" }
+    for _, o in ipairs(outs) do
+        local logFile = string.find(o.kind, "gsa1/log", 1, true) ~= nil
+        if logFile then
+            -- the session log: no learned voice number anywhere in it (the warm-up's counts: its lines below)
+            for _, v in ipairs(VOICE) do
+                if string.find(o.text, v, 1, true) then where[#where + 1] = o.kind .. " (" .. v .. ")" end
+            end
+        elseif not (o.kind == "file.CreateDir" and o.text == "gsa1") then
+            local v = holds(o.text)
+            if v then where[#where + 1] = o.kind .. " (" .. v .. ")" end
+            -- no file but the session log (the warm-up never touches mouth_shapes.txt)
+            if string.sub(o.kind, 1, 5) == "file." then where[#where + 1] = o.kind end
+        end
+    end
+    for n, c in pairs(M.convars) do
+        if cvBefore[n] ~= c.v and holds(c.v) then where[#where + 1] = "ConVar " .. n end
+    end
+    for k, v in pairs(jar) do
+        if holds(v) then where[#where + 1] = "cookie " .. k end
+    end
+    for _, l in ipairs(logs) do
+        local v = holds(l.text)
+        if v and (string.find(l.text, "warm", 1, true) or string.find(l.text, "voice", 1, true)) then
+            where[#where + 1] = "log " .. l.text
+        end
+    end
+    -- the Lua keeps none of them (the page lines' text aside)
+    local seen, copies = {}, {}
+    local NUMS = { 6.83, 611, 1733, 173, 191, 157, 149 }
+    local function scan(t, depth, path)
+        if seen[t] or depth > 5 then return end
+        seen[t] = true
+        for k, v in pairs(t) do
+            if type(v) == "number" then
+                for _, x in ipairs(NUMS) do
+                    if math.abs(v - x) < 1e-9 then copies[#copies + 1] = path .. "." .. tostring(k) end
+                end
+            elseif type(v) == "table" and k ~= "calls" and k ~= "lines" and k ~= "choices" then
+                scan(v, depth + 1, path .. "." .. tostring(k))
+            end
+        end
+    end
+    scan(F, 0, "F")
+    check(learned and #where == 0 and #copies == 0, "P14w a vowel warm-up (counts 173 / 191 / 157 / 149) and 20 s of talking "
+        .. "with the learned voice 6.83 / 611 / 1733 Hz: no file but the session log, no cookie, sqlite, PData, ConVar, "
+        .. "console command, net write or log line holds any of them; the Lua keeps no copy%s%s", #where > 0 and (": " ..
+        table.concat(where, "; ")) or "", #copies > 0 and (" (copies: " .. table.concat(copies, ", ") .. ")") or "")
+    -- a new session: the addon loads again on the module as a new session finds it (the learning forgotten at its close)
+    R.voice.frames, R.voice.warmed, R.warm.phase, R.warm.result = 0, 0, -1, 0
+    local m = mark()
+    GSA1 = nil
+    M.included = {}
+    local okRe = pcall(M.load, "autorun/gsa1_autorun.lua")
+    local F2 = GSA1 and GSA1.Faces
+    local sentLearned = 0
+    for _, x in ipairs(calls_since(m)) do
+        if x[1] == "MicVisemeWarmup" then sentLearned = sentLearned + 1 end
+        if x[1] == "MicVisemeTune" and not (x[2] == "gate_min_db" or x[2] == "adapt" or x[2] == "smooth" or
+                x[2] == "engine") then
+            sentLearned = sentLearned + 1
+        end
+        for i = 2, #x do
+            if type(x[i]) == "number" then
+                for _, v in ipairs(NUMS) do
+                    if math.abs(x[i] - v) < 1e-9 then sentLearned = sentLearned + 1 end
+                end
+            end
+        end
+    end
+    check(okRe and F2 ~= nil and F2.warm.result == nil and not F2.warm.running and F2.WarmStateText() ==
+        "not used this session" and sentLearned == 0, "P14w a new session starts unwarmed (\"%s\") and tells the module "
+        .. "nothing learned", F2 and F2.WarmStateText() or "?")
+end
+
 -- P13. the Lua <-> module contract (review R.11): build/<target>/faces2_api.txt, written by feat_faces_binding_test.cpp's V9
 -- from the module as built (lines "feature faces 2", "fn Name(arg, arg, [opt]) -> ret, ret", "const TABLE.KEY value",
 -- "const VISEME.NAMES[i] text", "tune name lo..hi", "field VisemeTable ...", "field VisemeTable.row ..."; # comments)
 do
     local gsa1root = string.gsub(tests, "[/\\]tests$", "")
     local text = host_read(gsa1root .. "/build/x86_64-windows/faces2_api.txt")
-    local binding = host_read(gsa1root .. "/tests/feat_faces_binding_test.cpp") or ""
-    local required = string.find(binding, "faces2_api", 1, true) ~= nil
-    if not text then
-        if required then
-            check(false, "P13 build/x86_64-windows/faces2_api.txt is missing although feat_faces_binding_test.cpp writes it "
-                .. "(the binding test runs before the Lua tests in build.py --test)")
-        else
-            info("P13 skipped: build/x86_64-windows/faces2_api.txt is not there yet (written by 094c-gsa1-voice's V9)")
-        end
+    -- 0.9.4e (review R.4c): REQUIRED as soon as bind_faces.cpp declares feature "faces" 3 (a stale 0.9.4c file fails)
+    local bindsrc = host_read(gsa1root .. "/src/module/bind_faces.cpp") or ""
+    local required = string.find(bindsrc, "GSA1_FEATURE(faces, 3", 1, true) ~= nil
+    if not required then
+        info("P13 skipped: src/module/bind_faces.cpp does not declare GSA1_FEATURE(faces, 3 yet")
+    elseif not text then
+        check(false, "P13 build/x86_64-windows/faces2_api.txt is missing although bind_faces.cpp declares faces 3 (the "
+            .. "binding test writes it before the Lua tests in build.py --test)")
     else
         local function trim(s) return (string.gsub(s, "^%s*(.-)%s*$", "%1")) end
         local function list(s)
@@ -1249,6 +1973,7 @@ do
             return out
         end
         local fns, consts, strs, tunes, fields, feature = {}, {}, {}, {}, {}, nil
+        local steps, results, texts, codes = {}, {}, {}, {}
         for line in string.gmatch(text, "[^\r\n]+") do
             line = trim(line)
             if line ~= "" and string.sub(line, 1, 1) ~= "#" then
@@ -1276,6 +2001,20 @@ do
                     local set = {}
                     for w in string.gmatch(frest, "[%w_]+") do set[w] = true end
                     fields[fld] = set
+                end
+                -- 0.9.4e: "step <Name> <words>", "result <Name>.<field> <list>", "text <Name>.<case> <message>",
+                -- "code <Name>.<case> <code>"
+                local kw, key, rest = string.match(line, "^(%a+)%s+(%S+)%s+(.+)$")
+                if kw == "step" then
+                    local set = {}
+                    for w in string.gmatch(rest, "%S+") do set[w] = true end
+                    steps[key] = set
+                elseif kw == "result" then
+                    results[key] = rest
+                elseif kw == "text" then
+                    texts[key] = rest
+                elseif kw == "code" then
+                    codes[key] = rest
                 end
             end
         end
@@ -1323,19 +2062,49 @@ do
         end
         if not tunes.reset_voice then diffs[#diffs + 1] = "tune reset_voice missing" end
         local tf, rf = fields["VisemeTable"] or {}, fields["VisemeTable.row"] or {}
-        for _, k in ipairs({ "ladder_cap" }) do
+        -- 0.9.4e: the fields the page and the tester read (lipsync2_plan.md 5.5)
+        for _, k in ipairs({ "ladder_cap", "table_version", "custom_spec", "mouth_at" }) do
             if not tf[k] then diffs[#diffs + 1] = "VisemeTable has no " .. k end
         end
-        for _, k in ipairs({ "a", "b", "w", "how" }) do
+        for _, k in ipairs({ "a", "b", "w", "how", "custom", "default" }) do
             if not rf[k] then diffs[#diffs + 1] = "VisemeTable's rows have no " .. k end
         end
-        if feature ~= "feature faces 2" then diffs[#diffs + 1] = "feature line: " .. tostring(feature) end
+        local df = fields["MicDevices"] or fields["MicDevices.entry"] or fields["MicDevices.device"]
+        if not (df and df.loopback and df.name and df.index) then
+            diffs[#diffs + 1] = "MicDevices' entries: no field line with index, name and loopback"
+        end
+        if feature ~= "feature faces 3" then diffs[#diffs + 1] = "feature line: " .. tostring(feature) end
+        -- 0.9.4e: the warm-up's step words cl_faces.lua sends, its result codes as the page reads them, the refusal texts
+        -- and codes this mock gives (lipsync2_plan.md 5.5)
+        local ws = steps["MicVisemeWarmup"] or {}
+        for _, st in ipairs(F.WARM_STEPS or {}) do
+            if not ws[st.call] then diffs[#diffs + 1] = "MicVisemeWarmup has no step " .. tostring(st.call) end
+        end
+        if not ws.cancel then diffs[#diffs + 1] = "MicVisemeWarmup has no step cancel" end
+        local rr = results["MicVisemeWarmupState.result"] or ""
+        for code = 1, 4 do
+            local want = string.format("%d %s", code, F.WARM_LOG_WORD[code])
+            if not string.find(rr, want, 1, true) then diffs[#diffs + 1] = "MicVisemeWarmupState result " .. want end
+        end
+        local WANT_TEXT = { ["MicOpen.loopback"] = "that device records what your PC plays (a speaker output), not a microphone",
+                            ["MicVisemeWarmup.engine1"] = "needs 'Sound detection' 0.9.4e",
+                            ["MicVisemeWarmup.adapt0"] = "needs 'Learn my voice'",
+                            ["MicVisemeWarmup.closed"] = "the microphone is not open" }
+        for k, v in pairs(WANT_TEXT) do
+            if texts[k] ~= v then diffs[#diffs + 1] = string.format("text %s = %s (mock %s)", k, tostring(texts[k]), v) end
+        end
+        local WANT_CODE = { ["MicOpen.loopback"] = "unsupported", ["MicVisemeWarmup.refused"] = "unsupported",
+                            ["MicVisemeWarmup.word"] = "bad_argument", ["VisemeOverride.faceless"] = "unsupported" }
+        for k, v in pairs(WANT_CODE) do
+            if codes[k] ~= v then diffs[#diffs + 1] = string.format("code %s = %s (mock %s)", k, tostring(codes[k]), v) end
+        end
         table.sort(diffs)
         if noSamePair then
             info("P13 the module has no FACE.SAME_PAIR (libsa1 did not build it): the switch greys (P8 tested it)")
         end
         check(#diffs == 0, "P13 this file's mock of the module equals faces2_api.txt (%d functions with their arguments "
-            .. "and results, %d constants, the names and words, the tunes, VisemeTable's fields)%s", nf, nc, #diffs > 0 and
+            .. "and results, %d constants, the names and words, the tunes, the fields of VisemeTable and MicDevices; 0.9.4e: "
+            .. "the warm-up's steps and results, the refusal texts and codes)%s", nf, nc, #diffs > 0 and
             (": " .. table.concat(diffs, "; ")) or "")
     end
 end

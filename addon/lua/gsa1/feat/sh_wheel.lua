@@ -1,6 +1,7 @@
 -- G-SA1 emote wheel, the pure part (round 0.9.4a: sadc docs/research/faces_wheel_plan.md 4.6, 5.5, 7.1, 8.1, 8.3 with its
 -- Review R.9 / R.18 and the owner's answers 10.1; faces_wheel_ui.md 2, 3; super2_plan.md 10.2, the CORRECTED reading;
--- round 0.9.4b, objects2_plan.md 11.2: the per-slot "Hold the last pose", the fonts per wheel size, the wheel's design).
+-- round 0.9.4b, objects2_plan.md 11.2: the per-slot "Hold the last pose", the fonts per wheel size, the wheel's design;
+-- round 0.9.4e, gsa1_rounds_plan.md 14.1aa: the per-slot play rate and the file's speed column).
 -- GSA1.Wheel = W: the wheel's geometry (the slot of a direction, the 4-degree hysteresis, the centre, the quads the HUD
 -- draws), the file data/gsa1/emote_wheel.txt (parse, serialize, the read-only mirror), the default wheels (names only), how
 -- a slot finds its animation again (by key while the key's entry still has the stored internal name, else by that name -
@@ -25,6 +26,44 @@ W.OPTIONS = { loop = true, nohold = true }
 -- round 0.9.4b: the end mode HOLD needs the module's feature "emote" version 2 (gsa1.EMOTE.HOLD); older modules play the
 -- animation as 0.9.4a did (back to standing)
 W.HOLD_NEEDS = { feature = "emote", version = 2, module = "0.9.4b" }
+
+-- round 0.9.4e (gsa1_rounds_plan.md 14.1aa; the owner: "being able to change the animation's play rate"): each slot has a
+-- play rate (W.SPEEDS, default 1x: the game's own rate) and gsa1_wheel_speed (W.SPEED_MIN..W.SPEED_MAX, default 1)
+-- multiplies every one; the product goes to the module as gsa1.Emote's 4th argument, libsa1's sa1_emote_item.speed ("a
+-- multiplier of the game's rate"; libsa1 takes 1/64..16: W.LIB_SPEED_MIN / MAX). It needs the module's feature "emote"
+-- version 3; an older module plays at the game's rate. Only the body animation: a slot's face animation keeps its own
+-- timing (the frames of its sequence, the Faces page).
+W.SPEED_NEEDS = { feature = "emote", version = 3, module = "0.9.4e" }
+W.SPEEDS = { 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4 }
+W.SPEED_MIN, W.SPEED_MAX = 0.25, 4
+W.LIB_SPEED_MIN, W.LIB_SPEED_MAX = 1 / 64, 16
+
+-- a slot's own play rate (nil, a bad or out-of-range value: 1)
+function W.SlotSpeed(slot)
+    local v = slot and tonumber(slot.speed)
+    if not v or v ~= v or v < W.SPEED_MIN or v > W.SPEED_MAX then return 1 end
+    return v
+end
+-- the rate an animation plays at: the slot's x the global one (gsa1_wheel_speed; nil / bad: 1), kept inside libsa1's range
+function W.PlayRate(slot, global)
+    local g = tonumber(global)
+    if not g or g ~= g or g <= 0 then g = 1 end
+    local r = W.SlotSpeed(slot) * g
+    return math.min(math.max(r, W.LIB_SPEED_MIN), W.LIB_SPEED_MAX)
+end
+-- "2x", "0.5x", "0.75x", "1.5x", "0.0625x" (4 decimals at most)
+function W.SpeedText(v)
+    return string.format("%gx", math.floor((tonumber(v) or 1) * 10000 + 0.5) / 10000)
+end
+-- the file's speed column: "" -> nil (1x); a number in W.SPEED_MIN..W.SPEED_MAX -> it (1 -> nil); else nil, why
+function W.ParseSpeed(text)
+    text = tostring(text or "")
+    if text == "" then return nil end
+    local v = string.match(text, "^%d+%.?%d*$") and tonumber(text) or nil
+    if not v or v < W.SPEED_MIN or v > W.SPEED_MAX then return nil, "speed " .. text end
+    if v == 1 then return nil end
+    return v
+end
 
 -- does a slot hold its animation's last frame (round 0.9.4b): its "Hold the last pose" is on (the default), it is not
 -- looped ("loop it") and the animation plays once (a looping animation loops until the player moves). e: the catalogue
@@ -337,7 +376,7 @@ W.DEFAULTS.supersonic_general = W.DEFAULTS.supersonic
 
 -- a wheel: { pages = { [1..4] = { [1..8] = slot } }, centre = { face = name | nil } }; slot = { body = "a75" | "x3" | "x" |
 -- "stop" | nil, name = internal name | nil, face = name | nil, loop = true | nil, nohold = true | nil (round 0.9.4b: "Hold
--- the last pose" switched off), label = "" }
+-- the last pose" switched off), label = "", speed = 0.25..4 | nil (round 0.9.4e: the play rate; nil = 1x) }
 function W.EmptyWheel()
     local w = { pages = {}, centre = {} }
     for p = 1, W.PAGES do
@@ -354,7 +393,7 @@ function W.CopyWheel(src)
             local o = src.pages and src.pages[p] and src.pages[p][s]
             if o then
                 w.pages[p][s] = { body = o.body, name = o.name, face = o.face, loop = o.loop, nohold = o.nohold,
-                                  label = o.label }
+                                  label = o.label, speed = o.speed }
             end
         end
     end
@@ -417,7 +456,7 @@ end
 -- the file (faces_wheel_plan.md 8.1) -----------------------------------------------------------------------------------
 W.HEADER = {
     "# G-SA1 emote wheel - written by Q menu > Options > G-SA1 > Emote wheel; one line per slot, tab-separated:",
-    "# entry  page  slot  body  name  face  options  label",
+    "# entry  page  slot  body  name  face  options  label  [speed]",
     "#   entry    a GSA1.CHARACTERS name: sonic tails knuckles amy gamma big supersonic supersonic_general",
     "#   page     1-4 and slot 1-8 (1 = up, then clockwise); page 0 slot 0 = the centre (its body is always \"-\")",
     "#   body     a<row> (an action row) | x<extra> (an extra motion) | stop | - (no body animation)",
@@ -427,6 +466,7 @@ W.HEADER = {
     "#   face     a face animation's name in face_anims.txt, or \"-\"",
     "#   options  comma list (loop: loop it; nohold: \"Hold the last pose\" off) or \"-\"",
     "#   label    reserved for custom names (later); empty",
+    "#   speed    (G-SA1 0.9.4e, only when not 1) the slot's play rate: 0.25-4 times the game's rate; absent = 1",
 }
 
 local function valid_body(b)
@@ -446,6 +486,8 @@ function W.Parse(text)
             for field in string.gmatch(line .. "\t", "([^\t]*)\t") do f[#f + 1] = field end
             local entry, page, slot = f[1], tonumber(f[2]), tonumber(f[3])
             local body, name, face, opts = f[4], f[5], f[6], f[7]
+            -- 0.9.4e: the 9th column, the slot's play rate (absent in older files: 1x)
+            local speed, swhy = W.ParseSpeed(f[9])
             local why
             if not (entry and W.EntryOf(entry)) then
                 why = "unknown character " .. tostring(entry)
@@ -458,6 +500,8 @@ function W.Parse(text)
                 why = "the centre has no body animation"
             elseif not (name and name ~= "" and face and face ~= "" and opts and opts ~= "") then
                 why = "too few columns"
+            elseif swhy then
+                why = swhy
             else
                 local loop, nohold = false, false
                 if opts ~= "-" then
@@ -483,7 +527,7 @@ function W.Parse(text)
                         w.pages[page][slot] = {
                             body = body ~= "-" and body or nil, name = name ~= "-" and name or nil,
                             face = face ~= "-" and face or nil, loop = loop or nil, nohold = nohold or nil,
-                            label = f[8] or "",
+                            label = f[8] or "", speed = speed,
                         }
                     end
                 end
@@ -503,7 +547,10 @@ local function clean(s)
     return s
 end
 
--- wheels -> text (the edited entries, each written whole: 32 slots and the centre, in GSA1.CHARACTERS order)
+-- wheels -> text (the edited entries, each written whole: 32 slots and the centre, in GSA1.CHARACTERS order). The speed
+-- column (0.9.4e) is written only for a slot with an animation whose rate is not 1x: without changed rates the slot lines
+-- are exactly 0.9.4d's (the header has one comment line more), and 0.9.4d's reader takes a line with the 9th column (it
+-- reads columns 1-8 and ignores the rest), so going back to 0.9.4d loses only the rates
 function W.Serialize(wheels)
     local lines = {}
     for _, l in ipairs(W.HEADER) do lines[#lines + 1] = l end
@@ -517,9 +564,12 @@ function W.Serialize(wheels)
                     local opts = {}
                     if o.loop then opts[#opts + 1] = "loop" end
                     if o.nohold then opts[#opts + 1] = "nohold" end
-                    lines[#lines + 1] = table.concat({ c.name, tostring(p), tostring(s), clean(o.body or "-"),
+                    local cols = { c.name, tostring(p), tostring(s), clean(o.body or "-"),
                         clean(o.body and o.body ~= "stop" and o.name or "-"), clean(o.face or "-"),
-                        #opts > 0 and table.concat(opts, ",") or "-", clean(o.label or "") }, "\t")
+                        #opts > 0 and table.concat(opts, ",") or "-", clean(o.label or "") }
+                    local sp = W.SlotSpeed(o)
+                    if o.body and o.body ~= "stop" and sp ~= 1 then cols[#cols + 1] = string.format("%g", sp) end
+                    lines[#lines + 1] = table.concat(cols, "\t")
                 end
             end
             lines[#lines + 1] = table.concat({ c.name, "0", "0", "-", "-", clean(w.centre and w.centre.face or "-"), "-",

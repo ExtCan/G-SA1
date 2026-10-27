@@ -21,6 +21,13 @@
 // "Hold the last pose") -> EmoteState HOLDING, key a75, frame 64 (its last frame) and still so 60 pairs later; the stick
 // ends it (NONE); the pose held again, Emote(a3) replaces it; held again, EmoteStop(STOP_BLEND) blends back to standing
 // (PLAYING / ENDING, then NONE); without HOLD a75 ends by itself (never HOLDING).
+// Round 0.9.4e (gsa1_rounds_plan.md 14.1aa, the owner: "being able to change the animation's play rate"; the wheel's per-slot
+// rate x gsa1_wheel_speed reaches libsa1's sa1_emote_item.speed): gsa1.FEATURES.emote = 3, gsa1.EMOTE.SPEED_MIN / SPEED_MAX
+// = 1/64 / 16 (libsa1's item check); Emote's 4th argument: 32, 1/128, -1, a string -> "bad_argument" (before the
+// character), 2 / 0.5 / 0 (= 1) / nil pass to the character check. With gm_construct: the emote's frame (EmoteState) per
+// pair of a3 (s_wait3) at speed 1, 2 and 0.5 over the same window of pairs - speed 2 advances twice as many frames, 0.5
+// half (within 5 %), speed 0 and nil = speed 1 exactly; Emote(a75, HOLD, 2) reaches HOLDING on frame 64 in about half the
+// pairs of speed 1.
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -104,7 +111,7 @@ int main(int argc, char **argv)
         fns = fns && g.tab->field(f).type == Type::Function;
     }
 #if defined(SA1_API_EMOTE_HOLD)
-    const double want_version = 2.0;
+    const double want_version = 3.0;      // 0.9.4e: the play rate (version 2: HOLD, 0.9.4b)
 #else
     const double want_version = 1.0;
 #endif
@@ -131,6 +138,7 @@ int main(int argc, char **argv)
         {"F_OTHER_OBJECT", SA1_EMOTE_F_OTHER_OBJECT}, {"F_EXTRA", SA1_EMOTE_F_EXTRA},
 #if defined(SA1_API_EMOTE_HOLD)
         {"HOLD", SA1_EMOTE_HOLD}, {"STATE_HOLDING", SA1_EMOTE_STATE_HOLDING},
+        {"SPEED_MIN", 1.0 / 64.0}, {"SPEED_MAX", 16.0},       // 0.9.4e: libsa1's item check (src/sa1_emote.c)
 #endif
     };
     std::string wrong;
@@ -179,6 +187,23 @@ int main(int argc, char **argv)
           "nil, \"%s\", bad_argument (the key first); Emote of no character -> not_found; a flag 0x8000 -> bad_argument; "
           "EmoteStop of no character -> not_found, how 5 -> bad_argument; EmoteState of no character -> nil",
           str_of(l0, 1).c_str(), str_of(u1, 1).c_str());
+
+    // round 0.9.4e: the play rate, checked before the character (bad: "bad_argument"; good: on to "not_found")
+    {
+        auto em = [&](Val speed, bool nil_flags) {
+            return L.call("Emote", {Val::number(77), Val::string("a3"), nil_flags ? Val() : Val::number(0), speed});
+        };
+        std::vector<Val> b1 = em(Val::number(32), false), b2 = em(Val::number(1.0 / 128.0), false),
+                         b3 = em(Val::number(-1), false), b4 = em(Val::string("2"), false);
+        std::vector<Val> g1 = em(Val::number(2), false), g2 = em(Val::number(0.5), true), g3 = em(Val::number(0), false),
+                         g4 = em(Val(), false), g5 = em(Val::number(16), false), g6 = em(Val::number(1.0 / 64.0), false);
+        bool bad = true, good = true;
+        for (const auto *r : {&b1, &b2, &b3, &b4}) bad = bad && is_nil_msg(*r) && str_of(*r, 2) == "bad_argument";
+        for (const auto *r : {&g1, &g2, &g3, &g4, &g5, &g6}) good = good && is_nil_msg(*r) && str_of(*r, 2) == "not_found";
+        CHECK(bad && good && L.st.empty() && str_of(b1, 1).find("speed") != std::string::npos,
+              "round 0.9.4e: Emote's speed 32, 1/128, -1, \"2\" -> bad_argument (\"%s\"); 2, 0.5 (flags nil), 0, nil, 16, "
+              "1/64 pass on to the character check (not_found)", str_of(b1, 1).c_str());
+    }
 
     if (gdi.empty()) {
         std::printf("  info  no --gdi / SA1_TEST_GDI: the catalogue checks need the disc\n");
@@ -347,6 +372,81 @@ int main(int argc, char **argv)
     }
     CHECK(h4.size() == 1 && h4[0].b && !holding && done_at > 0,
           "without HOLD a75 ends by itself after %d pairs, never HOLDING", done_at);
+#endif
+    // round 0.9.4e: the play rate. a3 (s_wait3, once) from standing at speed 1, 2, 0.5, 0 (= 1) and nil: the queue head's
+    // frame (EmoteState) per pair over the same window of pairs (after the start; the item and its key unchanged in it)
+    const int kFromPair = 4, kToPair = 10;
+    struct Run {
+        double speed;
+        bool given;
+        std::vector<double> frames;
+        bool ok;
+        std::string why;
+        double rate;
+    };
+    std::vector<Run> runs = {{1.0, true, {}, true, "", 0.0}, {2.0, true, {}, true, "", 0.0}, {0.5, true, {}, true, "", 0.0},
+                             {0.0, true, {}, true, "", 0.0}, {1.0, false, {}, true, "", 0.0}};
+    for (Run &run : runs) {
+        L.call("EmoteStop", {Val::number(id), Val::number(SA1_EMOTE_STOP_NOW)});
+        pairs_of(L, id, 30, 0.0);
+        std::vector<Val> a = {Val::number(id), Val::string("a3"), Val::number(0)};
+        if (run.given) a.push_back(Val::number(run.speed));
+        std::vector<Val> pr = L.call("Emote", a);
+        if (pr.size() != 1 || !pr[0].b) {
+            run.ok = false;
+            run.why = "Emote: " + str_of(pr, 1);
+            continue;
+        }
+        for (int p = 1; p <= kToPair; p++) {
+            pairs_of(L, id, 1, 0.0);
+            std::vector<Val> sv = L.call("EmoteState", {Val::number(id)});
+            run.frames.push_back(num_of(sv, 3));
+            if (p >= kFromPair && (num_of(sv, 0) != SA1_EMOTE_STATE_PLAYING || str_of(sv, 1) != "a3" || num_of(sv, 2) != 0)) {
+                run.ok = false;
+                run.why = gsa1::format("pair %d: state %g key %s item %g", p, num_of(sv, 0), str_of(sv, 1).c_str(),
+                                       num_of(sv, 2));
+            }
+        }
+        if (run.frames.size() == (size_t)kToPair) {
+            run.rate = (run.frames[kToPair - 1] - run.frames[kFromPair - 1]) / (double)(kToPair - kFromPair);
+        }
+    }
+    for (const Run &r : runs) {
+        std::string t;
+        for (double f : r.frames) t += gsa1::format("%s%g", t.empty() ? "" : " ", f);
+        std::printf("  info  a3 at speed %g%s: %g frames per pair (frames %s)%s%s\n", r.speed, r.given ? "" : " (nil)",
+                    r.rate, t.c_str(), r.ok ? "" : " - ", r.why.c_str());
+    }
+    double base = runs[0].rate;
+    bool all_ok = runs[0].ok && runs[1].ok && runs[2].ok && runs[3].ok && runs[4].ok && base > 0.0;
+    double r2 = base > 0.0 ? runs[1].rate / base : 0.0, r05 = base > 0.0 ? runs[2].rate / base : 0.0;
+    CHECK(all_ok && std::fabs(r2 - 2.0) <= 0.10 && std::fabs(r05 - 0.5) <= 0.025 && runs[3].frames == runs[0].frames &&
+              runs[4].frames == runs[0].frames,
+          "round 0.9.4e: a3 at speed 2 plays its motion at %.3f x the frame rate of speed 1 (%g frames per pair), at 0.5 "
+          "%.3f x; speed 0 and nil give speed 1's frames exactly", r2, base, r05);
+#if defined(SA1_API_EMOTE_HOLD)
+    // the play rate with HOLD: a75 (s_kimepose0) at speed 2 holds its last frame like speed 1, in about half the pairs
+    auto held_after = [&](double speed, std::vector<Val> &out) {
+        L.call("EmoteStop", {Val::number(id), Val::number(SA1_EMOTE_STOP_NOW)});
+        pairs_of(L, id, 30, 0.0);
+        std::vector<Val> hr = L.call("Emote", {Val::number(id), Val::string("a75"), Val::number(SA1_EMOTE_HOLD),
+                                               Val::number(speed)});
+        if (hr.size() != 1 || !hr[0].b) return -2;
+        for (int p = 1; p <= 300; p++) {
+            pairs_of(L, id, 1, 0.0);
+            out = L.call("EmoteState", {Val::number(id)});
+            if (num_of(out, 0) == SA1_EMOTE_STATE_HOLDING) return p;
+        }
+        return -1;
+    };
+    std::vector<Val> hv1, hv2;
+    int hp1 = held_after(1.0, hv1), hp2 = held_after(2.0, hv2);
+    double hratio = hp1 > 0 && hp2 > 0 ? (double)hp2 / (double)hp1 : 0.0;
+    L.call("EmoteStop", {Val::number(id), Val::number(SA1_EMOTE_STOP_NOW)});
+    CHECK(hp1 > 0 && hp2 > 0 && std::fabs(num_of(hv1, 3) - 64.0) < 0.01 && std::fabs(num_of(hv2, 3) - 64.0) < 0.01 &&
+              hratio > 0.4 && hratio < 0.62,
+          "round 0.9.4e: Emote(a75, HOLD, speed 2) holds frame %g after %d pairs (speed 1: frame %g after %d; x%.2f)",
+          num_of(hv2, 3), hp2, num_of(hv1, 3), hp1, hratio);
 #endif
     L.call("Destroy", {Val::number(id)});
     CHECK(L.st.empty(), "the mock stack is empty after every call");

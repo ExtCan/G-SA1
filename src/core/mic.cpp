@@ -10,6 +10,7 @@
 
 #include "util.hpp"
 #include "viseme.hpp"
+#include "viseme_v1.hpp"
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <xmmintrin.h>
@@ -36,26 +37,37 @@ std::atomic<float> g_level{0.0f}, g_peak{0.0f};
 std::atomic<uint64_t> g_blocks{0};
 std::atomic<bool> g_listening{false};
 
-// ---- 0.9.4c: the sound classifier (phoneme_plan.md 4.2 step 2, review R.8 / R.9) ----
+// ---- 0.9.4c: the sound classifier (phoneme_plan.md 4.2 step 2, review R.8 / R.9); 0.9.4e: two engines, the warm-up ----
 // Lua thread -> RECORDPROC: atomics only, applied at the start of the RECORDPROC's next block
 std::atomic<bool> g_vis_on{false};
 std::atomic<uint32_t> g_epoch{0};             // +1 per press (listen(true)) and per analysis start (viseme_on(true))
-const uint32_t kPendReinit = 1u;              // another device: start again, keep the speaker number
-const uint32_t kPendForget = 2u;              // the session ended (close): start again, forget the speaker number
-const uint32_t kPendResetVoice = 4u;          // "reset_voice"
+const uint32_t kPendReinit = 1u;              // another device / a forced re-open: start again, keep the voice
+const uint32_t kPendForget = 2u;              // the session ended (close): start again, forget the voice (both engines)
+const uint32_t kPendResetVoice = 4u;          // "reset_voice" (both engines)
 std::atomic<uint32_t> g_pending{0};
 std::atomic<float> g_tune_gate{6.0f};
 std::atomic<int> g_tune_adapt{1}, g_tune_smooth{3};
-// RECORDPROC -> Lua: the newest frame and the speaker number (float bits | frames << 32)
+// 0.9.4e: the engine (1 = 0.9.4c's classifier, 2 = lipsync2's); the one the RECORDPROC last applied (0: none yet)
+std::atomic<int> g_tune_engine{2}, g_engine_applied{0};
+// 0.9.4e: the warm-up's pending step (-1 none; the newest step wins)
+std::atomic<int> g_warm_step{-1};
+// RECORDPROC -> Lua: the newest frame (atomic 1), its features (atomic 2, features_pack's layout; "none" = cat / raw 15),
+// the voice summary and the warm-up's state (one atomic each; voice_pack / warm_pack below)
 const uint32_t kClsNone = 15u;
 std::atomic<uint64_t> g_frame{(uint64_t)kClsNone << 16};   // "none" (viseme_pack's layout)
-std::atomic<uint64_t> g_voice{0};             // frames 0: the prior
+const uint64_t kFeaturesNone = ((uint64_t)15u << 45) | ((uint64_t)15u << 49);
+std::atomic<uint64_t> g_features{kFeaturesNone};
+std::atomic<uint64_t> g_voice{0};             // frames 0, not warmed: the prior
+std::atomic<uint64_t> g_warm{0};              // phase -1, nothing counted, no result
 // the RECORDPROC's own: never touched on another thread (review R.9)
-viseme::State g_vs;
+viseme::State g_vs;                           // engine 2
+viseme_v1::State g_vs1;                       // engine 1 (0.9.4c's)
 bool g_vs_ready = false;
+int g_vs_engine = 0;                          // the engine fed last (0: none since the forget)
 uint32_t g_vs_epoch = 0;
 uint32_t g_vs_seq = 0;
 int g_vs_adapt = 1;
+int g_warm_result = 0;                        // the warm-up's last result (WarmState::result)
 // tests: entries into the State, overlapping entries, entries on the marked thread
 std::atomic<int> g_dbg_inside{0};
 std::atomic<uint64_t> g_dbg_entries{0}, g_dbg_overlaps{0}, g_dbg_marked{0};
@@ -101,10 +113,11 @@ struct MxcsrKeep {
 #endif
 };
 
-float g_prior()
+// the speaker number before any learning: engine 2's (the default) or 0.9.4c's
+float g_prior(int engine)
 {
-    static const float p = viseme::prior_g();
-    return p;
+    static const float p2 = viseme::prior_g(), p1 = viseme_v1::prior_g();
+    return engine == ENGINE_V1 ? p1 : p2;
 }
 
 uint32_t qround(float v, float scale, uint32_t max)
@@ -116,60 +129,187 @@ uint32_t qround(float v, float scale, uint32_t max)
     return q >= (float)max ? max : (uint32_t)q;
 }
 
-void publish_voice(float g, uint32_t frames)
+// the voice summary (one atomic): bits 0-15 g ((g - 4) x 10000, 1e-4 steps, clamped), 16-35 the frames learned from
+// (saturating), 36-45 F1 / 4 Hz, 46-56 F2 / 4 Hz (0 = none), 57 warmed, 58-59 the engine that published it
+uint64_t voice_pack(float g, uint32_t frames, float f1, float f2, bool warmed, int engine)
 {
-    uint32_t bits;
-    std::memcpy(&bits, &g, sizeof bits);
-    g_voice.store((uint64_t)bits | ((uint64_t)frames << 32), std::memory_order_release);
+    float gq = (g - 4.0f) * 10000.0f + 0.5f;
+    uint64_t g16 = !(gq > 0.0f) ? 0u : (gq >= 65535.0f ? 65535u : (uint64_t)gq);
+    uint64_t fr = frames > 0xFFFFFu ? 0xFFFFFu : frames;
+    return g16 | (fr << 16) | ((uint64_t)qround(f1, 0.25f, 1023u) << 36) | ((uint64_t)qround(f2, 0.25f, 2047u) << 46) |
+           ((uint64_t)(warmed ? 1u : 0u) << 57) | ((uint64_t)(engine & 3) << 58);
 }
 
-// one block through the classifier (the RECORDPROC, while listening with the analysis on)
+void voice_unpack(uint64_t v, float &g, uint32_t &frames, float &f1, float &f2, bool &warmed, int &engine)
+{
+    g = 4.0f + (float)(v & 0xFFFFu) / 10000.0f;
+    frames = (uint32_t)((v >> 16) & 0xFFFFFu);
+    f1 = (float)((v >> 36) & 0x3FFu) * 4.0f;
+    f2 = (float)((v >> 46) & 0x7FFu) * 4.0f;
+    warmed = ((v >> 57) & 1u) != 0u;
+    engine = (int)((v >> 58) & 3u);
+}
+
+void publish_none_voice()
+{
+    int e = g_tune_engine.load(std::memory_order_relaxed);
+    g_voice.store(voice_pack(g_prior(e), 0u, 0.0f, 0.0f, false, e), std::memory_order_release);
+}
+
+// the warm-up's state (one atomic): bits 0-2 phase + 1 (0 = none, 1-4 the corners, 5 a gap), 3-34 the four corners'
+// frames (8 bits each, saturating), 35-37 the result
+uint64_t warm_pack(int phase, const double n[4], int result)
+{
+    uint64_t v = (uint64_t)(phase < -1 || phase > 4 ? 0 : phase + 1);
+    for (int c = 0; c < 4; c++) {
+        double k = n[c];
+        uint64_t q = !(k > 0.0) ? 0u : (k >= 255.0 ? 255u : (uint64_t)k);
+        v |= q << (3 + 8 * c);
+    }
+    return v | ((uint64_t)(result < 0 || result > 7 ? 0 : result) << 35);
+}
+
+void publish_none_warm()
+{
+    const double zero[4] = {0, 0, 0, 0};
+    g_warm.store(warm_pack(-1, zero, 0), std::memory_order_release);
+}
+
+// one block through the chosen classifier (the RECORDPROC, while listening with the analysis on)
 void analyse_block(const float *x, uint32_t n)
 {
     StateEntry entry;
     uint32_t pend = g_pending.exchange(0u, std::memory_order_acq_rel);
-    viseme::Params p;
-    viseme::default_params(p);
-    p.gate_min_db = g_tune_gate.load(std::memory_order_relaxed);
-    p.adapt = g_tune_adapt.load(std::memory_order_relaxed);
-    p.smooth = g_tune_smooth.load(std::memory_order_relaxed);
+    int step = g_warm_step.exchange(-1, std::memory_order_acq_rel);
+    const int eng = g_tune_engine.load(std::memory_order_relaxed) == ENGINE_V1 ? ENGINE_V1 : ENGINE_V2;
+    const float gate = g_tune_gate.load(std::memory_order_relaxed);
+    const int adapt = g_tune_adapt.load(std::memory_order_relaxed), smooth = g_tune_smooth.load(std::memory_order_relaxed);
+    viseme::Params p2;
+    viseme::default_params(p2);
+    p2.gate_min_db = gate;
+    p2.adapt = adapt;
+    p2.smooth = smooth;
+    viseme_v1::Params p1;
+    viseme_v1::default_params(p1);
+    p1.gate_min_db = gate;
+    p1.adapt = adapt;
+    p1.smooth = smooth;
     if (!g_vs_ready || (pend & kPendForget)) {
-        viseme::init(g_vs, p);
+        // a new session: both engines from scratch (their voices and the warm-up forgotten)
+        viseme::init(g_vs, p2);
+        viseme_v1::init(g_vs1, p1);
         g_vs_ready = true;
-        g_vs_adapt = p.adapt;
+        g_vs_adapt = adapt;
+        g_vs_engine = eng;
         g_vs_seq = 0u;            // close() published "none" with seq 0: a new session counts from there
-    } else if (pend & kPendReinit) {
-        viseme::reinit_keep_voice(g_vs, p);
+        g_warm_result = 0;          // (close() dropped any step sent before it; a step sent since applies below)
+    } else if ((pend & kPendReinit) || eng != g_vs_engine) {
+        // another device, a forced re-open or the other engine chosen: the chosen engine starts again keeping its own
+        // voice (the other one keeps what it learned, unfed)
+        if (eng == ENGINE_V2) {
+            viseme::reinit_keep_voice(g_vs, p2);
+        } else {
+            viseme_v1::reinit_keep_voice(g_vs1, p1);
+        }
+        g_vs_engine = eng;
     }
     if (pend & kPendResetVoice) {
         viseme::reset_voice(g_vs);
+        viseme_v1::reset_voice(g_vs1);
+        g_warm_result = 0;
     }
     uint32_t ep = g_epoch.load(std::memory_order_acquire);
     if (ep != g_vs_epoch) {
-        viseme::reset_press(g_vs);
+        if (eng == ENGINE_V2) {
+            viseme::reset_press(g_vs);
+        } else {
+            viseme_v1::reset_press(g_vs1);
+        }
         g_vs_epoch = ep;
     }
     // the tunes (applied at the start of this block)
-    g_vs.p.gate_min_db = p.gate_min_db;
-    g_vs.p.smooth = p.smooth;
-    if (p.adapt != g_vs_adapt) {
-        g_vs.p.adapt = p.adapt;
-        g_vs_adapt = p.adapt;
-        if (p.adapt == 0) {
-            viseme::reset_voice(g_vs);     // "learn my voice" off: the adult prior again
+    g_vs.p.gate_min_db = gate;
+    g_vs.p.smooth = smooth;
+    g_vs1.p.gate_min_db = gate;
+    g_vs1.p.smooth = smooth;
+    if (adapt != g_vs_adapt) {
+        g_vs.p.adapt = adapt;
+        g_vs1.p.adapt = adapt;
+        g_vs_adapt = adapt;
+        if (adapt == 0) {
+            viseme::reset_voice(g_vs);     // "learn my voice" off: the adult prior again (the warm-up's work too)
+            viseme_v1::reset_voice(g_vs1);
+            g_warm_result = 0;
         }
     }
-    viseme::Frame f;
-    int made;
-    {
-        FtzScope ftz;
-        made = viseme::feed(g_vs, x, (int)(n > 0x7FFFFFFFu ? 0x7FFFFFFFu : n), &f, 1);
+    // the warm-up's step (engine 2's State; lipsync2_plan.md 4.4)
+    if (step >= WARM_AH && step <= WARM_CANCEL) {
+        if (step <= WARM_GAP && g_vs.warm_phase < 0) {
+            g_warm_result = 0;            // a new warm-up begins: the last result is gone
+        }
+        if (step <= WARM_OH) {
+            viseme::warm_begin(g_vs, step);
+        } else if (step == WARM_GAP) {
+            viseme::warm_begin(g_vs, 4);
+        } else if (step == WARM_DONE) {
+            g_warm_result = viseme::warm_end(g_vs, 800.0f);
+        } else {
+            viseme::warm_cancel(g_vs);
+            g_warm_result = 3;
+        }
     }
-    if (made > 0) {
-        g_vs_seq = (g_vs_seq + 1u) & 0xFFFFu;
-        g_frame.store(viseme_pack(f.cls, f.level, f.f1, f.f2, f.conf, g_vs_seq, ep), std::memory_order_release);
+    g_engine_applied.store(eng, std::memory_order_relaxed);
+    const int cnt = (int)(n > 0x7FFFFFFFu ? 0x7FFFFFFFu : n);
+    if (eng == ENGINE_V2) {
+        viseme::Frame f;
+        int made;
+        {
+            FtzScope ftz;
+            made = viseme::feed(g_vs, x, cnt, &f, 1);
+        }
+        if (made > 0) {
+            g_vs_seq = (g_vs_seq + 1u) & 0xFFFFu;
+            VisemeFeatures ft;
+            ft.rel_loc = f.rel_loc;
+            ft.per = f.per;
+            ft.nbr = f.nbr;
+            ft.eep = f.eep;
+            ft.cat = f.cat;
+            ft.raw = f.raw;
+            ft.seq = g_vs_seq;
+            ft.lowr = f.lowr;
+            ft.zcr = f.zcr;
+            // atomic 2 first: a reader that sees atomic 1's seq finds atomic 2 at that seq or later (it compares them)
+            g_features.store(features_pack(ft), std::memory_order_release);
+            g_frame.store(viseme_pack(f.cls, f.level, f.f1, f.f2, f.conf, g_vs_seq, ep), std::memory_order_release);
+        }
+        float f1 = 0.0f, f2 = 0.0f;
+        if (g_vs.voice_frames > 0u || g_vs.warmed) {
+            f1 = (float)std::exp(g_vs.mu[0]);
+            f2 = (float)std::exp(g_vs.mu[1]);
+        }
+        g_voice.store(voice_pack(viseme::voice_g(g_vs), g_vs.voice_frames, f1, f2, g_vs.warmed != 0, ENGINE_V2),
+                      std::memory_order_release);
+    } else {
+        viseme_v1::Frame f;
+        int made;
+        {
+            FtzScope ftz;
+            made = viseme_v1::feed(g_vs1, x, cnt, &f, 1);
+        }
+        if (made > 0) {
+            g_vs_seq = (g_vs_seq + 1u) & 0xFFFFu;
+            VisemeFeatures ft;          // 0.9.4c's classifier has no local level, periodicity, band share or posterior
+            ft.raw = f.raw;
+            ft.seq = g_vs_seq;
+            ft.lowr = f.lowr;
+            ft.zcr = f.zcr;
+            g_features.store(features_pack(ft), std::memory_order_release);
+            g_frame.store(viseme_pack(f.cls, f.level, f.f1, f.f2, f.conf, g_vs_seq, ep), std::memory_order_release);
+        }
+        g_voice.store(voice_pack(g_vs1.g, g_vs1.voice_frames, 0.0f, 0.0f, false, ENGINE_V1), std::memory_order_release);
     }
-    publish_voice(g_vs.g, g_vs.voice_frames);
+    g_warm.store(warm_pack(g_vs.warm_phase, g_vs.warm_n, g_warm_result), std::memory_order_release);
 }
 
 // the rest: the Lua thread only
@@ -405,6 +545,7 @@ bool devices(std::vector<Device> &out, std::string &err)
         dv.name = utf8_name(d.name);
         dv.is_default = (d.flags & kDeviceDefault) != 0;
         dv.enabled = (d.flags & kDeviceEnabled) != 0;
+        dv.loopback = (d.flags & kDeviceLoopback) != 0;
         out.push_back(dv);
     }
     return true;
@@ -412,19 +553,35 @@ bool devices(std::vector<Device> &out, std::string &err)
 
 bool open(int device, std::string &err)
 {
+    return open2(device, false, err) == OPEN_OK;
+}
+
+int open2(int device, bool force, std::string &err)
+{
     if (device < -1 || device > 63) {
         err = format("no microphone %d (-1 = Windows' default, 0..63)", device);
-        return false;
+        return OPEN_FAILED;
     }
-    if (g_chan && (device == g_device || (device == -1 && g_device >= 0 && g_api &&
-                                          default_device(g_api) == g_device))) {
-        return true;
+    if (!force && g_chan && (device == g_device || (device == -1 && g_device >= 0 && g_api &&
+                                                    default_device(g_api) == g_device))) {
+        return OPEN_OK;
+    }
+    // 0.9.4e: a loopback device (what the PC plays) is refused before anything is closed (lipsync2_plan.md 4.5)
+    if (device >= 0) {
+        std::string lerr;
+        const Api *lf = api(lerr);
+        DeviceInfo d;
+        std::memset(&d, 0, sizeof d);
+        if (lf && lf->RecordGetDeviceInfo((uint32_t)device, &d) && (d.flags & kDeviceLoopback)) {
+            err = "that device records what your PC plays (a speaker output), not a microphone";
+            return OPEN_LOOPBACK;
+        }
     }
     teardown();
     const Api *f = api(err);
     if (!f) {
         g_failed = err;
-        return false;
+        return OPEN_FAILED;
     }
     bool inited = false;
     if (f->RecordInit(device)) {
@@ -434,14 +591,14 @@ bool open(int device, std::string &err)
         if (code != kErrorAlready) {
             err = fail_text("the microphone could not be opened", code);
             g_failed = err;
-            return false;
+            return OPEN_FAILED;
         }
         // Garry's Mod (or another part of the process) has this device open: use it, never free it
         int dev = device >= 0 ? device : default_device(f);
         if (!f->RecordSetDevice((uint32_t)dev)) {
             err = fail_text("the microphone is in use and could not be shared", f->ErrorGetCode());
             g_failed = err;
-            return false;
+            return OPEN_FAILED;
         }
     }
     int dev = (int)f->RecordGetDevice();
@@ -458,7 +615,7 @@ bool open(int device, std::string &err)
         }
         err = fail_text("the microphone could not start", code);
         g_failed = err;
-        return false;
+        return OPEN_FAILED;
     }
     g_api = f;
     g_chan = h;
@@ -471,7 +628,7 @@ bool open(int device, std::string &err)
     g_peak.store(0.0f);
     // 0.9.4c: the classifier starts again on this device's first block, keeping the speaker number (review R.9)
     g_pending.fetch_or(kPendReinit, std::memory_order_acq_rel);
-    return true;
+    return OPEN_OK;
 }
 
 bool listen(bool on, std::string &err)
@@ -533,7 +690,11 @@ void close()
     g_pending.fetch_or(kPendForget, std::memory_order_acq_rel);
     g_epoch.fetch_add(1u, std::memory_order_acq_rel);
     g_frame.store((uint64_t)kClsNone << 16, std::memory_order_release);
-    publish_voice(g_prior(), 0u);
+    // 0.9.4e: both engines' voices, the warm-up (its pending step too) and the features are forgotten as well
+    g_warm_step.store(-1, std::memory_order_release);
+    g_features.store(kFeaturesNone, std::memory_order_release);
+    publish_none_voice();
+    publish_none_warm();
 }
 
 void level(float &lv, float &pk, std::string &state)
@@ -613,8 +774,9 @@ bool viseme_tune(const std::string &name, double value, std::string &err)
 {
     if (name == "reset_voice") {
         g_pending.fetch_or(kPendResetVoice, std::memory_order_acq_rel);
-        // what Lua reads now; the State follows at the next block
-        publish_voice(g_prior(), 0u);
+        // what Lua reads now; the States follow at the next block (both engines; the warm-up's work too)
+        publish_none_voice();
+        publish_none_warm();
         return true;
     }
     if (!std::isfinite(value)) {
@@ -636,7 +798,8 @@ bool viseme_tune(const std::string &name, double value, std::string &err)
         }
         g_tune_adapt.store((int)value, std::memory_order_relaxed);
         if (value == 0.0) {
-            publish_voice(g_prior(), 0u);
+            publish_none_voice();
+            publish_none_warm();
         }
         return true;
     }
@@ -648,7 +811,15 @@ bool viseme_tune(const std::string &name, double value, std::string &err)
         g_tune_smooth.store((int)value, std::memory_order_relaxed);
         return true;
     }
-    err = "MicVisemeTune(name, value): name is one of \"gate_min_db\", \"adapt\", \"smooth\", \"reset_voice\"";
+    if (name == "engine") {
+        if (value != 1.0 && value != 2.0) {
+            err = "MicVisemeTune(\"engine\", 1 (0.9.4c's sound detection) or 2 (0.9.4e's))";
+            return false;
+        }
+        g_tune_engine.store((int)value, std::memory_order_relaxed);
+        return true;
+    }
+    err = "MicVisemeTune(name, value): name is one of \"gate_min_db\", \"adapt\", \"smooth\", \"reset_voice\", \"engine\"";
     return false;
 }
 
@@ -666,18 +837,9 @@ void viseme_frame(VisemeFrame &out)
 
 void viseme_voice(float &g, uint32_t &frames)
 {
-    uint64_t v = g_voice.load(std::memory_order_acquire);
-    uint32_t bits = (uint32_t)v;
-    frames = (uint32_t)(v >> 32);
-    std::memcpy(&g, &bits, sizeof g);
-    // a forget / reset the RECORDPROC has not applied yet (a block in flight may have published the old number after
-    // it was asked), or learning off: the prior
-    bool forgotten = (g_pending.load(std::memory_order_acquire) & (kPendForget | kPendResetVoice)) != 0u ||
-                     g_tune_adapt.load(std::memory_order_relaxed) == 0;
-    if (forgotten || frames == 0u || !std::isfinite(g)) {
-        g = g_prior();
-        frames = 0u;
-    }
+    float f1, f2;
+    bool warmed;
+    viseme_voice2(g, frames, f1, f2, warmed);
 }
 
 void viseme_debug(VisemeDebug &out)
@@ -690,6 +852,102 @@ void viseme_debug(VisemeDebug &out)
 void viseme_debug_mark_thread()
 {
     g_dbg_mark.store(thread_hash());
+}
+
+// ---- 0.9.4e ---------------------------------------------------------------------------------------------------------
+int viseme_engine()
+{
+    int e = g_engine_applied.load(std::memory_order_relaxed);
+    return e ? e : g_tune_engine.load(std::memory_order_relaxed);
+}
+
+bool viseme_warm(int step, std::string &err)
+{
+    if (step < WARM_AH || step > WARM_CANCEL) {
+        err = format("MicVisemeWarmup: no step %d", step);
+        return false;
+    }
+    if (g_tune_engine.load(std::memory_order_relaxed) != ENGINE_V2) {
+        err = "needs 'Sound detection' 0.9.4e";
+        return false;
+    }
+    if (g_tune_adapt.load(std::memory_order_relaxed) == 0) {
+        err = "needs 'Learn my voice'";
+        return false;
+    }
+    if (!g_chan) {
+        err = "the microphone is not open";
+        return false;
+    }
+    g_warm_step.store(step, std::memory_order_release);
+    return true;
+}
+
+void viseme_warm_state(WarmState &out)
+{
+    uint64_t v = g_warm.load(std::memory_order_acquire);
+    out.phase = (int)(v & 7u) - 1;
+    for (int c = 0; c < 4; c++) {
+        out.n[c] = (uint32_t)((v >> (3 + 8 * c)) & 0xFFu);
+    }
+    out.result = (int)((v >> 35) & 7u);
+}
+
+void viseme_voice2(float &g, uint32_t &frames, float &f1_hz, float &f2_hz, bool &warmed)
+{
+    int engine = 0;
+    voice_unpack(g_voice.load(std::memory_order_acquire), g, frames, f1_hz, f2_hz, warmed, engine);
+    // a forget / reset the RECORDPROC has not applied yet (a block in flight may have published the old voice after it
+    // was asked), learning off, or nothing learned: the prior of the chosen engine
+    bool forgotten = (g_pending.load(std::memory_order_acquire) & (kPendForget | kPendResetVoice)) != 0u ||
+                     g_tune_adapt.load(std::memory_order_relaxed) == 0;
+    if (forgotten || (frames == 0u && !warmed) || engine == 0) {
+        g = g_prior(engine ? engine : g_tune_engine.load(std::memory_order_relaxed));
+        frames = 0u;
+        f1_hz = f2_hz = 0.0f;
+        warmed = false;
+    }
+}
+
+uint64_t features_pack(const VisemeFeatures &f)
+{
+    float loc = -f.rel_loc;
+    uint64_t c = (f.cat >= 0 && f.cat < 15) ? (uint64_t)f.cat : 15u;
+    uint64_t r = (f.raw >= 0 && f.raw < 15) ? (uint64_t)f.raw : 15u;
+    return (uint64_t)(f.seq & 0xFFFFu) | ((uint64_t)qround(loc, 4.0f, 255u) << 16) |
+           ((uint64_t)qround(f.per, 127.0f, 127u) << 24) | ((uint64_t)qround(f.nbr, 127.0f, 127u) << 31) |
+           ((uint64_t)qround(f.eep, 127.0f, 127u) << 38) | (c << 45) | (r << 49) |
+           ((uint64_t)qround(f.lowr, 31.0f, 31u) << 53) | ((uint64_t)qround(f.zcr, 63.0f, 63u) << 58);
+}
+
+void features_unpack(uint64_t v, VisemeFeatures &out)
+{
+    out.seq = (uint32_t)(v & 0xFFFFu);
+    out.rel_loc = -(float)((v >> 16) & 0xFFu) / 4.0f;
+    out.per = (float)((v >> 24) & 0x7Fu) / 127.0f;
+    out.nbr = (float)((v >> 31) & 0x7Fu) / 127.0f;
+    out.eep = (float)((v >> 38) & 0x7Fu) / 127.0f;
+    uint32_t c = (uint32_t)(v >> 45) & 0xFu, r = (uint32_t)(v >> 49) & 0xFu;
+    out.cat = c == 15u ? -1 : (int)c;
+    out.raw = r == 15u ? -1 : (int)r;
+    out.lowr = (float)((v >> 53) & 0x1Fu) / 31.0f;
+    out.zcr = (float)((v >> 58) & 0x3Fu) / 63.0f;
+}
+
+void viseme_features(VisemeFeatures &out)
+{
+    features_unpack(g_features.load(std::memory_order_acquire), out);
+}
+
+void viseme_debug_states(viseme::State *v2, viseme_v1::State *v1)
+{
+    // tests only, with no block in flight (a single-threaded test after the RECORDPROC returned)
+    if (v2) {
+        std::memcpy((void *)v2, (const void *)&g_vs, sizeof g_vs);
+    }
+    if (v1) {
+        std::memcpy((void *)v1, (const void *)&g_vs1, sizeof g_vs1);
+    }
 }
 
 }  // namespace mic

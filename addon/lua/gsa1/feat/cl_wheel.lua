@@ -38,6 +38,12 @@
 --     larger, the animation's name large in the centre, a gold marker on slots with a face animation, a short open / close
 --     and highlight fade; its fonts (Garry's Mod's Roboto by default, gsa1_wheel_font) are made per wheel size and screen
 --     with surface.CreateFont - once per size, never per frame - so the labels grow and shrink with the wheel.
+--   * Round 0.9.4e (gsa1_rounds_plan.md 14.1aa; the owner: "An option for hiding the wheel for recording purposes would be
+--     great, also being able to change the animation's play rate"): "Hide the wheel" (gsa1_wheel_hidden, a check box and
+--     a toggle key gsa1_wheel_hide_key): the wheel works exactly as usual but its HUD draws nothing (W.HUDPaint; the rule
+--     for the toggle's note is at W.ToggleHidden); the play rate: per slot (W.SPEEDS, saved in the file's speed column)
+--     times gsa1_wheel_speed, sent as gsa1.Emote's 4th argument (libsa1's sa1_emote_item.speed; feature "emote" 3). A
+--     slot's face animation keeps its own timing.
 GSA1 = GSA1 or {}
 local W = GSA1.Wheel
 if not W then error("gsa1/feat/sh_wheel.lua did not load: the emote wheel needs it") end
@@ -72,6 +78,13 @@ local cv = {
         .. "while posing)", 0, 1),
     tap = GSA1.ConVar("gsa1_wheel_tap", 0, "A quick tap of the wheel key plays the last animation again", 0, 1),
     toast = GSA1.ConVar("gsa1_wheel_toast", 1, "Show the name of what plays (and why an animation could not play)", 0, 1),
+    -- round 0.9.4e (gsa1_rounds_plan.md 14.1aa)
+    hidden = GSA1.ConVar("gsa1_wheel_hidden", 0, "Hide the emote wheel (for recording): it works exactly as usual - hold, "
+        .. "point, release, the face trigger - but draws nothing on screen (1 = hidden)", 0, 1),
+    hide_key = GSA1.ConVar("gsa1_wheel_hide_key", 0, "A key that switches \"Hide the wheel\" on and off (a key code; 0 = "
+        .. "none; the console command gsa1_wheel_hide_toggle does the same)", 0, 511),
+    speed = GSA1.ConVar("gsa1_wheel_speed", 1, "The play rate of every animation from the emote wheel: it multiplies each "
+        .. "slot's own play rate (1 = the game's rate, 2 = twice as fast)", 0.25, 4),
     summary = GSA1.ConVar("gsa1_wheel_summary", "", "Read-only: a copy of your emote wheels' state for the session log (the "
         .. "wheels themselves are in garrysmod/data/gsa1/emote_wheel.txt)"),
 }
@@ -82,17 +95,28 @@ local function log(fmt, ...)
 end
 
 -- the module ------------------------------------------------------------------------------------------------------------------
-local have_cache, have_at = false, -1e9
+local have_cache, have_at, speed_cache = false, -1e9, false
 local function have()
     local now = SysTime()
     if now - have_at > 2 then
         have_at = now
         have_cache = (GSA1.HasFeature and GSA1.HasFeature(W.NEEDS.feature, W.NEEDS.version)) and true or false
+        -- 0.9.4e: does the module take the play rate (feature "emote" 3)
+        speed_cache = (GSA1.HasFeature and GSA1.HasFeature(W.SPEED_NEEDS.feature, W.SPEED_NEEDS.version)) and true or false
     end
     return have_cache
 end
 W.Have = have
 function W.ResetHave() have_at = -1e9 end
+-- round 0.9.4e: the module plays an animation at a rate (gsa1.Emote's 4th argument); older ones at the game's rate
+function W.SpeedSupported()
+    have()
+    return speed_cache
+end
+-- round 0.9.4e: the wheel draws nothing (gsa1_wheel_hidden)
+function W.Hidden()
+    return cv.hidden:GetBool()
+end
 local function emote_const(name, default)
     local E = gsa1 and gsa1.EMOTE
     return E and tonumber(E[name]) or default
@@ -236,7 +260,8 @@ W.stats = W.stats or { opened = 0, played = 0, refused = 0, cancelled = 0, faces
 W.masked = W.masked or 0
 
 local function toast(fmt, ...)
-    if not cv.toast:GetBool() then return end
+    -- 0.9.4e: hidden, nothing of the wheel may show (not even later: the toast is not kept)
+    if not cv.toast:GetBool() or cv.hidden:GetBool() then return end
     local ok, text = pcall(string.format, fmt, ...)
     W.toastText = ok and text or tostring(fmt)
     W.toastUntil = SysTime() + 1.5
@@ -260,7 +285,8 @@ end
 function W.Close(why, guard)
     if not W.open then return end
     W.open = false
-    W.fadeFrom = SysTime()          -- the HUD fades the wheel out (W.CLOSE_TIME)
+    -- the HUD fades the wheel out (W.CLOSE_TIME); hidden (0.9.4e): no fade, not even after showing it again
+    W.fadeFrom = (not cv.hidden:GetBool()) and SysTime() or nil
     if guard then
         W.closedAt, W.guardTicks = SysTime(), W.CLOSE_GUARD_TICKS
     end
@@ -333,15 +359,30 @@ function W.PlayBody(C, slot, page, s, how, face, entry)
     -- 0.9.4b: "Hold the last pose" (an animation that plays once stays on its last frame; a module without HOLD: 0)
     local hold = W.HoldApplies(slot, e) and emote_const("HOLD", 0) or 0
     if hold ~= 0 then flags = bor(flags, hold) end
-    local ok, reason, code = gsa1.Emote(C.id, e.key, flags)
+    -- 0.9.4e: the play rate - the slot's x gsa1_wheel_speed (libsa1's sa1_emote_item.speed); a module without it: the
+    -- game's rate (the 4th argument is not sent)
+    local rate = W.PlayRate(slot, cv.speed:GetFloat())
+    local rated = W.SpeedSupported()
+    local ok, reason, code
+    if rated then
+        ok, reason, code = gsa1.Emote(C.id, e.key, flags, rate)
+    else
+        ok, reason, code = gsa1.Emote(C.id, e.key, flags)
+    end
     if ok then
-        W.playing = { id = C.id, key = e.key, name = e.name, hold = hold ~= 0 }
+        W.playing = { id = C.id, key = e.key, name = e.name, hold = hold ~= 0, rate = rated and rate or 1 }
         W.last = { page = page, slot = s }
         W.stats.played = W.stats.played + 1
-        log("played %s (#%s) from page %d slot %d of %s's wheel (%s)%s", e.name ~= "" and e.name or e.key,
+        local at = ""
+        if rate ~= 1 then
+            at = rated and (", at " .. W.SpeedText(rate)) or string.format(", at the game's rate (%s needs G-SA1 module %s)",
+                W.SpeedText(rate), W.SPEED_NEEDS.module)
+        end
+        log("played %s (#%s) from page %d slot %d of %s's wheel (%s)%s%s", e.name ~= "" and e.name or e.key,
             e.source == 1 and ("extra " .. tostring(e.index)) or tostring(e.index), page or 0, s or 0, W.Title(entry), how,
-            slot.loop and ", looped" or (hold ~= 0 and ", holds its last pose" or ""))
-        toast("> %s%s%s", e.name ~= "" and e.name or e.key, face and (" + " .. face) or "",
+            slot.loop and ", looped" or (hold ~= 0 and ", holds its last pose" or ""), at)
+        toast("> %s%s%s%s", e.name ~= "" and e.name or e.key, (rated and rate ~= 1) and (" at " .. W.SpeedText(rate)) or "",
+            face and (" + " .. face) or "",
             (slot.loop or e.play == "loop") and " (move to stop)" or (hold ~= 0 and " (holds the pose: move to stop)" or ""))
         return true
     end
@@ -704,6 +745,8 @@ function W.KeyRefused(code)
 end
 cvars.AddChangeCallback("gsa1_wheel_key", function(name, old, new)
     local why = W.KeyRefused(tonumber(new))
+    local hk = cv.hide_key:GetInt()
+    if not why and hk > 0 and tonumber(new) == hk then why = "the hide key" end     -- 0.9.4e
     if why then
         W.keyNote = string.format("%s is %s: the wheel key stays %s", W.KeyName(tonumber(new)), why, W.KeyName(tonumber(old)))
         log("%s", W.keyNote)
@@ -715,12 +758,78 @@ cvars.AddChangeCallback("gsa1_wheel_key", function(name, old, new)
 end, "gsa1_wheel")
 cvars.AddChangeCallback("gsa1_wheel_face_key", function(name, old, new)
     local k = tonumber(new) or 0
-    if k > 0 and k == cv.key:GetInt() then
-        W.keyNote = string.format("%s is the wheel key: the face trigger stays %s", W.KeyName(k), W.KeyName(tonumber(old)))
+    local hk = cv.hide_key:GetInt()
+    if k > 0 and (k == cv.key:GetInt() or k == hk) then
+        W.keyNote = string.format("%s is the %s: the face trigger stays %s", W.KeyName(k), k == hk and "hide key" or
+            "wheel key", W.KeyName(tonumber(old)))
         log("%s", W.keyNote)
         RunConsoleCommand("gsa1_wheel_face_key", tostring(old))
     end
 end, "gsa1_wheel")
+
+-- hiding the wheel (round 0.9.4e) -----------------------------------------------------------------------------------------------
+-- gsa1_wheel_hidden 1: the wheel works exactly as usual - the wheel key / button / +gsa1_wheel, pointing with the mouse, the
+-- right stick or keys 1-8, the pages, the release, the face trigger, the centre, cancelling, everything it holds back from
+-- the game - but W.HUDPaint draws nothing: no ring, no labels, no centre text, no pointer, no open / close fade, no toast.
+-- Nothing else of G-SA1's HUD changes. The session log still says what played (a file, not the screen).
+-- THE NOTE RULE (the owner records with it): turning hiding ON (the key or gsa1_wheel_hide_toggle) shows nothing at all -
+-- anything on screen then would be in the recording; turning it OFF shows ONE small note ("the emote wheel is shown
+-- again"; notification.AddLegacy, else a chat line) - so a note is never shown while the wheel is hidden. The check box on
+-- the page changes it silently (the page is open: you see it). Both ways: a session log line.
+function W.ToggleHidden(how)
+    local on = not cv.hidden:GetBool()
+    cv.hidden:SetBool(on)
+    if not on then
+        local text = "G-SA1: the emote wheel is shown again"
+        if notification and notification.AddLegacy then
+            notification.AddLegacy(text, NOTIFY_GENERIC or 0, 3)
+        elseif GSA1.Chat then
+            GSA1.Chat("the emote wheel is shown again")
+        end
+    end
+    log("wheel %s by %s", on and "hidden" or "shown", tostring(how))
+    return on
+end
+-- the toggle key: every frame (a Think hook: it works with or without a character); a press while a menu, the chat or a
+-- panel has the input does nothing. Nothing allocated per frame
+W.hideWas = false
+function W.HideKeyThink()
+    local k = cv.hide_key:GetInt()
+    if k <= 0 then
+        W.hideWas = false
+        return
+    end
+    local d = key_down(k)
+    if d and not W.hideWas and not W.Busy() then W.ToggleHidden("the hide key " .. W.KeyName(k)) end
+    W.hideWas = d
+end
+cvars.AddChangeCallback("gsa1_wheel_hidden", function(name, old, new)
+    if (tonumber(new) or 0) ~= 0 then
+        -- nothing of the wheel stays on screen: the toast and the fade end now
+        W.toastUntil, W.fadeFrom = 0, nil
+    end
+end, "gsa1_wheel")
+-- the hide key may not be the wheel key, the face trigger or a key the character uses (the old key stays)
+cvars.AddChangeCallback("gsa1_wheel_hide_key", function(name, old, new)
+    local k = tonumber(new) or 0
+    if k <= 0 then return end
+    local why
+    if k == cv.key:GetInt() then
+        why = "the wheel key"
+    elseif k == cv.face_key:GetInt() then
+        why = "the face trigger"
+    else
+        why = W.KeyRefused(k)
+    end
+    if why then
+        W.keyNote = string.format("%s is %s: the hide key stays %s", W.KeyName(k), why, W.KeyName(tonumber(old)))
+        log("%s", W.keyNote)
+        RunConsoleCommand("gsa1_wheel_hide_key", tostring(old))
+    end
+end, "gsa1_wheel")
+hook.Add("Think", "gsa1_wheel_hide", guard("wheel hide key", function() W.HideKeyThink() end))
+concommand.Add("gsa1_wheel_hide_toggle", function() W.ToggleHidden("the command gsa1_wheel_hide_toggle") end, nil,
+    "G-SA1: hide or show the emote wheel (it keeps working while hidden; Q menu > Options > G-SA1 > Emote wheel)")
 
 -- the HUD ---------------------------------------------------------------------------------------------------------------------------
 -- Round 0.9.4b (objects2_plan.md 11.2; the owner: "The animation wheel's font doesn't resize with the wheel. The animation
@@ -876,6 +985,9 @@ function W.CentreLines()
             out[2] = string.format("%s - %d frames", e.source == 1 and ("extra " .. e.index) or ("#" .. e.index),
                 tonumber(e.frames) or 0)
             out[3] = W.PlaysText(slot, e)
+            -- 0.9.4e: the play rate when it is not the game's
+            local rate = W.PlayRate(slot, cv.speed:GetFloat())
+            if rate ~= 1 and W.SpeedSupported() then out[3] = out[3] .. ", at " .. W.SpeedText(rate) end
         else
             out[1] = why
         end
@@ -1034,6 +1146,12 @@ end
 
 -- while open: the opening animation (W.OPEN_TIME); after a close: the fade out (W.CLOSE_TIME); otherwise nothing
 function W.HUDPaint()
+    -- 0.9.4e: hidden - nothing at all (the wheel, its fade, the toast); the wheel works on (W.Think and the seams do not
+    -- read this setting)
+    if cv.hidden:GetBool() then
+        W.fadeFrom = nil
+        return
+    end
     local now = SysTime()
     if W.open then
         W.DrawWheel(W.Ease((now - (W.openAt or now)) / W.OPEN_TIME), false)
@@ -1073,7 +1191,8 @@ concommand.Add("gsa1_emote", function(_, _, args, argstr)
     local e, why = W.Find(C, argstr or (args and args[1]))
     if not e then GSA1.Chat("emote: %s", why) return end
     W.PlayBody(C, { body = e.key, name = e.name }, 0, 0, "the command gsa1_emote", nil, C.name)
-end, nil, "G-SA1: play one of your character's animations (internal name, number or key; the Emote wheel page lists them)")
+end, nil, "G-SA1: play one of your character's animations (internal name, number or key; the Emote wheel page lists them; "
+    .. "at the play rate of every animation, gsa1_wheel_speed)")
 concommand.Add("gsa1_emote_stop", function()
     local C = GSA1.Char
     if not C or not have() then return end
@@ -1246,9 +1365,18 @@ function W.StatusLines(E)
     out[#out + 1] = string.format("%s: %s animations%s; the wheel uses %d of 33 slots (%s)", W.Title(entry),
         list and tostring(tonumber(list.n) or #list) or "?", grey > 0 and string.format(" (%d more can't play yet)", grey)
         or "", W.UsedCount(w), W.data[entry] and "your changes" or "the defaults")
-    out[#out + 1] = string.format("wheel: %s; key %s, controller %s; face trigger %s / %s", cv.on:GetBool() and "on" or "off",
-        W.KeyName(cv.key:GetInt()), W.PadTitle(cv.pad:GetInt()), W.KeyName(cv.face_key:GetInt()),
-        W.PadTitle(cv.face_pad:GetInt()))
+    out[#out + 1] = string.format("wheel: %s%s; key %s, controller %s; face trigger %s / %s; hide key %s", cv.on:GetBool() and
+        "on" or "off", cv.hidden:GetBool() and " (hidden: it works but draws nothing)" or "", W.KeyName(cv.key:GetInt()),
+        W.PadTitle(cv.pad:GetInt()), W.KeyName(cv.face_key:GetInt()), W.PadTitle(cv.face_pad:GetInt()),
+        W.KeyName(cv.hide_key:GetInt()))
+    -- 0.9.4e: the play rate
+    local g = cv.speed:GetFloat()
+    if not W.SpeedSupported() then
+        out[#out + 1] = string.format("play rates: need G-SA1 module %s (feature \"emote\" %d); this one plays every "
+            .. "animation at the game's rate", W.SPEED_NEEDS.module, W.SPEED_NEEDS.version)
+    elseif g ~= 1 then
+        out[#out + 1] = string.format("play rate of every animation: %s (times each slot's own)", W.SpeedText(g))
+    end
     if (W.badLines or 0) > 0 then
         out[#out + 1] = string.format("%d line%s of emote_wheel.txt %s not understood (%s)", W.badLines,
             W.badLines == 1 and "" or "s", W.badLines == 1 and "was" or "were", table.concat(W.badNotes or {}, "; "))
@@ -1298,8 +1426,11 @@ local function paint_mini(self, w, h, E)
             TEXT_ALIGN_CENTER)
         draw.SimpleText(W.SlotText(slot, list, 11), "DermaDefault", x, y + 4, Color(255, 255, 255, 255), TEXT_ALIGN_CENTER,
             TEXT_ALIGN_CENTER)
-        if slot.face then
-            draw.SimpleText(":)", "DermaDefault", x, y + 16, Color(255, 210, 60, 255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+        -- the face marker and (0.9.4e) the slot's play rate when it is not 1x
+        local sp = W.SlotSpeed(slot)
+        if slot.face or sp ~= 1 then
+            draw.SimpleText((slot.face and ":)" or "") .. (sp ~= 1 and ((slot.face and " " or "") .. W.SpeedText(sp)) or ""),
+                "DermaDefault", x, y + 16, Color(255, 210, 60, 255), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
         end
     end
     local cf = wheel.centre.face
@@ -1373,8 +1504,9 @@ function W.NewEditor(entry)
                     text = "(stop)"
                 else
                     local e, why = W.SlotEntry(slot, glist)
-                    text = e and string.format("%s  #%s  %d frames, %s", e.name, e.source == 1 and ("x" .. e.index) or
-                        tostring(e.index), tonumber(e.frames) or 0, W.PlaysText(slot, e)) or why
+                    text = e and string.format("%s  #%s  %d frames, %s%s", e.name, e.source == 1 and ("x" .. e.index) or
+                        tostring(e.index), tonumber(e.frames) or 0, W.PlaysText(slot, e), W.SlotSpeed(slot) ~= 1 and
+                        (", " .. W.SpeedText(W.SlotSpeed(slot))) or "") or why
                 end
                 E.selLine:SetText(string.format("Page %d, slot %d: %s", E.page, E.sel, text))
             end
@@ -1394,6 +1526,21 @@ function W.NewEditor(entry)
         end
         if E.holdNote and E.holdNote.SetText then
             E.holdNote:SetText(E.HoldNote())
+        end
+        -- 0.9.4e: the slot's play rate (a slot with an animation; the module must take it)
+        local sc = E.speedCombo
+        if sc then
+            if sc.Clear then sc:Clear() end
+            local cur = W.SlotSpeed(slot)
+            for _, v in ipairs(W.SPEEDS) do
+                sc:AddChoice(W.SpeedText(v) .. (v == 1 and " (the game's rate)" or ""), tostring(v), v == cur)
+            end
+            local can = E.sel ~= 0 and slot ~= nil and slot.body ~= nil and slot.body ~= "stop" and W.SpeedSupported()
+            if sc.SetEnabled then sc:SetEnabled(can and true or false) end
+            if sc.SetValue then sc:SetValue(W.SpeedText(cur) .. (cur == 1 and " (the game's rate)" or "")) end
+        end
+        if E.speedNote and E.speedNote.SetText then
+            E.speedNote:SetText(E.SpeedNote())
         end
         local fc = E.faceCombo
         if fc then
@@ -1499,6 +1646,40 @@ function W.NewEditor(entry)
         W.Save()
         log("%s's wheel: page %d slot %d holds its last pose: %s", W.Title(E.entry), E.page, E.sel, on and "on" or "off")
         E.Refresh()
+    end
+    -- 0.9.4e: the slot's play rate (W.SPEEDS; 1 = the game's rate: not written to the file)
+    function E.SetSpeed(v)
+        v = tonumber(v)
+        if E.sel == 0 then return false end
+        if not v or v ~= v or v < W.SPEED_MIN or v > W.SPEED_MAX then
+            E.note = string.format("a slot's play rate is %s to %s", W.SpeedText(W.SPEED_MIN), W.SpeedText(W.SPEED_MAX))
+            E.Refresh()
+            return false
+        end
+        local w = W.Edit(E.entry)
+        w.pages[E.page][E.sel].speed = v ~= 1 and v or nil
+        W.Save()
+        log("%s's wheel: page %d slot %d plays at %s", W.Title(E.entry), E.page, E.sel, W.SpeedText(v))
+        E.note = nil
+        E.Refresh()
+        return true
+    end
+    -- the line under the rate box: what the slot plays at, and that its face animation keeps its own timing
+    function E.SpeedNote()
+        if not W.SpeedSupported() then
+            return string.format("Play rates need G-SA1 module %s (feature \"emote\" %d); this one plays every animation "
+                .. "at the game's rate.", W.SPEED_NEEDS.module, W.SPEED_NEEDS.version)
+        end
+        local slot = E.Slot()
+        local g = cv.speed:GetFloat()
+        if E.sel == 0 or not slot or not slot.body or slot.body == "stop" then
+            return "How fast the slot's animation plays (1x = the game's own rate). Its face animation keeps its own "
+                .. "timing."
+        end
+        local own = W.SlotSpeed(slot)
+        return string.format("This animation plays at %s%s. The slot's face animation keeps its own timing (the Faces "
+            .. "page sets it).", W.SpeedText(own), g ~= 1 and string.format(" x %s (every animation) = %s", W.SpeedText(g),
+            W.SpeedText(W.PlayRate(slot, g))) or " the game's rate")
     end
     -- the line under the hold box: what it does for the selected slot
     function E.HoldNote()
@@ -1652,6 +1833,20 @@ function W.BuildPage(panel)
     panel:CheckBox("A quick tap plays the last one again", "gsa1_wheel_tap")
     panel:CheckBox("Show the name of what plays", "gsa1_wheel_toast")
     panel:ControlHelp("Also says why an animation could not play.")
+    -- 0.9.4e: hiding the wheel (for recording) and the play rate of every animation
+    panel:CheckBox("Hide the wheel (for recording)", "gsa1_wheel_hidden")
+    panel:ControlHelp("The wheel works exactly as usual - hold the key, point with the mouse or the right stick, let go, "
+        .. "the face trigger, the centre - but nothing of it is drawn: no ring, no names, no centre text, no fade, no name "
+        .. "of what plays. The rest of G-SA1's HUD stays as it is.")
+    panel:Help("Hide / show the wheel (a key that switches it)")
+    binder(panel, "gsa1_wheel_hide_key")
+    panel:Button("No hide key", "gsa1_wheel_hide_key", "0")
+    panel:ControlHelp("Hiding says nothing on screen (it would be in your recording); showing it again shows one small "
+        .. "note. Keys your character uses, the wheel key and the face trigger are refused. Console: "
+        .. "gsa1_wheel_hide_toggle.")
+    panel:NumSlider("Play rate of every animation (x)", "gsa1_wheel_speed", 0.25, 4, 2)
+    panel:ControlHelp("Multiplies each slot's own play rate (below): 2 = twice as fast, 0.5 = half as fast. Only the body "
+        .. "animations: the face animations keep their own timing.")
 
     -- the wheels
     panel:Help("The wheels")
@@ -1715,6 +1910,15 @@ function W.BuildPage(panel)
         end
     end
     E.holdNote = panel:ControlHelp("")
+    -- 0.9.4e: the slot's play rate
+    E.speedCombo = panel:ComboBox("Play rate:")
+    if E.speedCombo then
+        E.speedCombo.OnSelect = function(_, _, _, data)
+            if E.syncing then return end
+            E.SetSpeed(tonumber(data))
+        end
+    end
+    E.speedNote = panel:ControlHelp("")
     E.faceCombo = panel:ComboBox("Face with it:")
     if E.faceCombo then
         E.faceCombo.OnSelect = function(_, _, _, data)

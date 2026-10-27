@@ -62,6 +62,43 @@
 //   gsa1.VISEME = { SIL = 0, MBP = 1, AA = 2, EH = 3, EE = 4, OH = 5, OO = 6, SS = 7, FV = 8, COUNT = 9,
 //       NAMES = {[0] = "SIL", ...}, WORDS = {[0] = "silence", "m b p", "ah", "eh", "ee", "oh", "oo", "s z sh", "f v th"} }
 // The microphone closes with the module (the close hook), frees only what it initialised and forgets the speaker number.
+// Round 0.9.4e (feature "faces" 3; sadc docs/research/lipsync2_plan.md 5.5 with its review R.3 / R.5 / R.8, and
+// lipsync2_show.md 8.1): the mouth table v2 (src/core/mouth.hpp, table_version 2), the player's own mouths, the microphone by
+// name and its loopback devices, the second classifier ("Sound detection"), the vowel warm-up and the numbers log's
+// features. New and changed functions (unchanged ones keep their exact behaviour):
+//   gsa1.VisemeOverride(kind, spec) -> true | nil, message, code   not per frame: the player's mouths for a face kind
+//       (mouth::set_override: the grammar of mouth.hpp, all or nothing - a bad item -> nil, "<item>: <why>", "bad_argument"
+//       and the previous override stays; "" or nil = G-SA1's table). kind 0..8; a kind without a face (Eggman, Tikal,
+//       E-102, Super Sonic) -> nil, "<name> has no face in the game", "unsupported"; a spec that is not a string, has a zero
+//       byte or more than 512 characters -> "bad_argument". The overrides end with the module (the close hook): the addon
+//       sets every face kind's spec again when the module opens (review R.8)
+//   gsa1.VisemeTable(kind)   0.9.4e adds: table_version (2), custom_spec (the override in normal form, "" for none), each
+//       row's custom (boolean) and, when custom, default = { a, b, w, how, expression, quiet, loud, plain } (G-SA1's row),
+//       and mouth_at = { forward, up } (Hammer units from the character's drawn position in its own frame: the close-up's
+//       camera target, tests/feat_mouth_test.cpp M9). The rows are the table in use (the player's when an override is set).
+//       The f v th row's w is now its ladder cap (fv_level; 0.9.4c reported 0)
+//   gsa1.VisemeMouth(...)    unchanged signature; it uses the player's override of the kind
+//   gsa1.MicDevices()        each entry gains loopback (boolean: BASS flag 8, a speaker output - "what the PC plays")
+//   gsa1.MicOpen(device [, force]) -> true | nil, message, code   mic::open2: a loopback device -> nil, "that device records
+//       what your PC plays (a speaker output), not a microphone", "unsupported" (nothing opened, what was open stays open);
+//       force (boolean): re-open the device that is open (a stalled stream), the classifier keeping the voice
+//   gsa1.MicLevel() -> level, peak, state, blocks   per frame: blocks = the RECORDPROC's blocks since open (a number < 2^31;
+//       frozen = the stream stalled)
+//   gsa1.MicVisemeTune("engine", 1 | 2)   "Sound detection": 1 = 0.9.4c's classifier, 2 = 0.9.4e's (the default); at the
+//       next block. The other names as 0.9.4c
+//   gsa1.MicVisemeWarmup(step) -> true | nil, message, code   "Teach it my vowels": step "ah" "ee" "oo" "oh" "gap" "done"
+//       "cancel" (lipsync2_plan.md 4.4), applied at the RECORDPROC's next block; refused with nil, "needs 'Sound detection'
+//       0.9.4e" / "needs 'Learn my voice'" / "the microphone is not open", "unsupported"; another word -> "bad_argument"
+//   gsa1.MicVisemeWarmupState() -> phase, n_ah, n_ee, n_oo, n_oh, result   per frame: phase -1 none, 0-3 a vowel, 4 a gap;
+//       the frames heard per vowel (0..255); result 0 none, 1 learned, 2 too short, 3 stopped, 4 unclear (review R.5)
+//   gsa1.MicVisemeVoice() -> g, frames, f1, f2, warmed   per frame allowed: 0.9.4c's two, then F1 / F2 (Hz) of the learned
+//       means (0 with engine 1) and warmed (1 after a successful warm-up until forgotten). SESSION MEMORY ONLY: never saved,
+//       logged or sent (owner, phoneme_plan.md 10.1 PQ7)
+//   gsa1.MicVisemeFeatures() -> rel_loc, per, nbr, eep, cat, raw, seq, lowr, zcr   per frame, for the opt-in numbers log only
+//       (review R.3): the newest frame's level against the local peak (dB, <= 0), periodicity, the share under 3.4 kHz, the
+//       EE posterior, the vowel category (-1 none), the classifier's raw class (-1 none), the seq of MicViseme's frame they
+//       belong to (use them only when it equals MicViseme's seq), the low-band share and the zero-crossing rate
+//   gsa1.FEATURES.faces = 3
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -484,7 +521,7 @@ GSA1_FN(gsa1_faces_MicVisemeTune)
 {
     std::string name;
     if (!arg_string(LUA, 1, name, 32)) {
-        return push_nil_msg(LUA, "MicVisemeTune(\"gate_min_db\" | \"adapt\" | \"smooth\" | \"reset_voice\", value)",
+        return push_nil_msg(LUA, "MicVisemeTune(\"gate_min_db\" | \"adapt\" | \"smooth\" | \"engine\" | \"reset_voice\", value)",
                             "bad_argument");
     }
     double v = 0.0;
@@ -503,15 +540,77 @@ GSA1_FN(gsa1_faces_MicVisemeTune)
     return 1;
 }
 
-// gsa1.MicVisemeVoice() -> g, frames
+// gsa1.MicVisemeVoice() -> g, frames, f1, f2, warmed (0.9.4e: the last three; session memory only)
 GSA1_FN(gsa1_faces_MicVisemeVoice)
 {
-    float g = 0.0f;
+    float g = 0.0f, f1 = 0.0f, f2 = 0.0f;
     uint32_t frames = 0;
-    gsa1::mic::viseme_voice(g, frames);
+    bool warmed = false;
+    gsa1::mic::viseme_voice2(g, frames, f1, f2, warmed);
     LUA->PushNumber(g);
     LUA->PushNumber(frames);
-    return 2;
+    LUA->PushNumber(f1);
+    LUA->PushNumber(f2);
+    LUA->PushNumber(warmed ? 1 : 0);
+    return 5;
+}
+
+// 0.9.4e: gsa1.MicVisemeWarmup(step) -> true | nil, message, code
+GSA1_FN(gsa1_faces_MicVisemeWarmup)
+{
+    static const char *const words[7] = {"ah", "ee", "oo", "oh", "gap", "done", "cancel"};   // = mic::WARM_AH .. WARM_CANCEL
+    static_assert(gsa1::mic::WARM_AH == 0 && gsa1::mic::WARM_EE == 1 && gsa1::mic::WARM_OO == 2 && gsa1::mic::WARM_OH == 3 &&
+                      gsa1::mic::WARM_GAP == 4 && gsa1::mic::WARM_DONE == 5 && gsa1::mic::WARM_CANCEL == 6,
+                  "the step words follow mic.hpp's WARM_* order");
+    std::string w;
+    int step = -1;
+    if (arg_string(LUA, 1, w, 16)) {
+        for (int i = 0; i < 7; i++) {
+            if (w == words[i]) {
+                step = i;
+            }
+        }
+    }
+    if (step < 0) {
+        return push_nil_msg(LUA, "MicVisemeWarmup(\"ah\" | \"ee\" | \"oo\" | \"oh\" | \"gap\" | \"done\" | \"cancel\")",
+                            "bad_argument");
+    }
+    std::string err;
+    if (!gsa1::mic::viseme_warm(step, err)) {
+        return push_nil_msg(LUA, err, err.compare(0, 20, "MicVisemeWarmup: no ") == 0 ? "bad_argument" : "unsupported");
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+
+// 0.9.4e: gsa1.MicVisemeWarmupState() -> phase, n_ah, n_ee, n_oo, n_oh, result
+GSA1_FN(gsa1_faces_MicVisemeWarmupState)
+{
+    gsa1::mic::WarmState ws;
+    gsa1::mic::viseme_warm_state(ws);
+    LUA->PushNumber(ws.phase);
+    for (int i = 0; i < 4; i++) {
+        LUA->PushNumber(ws.n[i]);
+    }
+    LUA->PushNumber(ws.result);
+    return 6;
+}
+
+// 0.9.4e: gsa1.MicVisemeFeatures() -> rel_loc, per, nbr, eep, cat, raw, seq, lowr, zcr (review R.3)
+GSA1_FN(gsa1_faces_MicVisemeFeatures)
+{
+    gsa1::mic::VisemeFeatures f;
+    gsa1::mic::viseme_features(f);
+    LUA->PushNumber(f.rel_loc);
+    LUA->PushNumber(f.per);
+    LUA->PushNumber(f.nbr);
+    LUA->PushNumber(f.eep);
+    LUA->PushNumber(f.cat);
+    LUA->PushNumber(f.raw);
+    LUA->PushNumber(f.seq);
+    LUA->PushNumber(f.lowr);
+    LUA->PushNumber(f.zcr);
+    return 9;
 }
 
 // gsa1.VisemeMouth(kind, cls, s, size, variant, big) -> a, b, w
@@ -564,7 +663,8 @@ GSA1_FN(gsa1_faces_VisemeTable)
         return push_nil_msg(LUA, "VisemeTable(kind 0..8)", "bad_argument");
     }
     const gsa1::mouth::Table *tb = gsa1::mouth::table(kind);
-    if (!tb) {
+    const gsa1::mouth::Table *def = gsa1::mouth::default_table(kind);
+    if (!tb || !def) {
         return push_nil_msg(LUA, "this character has no face in the game", "unsupported");
     }
     LUA->CreateTable();
@@ -574,6 +674,18 @@ GSA1_FN(gsa1_faces_VisemeTable)
     raw_num(LUA, t, "floor", tb->floor);
     raw_num(LUA, t, "ladder_cap", tb->ladder_cap);
     raw_num(LUA, t, "fv_level", tb->fv_level);
+    // 0.9.4e: the table's version, the player's override and the mouth point
+    raw_num(LUA, t, "table_version", gsa1::mouth::kTableVersion);
+    raw_str(LUA, t, "custom_spec", gsa1::mouth::spec_of(kind));
+    gsa1::mouth::Anchor an;
+    if (gsa1::mouth::mouth_anchor(kind, an)) {
+        LUA->PushString("mouth_at");
+        LUA->CreateTable();
+        int m = LUA->Top();
+        raw_num(LUA, m, "forward", an.forward);
+        raw_num(LUA, m, "up", an.up);
+        LUA->RawSet(t);
+    }
     for (int c = 0; c < gsa1::viseme::COUNT; c++) {
         const gsa1::mouth::Row &r = tb->rows[c];
         LUA->PushNumber(c);
@@ -583,8 +695,56 @@ GSA1_FN(gsa1_faces_VisemeTable)
         entry_sub(LUA, e, "quiet", r.quiet);
         entry_sub(LUA, e, "loud", r.loud);
         entry_sub(LUA, e, "plain", r.plain);
+        bool custom = gsa1::mouth::row_custom(kind, c);
+        raw_bool(LUA, e, "custom", custom);
+        if (custom) {
+            const gsa1::mouth::Row &d = def->rows[c];
+            LUA->PushString("default");
+            LUA->CreateTable();
+            int de = LUA->Top();
+            entry_fields(LUA, de, d.normal);
+            entry_sub(LUA, de, "quiet", d.quiet);
+            entry_sub(LUA, de, "loud", d.loud);
+            entry_sub(LUA, de, "plain", d.plain);
+            LUA->RawSet(e);
+        }
         LUA->RawSet(t);
     }
+    return 1;
+}
+
+// 0.9.4e: gsa1.VisemeOverride(kind, spec) -> true | nil, message, code
+GSA1_FN(gsa1_faces_VisemeOverride)
+{
+    int32_t kind = 0;
+    if (!arg_int(LUA, 1, kind, 0, SA1_CHAR_COUNT - 1)) {
+        return push_nil_msg(LUA, "VisemeOverride(kind 0..8, spec)", "bad_argument");
+    }
+    std::string spec;
+    int ty = LUA->GetType(2);
+    if (ty != LT::Nil && ty != LT::None) {
+        if (ty != LT::String) {
+            return push_nil_msg(LUA, "VisemeOverride(kind, spec): the spec is a string like \"AA=7>16@0.45,EE=4\" (\"\" = G-SA1's "
+                                "mouths)", "bad_argument");
+        }
+        unsigned int len = 0;
+        const char *s = LUA->GetString(2, &len);
+        if (!s || len > (unsigned int)gsa1::mouth::kSpecMaxChars) {
+            return push_nil_msg(LUA, "VisemeOverride: too long (24 items / 512 characters)", "bad_argument");
+        }
+        spec.assign(s, len);
+        if (spec.find('\0') != std::string::npos) {
+            return push_nil_msg(LUA, "VisemeOverride: the spec contains a zero byte", "bad_argument");
+        }
+    }
+    if (!gsa1::mouth::has_face(kind)) {
+        return push_nil_msg(LUA, std::string(gsa1::mouth::kind_name(kind)) + " has no face in the game", "unsupported");
+    }
+    std::string err;
+    if (!gsa1::mouth::set_override(kind, spec.c_str(), err)) {
+        return push_nil_msg(LUA, err, "bad_argument");
+    }
+    LUA->PushBool(true);
     return 1;
 }
 
@@ -608,7 +768,7 @@ GSA1_FN(gsa1_faces_FaceState)
     return 7;
 }
 
-// gsa1.MicDevices() -> { {index, name, default, enabled}, ... } | nil, message
+// gsa1.MicDevices() -> { {index, name, default, enabled, loopback}, ... } | nil, message
 GSA1_FN(gsa1_faces_MicDevices)
 {
     std::vector<gsa1::mic::Device> devs;
@@ -624,21 +784,27 @@ GSA1_FN(gsa1_faces_MicDevices)
         raw_str(LUA, e, "name", devs[i].name);
         raw_bool(LUA, e, "default", devs[i].is_default);
         raw_bool(LUA, e, "enabled", devs[i].enabled);
+        raw_bool(LUA, e, "loopback", devs[i].loopback);     // 0.9.4e
         LUA->Pop();
     }
     return 1;
 }
 
-// gsa1.MicOpen(device) -> true | nil, message, code
+// gsa1.MicOpen(device [, force]) -> true | nil, message, code (0.9.4e: mic::open2 - the loopback refusal, force)
 GSA1_FN(gsa1_faces_MicOpen)
 {
     int32_t device = -1;
+    bool force = false;
     int t = LUA->GetType(1);
-    if (t != LT::Nil && t != LT::None && !arg_int(LUA, 1, device, -1, 63)) {
-        return push_nil_msg(LUA, "MicOpen(device -1 (Windows' default) .. 63)", "bad_argument");
+    if ((t != LT::Nil && t != LT::None && !arg_int(LUA, 1, device, -1, 63)) || !arg_bool(LUA, 2, force)) {
+        return push_nil_msg(LUA, "MicOpen(device -1 (Windows' default) .. 63 [, force true / false])", "bad_argument");
     }
     std::string err;
-    if (!gsa1::mic::open(device, err)) {
+    int r = gsa1::mic::open2(device, force, err);
+    if (r == gsa1::mic::OPEN_LOOPBACK) {
+        return push_nil_msg(LUA, err, "unsupported");
+    }
+    if (r != gsa1::mic::OPEN_OK) {
         return push_nil_msg(LUA, err, "error");
     }
     LUA->PushBool(true);
@@ -668,7 +834,7 @@ GSA1_FN(gsa1_faces_MicClose)
     return 1;
 }
 
-// gsa1.MicLevel() -> level, peak, state
+// gsa1.MicLevel() -> level, peak, state, blocks (0.9.4e: blocks since open, < 2^31)
 GSA1_FN(gsa1_faces_MicLevel)
 {
     float lv = 0.0f, pk = 0.0f;
@@ -677,7 +843,8 @@ GSA1_FN(gsa1_faces_MicLevel)
     LUA->PushNumber(lv);
     LUA->PushNumber(pk);
     LUA->PushString(state.c_str(), (unsigned int)state.size());
-    return 3;
+    LUA->PushNumber((double)(gsa1::mic::blocks() & 0x7FFFFFFFull));
+    return 4;
 }
 
 namespace {
@@ -736,6 +903,11 @@ void faces_close(ILuaBase *L)
 {
     (void)L;
     gsa1::mic::close();
+    // 0.9.4e: the player's mouths end with the module's Lua state (the addon sets them again when the module opens)
+    std::string err;
+    for (int k : {0, 2, 3, 5, 7}) {
+        gsa1::mouth::set_override(k, "", err);
+    }
 }
 
 const gsa1::FeatureFn k_faces_fns[] = {
@@ -748,13 +920,18 @@ const gsa1::FeatureFn k_faces_fns[] = {
     {"MicVisemeTune", gsa1_faces_MicVisemeTune}, {"MicVisemeVoice", gsa1_faces_MicVisemeVoice},
     {"VisemeMouth", gsa1_faces_VisemeMouth}, {"VisemeTable", gsa1_faces_VisemeTable},
     {"FaceMouth", gsa1_faces_FaceMouth},
+    // 0.9.4e (version 3)
+    {"VisemeOverride", gsa1_faces_VisemeOverride}, {"MicVisemeWarmup", gsa1_faces_MicVisemeWarmup},
+    {"MicVisemeWarmupState", gsa1_faces_MicVisemeWarmupState}, {"MicVisemeFeatures", gsa1_faces_MicVisemeFeatures},
 };
 
 }  // namespace
 
 // version 1 (0.9.4a): the functions up to MicLevel; version 2 (0.9.4c, phoneme lip sync): MicViseme, MicVisemeOn,
 // MicVisemeTune, MicVisemeVoice, VisemeMouth, VisemeTable, FaceMouth, FaceLevel's flags, gsa1.VISEME, gsa1.FACE.MOUTH /
-// SAME_PAIR
-GSA1_FEATURE(faces, 2, k_faces_fns, faces_open, faces_close, gsa1::kCloseDefault);
+// SAME_PAIR; version 3 (0.9.4e, lipsync2_plan.md 5.5): VisemeOverride, VisemeTable's table_version / custom_spec / custom /
+// default / mouth_at, the mouth table v2, MicDevices' loopback, MicOpen's force, MicLevel's blocks, MicVisemeTune "engine",
+// MicVisemeWarmup, MicVisemeWarmupState, MicVisemeVoice's f1 / f2 / warmed, MicVisemeFeatures
+GSA1_FEATURE(faces, 3, k_faces_fns, faces_open, faces_close, gsa1::kCloseDefault);
 
 #endif  // SA1_API_FACE
