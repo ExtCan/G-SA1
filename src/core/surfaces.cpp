@@ -625,6 +625,11 @@ static const KindInfo kKinds[kKindCount] = {
     {kKindNoLand, "noland", SA1_SURFACE_NO_LAND},
     {kKindWallSlide, "wallslide", SA1_SURFACE_WALL_SLIDE},
     {kKindFootprints, "footprints", SA1_SURFACE_FOOTPRINTS},
+#if defined(SA1_SURFACE_BOARD_SNOW)
+    // round 0.9.5: the board-time kinds (COL 0x8 / 0x10 only while riding a board)
+    {kKindBoardSnow, "boardsnow", SA1_SURFACE_BOARD_SNOW},
+    {kKindBoardSand, "boardsand", SA1_SURFACE_BOARD_SAND},
+#endif
 };
 
 const KindInfo *kind_table()
@@ -643,6 +648,13 @@ bool parse_kinds(const std::string &s, uint32_t &out)
     out = 0;
     std::string w;
     std::string t = lower(s) + ",";
+    // 0.9.5: "board snow" / "board sand" (and with _ or -) are one word each
+    for (const char *sep : {"board snow", "board_snow", "board-snow", "board sand", "board_sand", "board-sand"}) {
+        const std::string from(sep), to = std::string("board") + (from.find("snow") != std::string::npos ? "snow" : "sand");
+        for (size_t at = t.find(from); at != std::string::npos; at = t.find(from, at)) {
+            t.replace(at, from.size(), to);
+        }
+    }
     for (char c : t) {
         if (c == ',' || c == ' ' || c == '+' || c == '|') {
             if (w.empty()) {
@@ -722,6 +734,14 @@ SurfaceTable SurfaceTable::defaults()
     for (char c : {'D', 'N', 'U', 'J'}) {
         t.letters[c] = kKindDig;
     }
+#if defined(SA1_SURFACE_BOARD_SNOW)
+    // round 0.9.5 (gsa1_095_plan.md 4.5; the owner's 14.1ad 2): GMod's snow and sand are Ice Cap's snow / Sand Hill's sand
+    // under a board (only while riding: walking on them is unchanged)
+    t.names["snow"] = kKindDig | kKindBoardSnow;
+    t.names["sand"] = kKindDig | kKindBoardSand;
+    t.letters['J'] = kKindDig | kKindBoardSnow;
+    t.letters['N'] = kKindDig | kKindBoardSand;
+#endif
     return t;
 }
 
@@ -901,14 +921,16 @@ namespace {
 
 uint32_t count_words(const std::vector<sa1_collision_tri> &tris)
 {
-    std::vector<uint32_t> cols;
+    // a word is (COL word, board bits) since 0.9.5: libsa1 makes one group per pair (gsa1_095_plan.md 5.3, Review R.1)
+    std::vector<uint64_t> cols;
     for (const sa1_collision_tri &t : tris) {
         uint32_t c = surface_col(t.surface);
         if (!(c & 0x400003u)) {
             continue;   // not collidable (libsa1's SA1CA_COL_COLLIDABLE)
         }
-        if (std::find(cols.begin(), cols.end(), c) == cols.end()) {
-            cols.push_back(c);
+        uint64_t key = (uint64_t)c | ((uint64_t)(t.surface & kBoardSurfaceBits) << 32);
+        if (std::find(cols.begin(), cols.end(), key) == cols.end()) {
+            cols.push_back(key);
         }
     }
     return (uint32_t)cols.size();

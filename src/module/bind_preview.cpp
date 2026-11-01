@@ -43,6 +43,14 @@
 //   gsa1.PreviewStats([out]) -> out {copies, adds, removes, clears, renders, skipped, ticks, faults, forgets, tick_ms,
 //       tick_ms_max, last_error}
 //   gsa1.PREVIEW = {ROT_NONE, ROT_OUTER, ROT_INNER, MAX, IDLE_PAIRS}
+// Version 2 (round 0.9.5: sadc docs/research/gsa1_095_plan.md 4.4 d, 4.9, 5.4, 6.3 task 3; libsa1's SA1_PREVIEW_BOARD): the
+// board model alone - the lying board of a Board On box, the left-behind boards and, later, rendered icons:
+//   gsa1.PREVIEW.BOARD (0x100, not a SET type); gsa1.PreviewTypes lists it at [0x100] (rotation ROT_OUTER, settle 0);
+//   gsa1.PreviewAdd({kind = 0 | 2, type = gsa1.PREVIEW.BOARD, params = {variant, 0, 0}, state = 1}) -> id: Sonic's board
+//       (variant 0 MIW_B001 / 1 SB_BOARD1: gsa1.BoardState's variant) or Tails' (kind 2, MTX_BOARD0), its draws carry
+//       SA1_DRAW_BOARD (0x4000); object space with origin = a kept board's model position and axes = its rotation, so a copy
+//       drawn at gsa1.BoardState's pose (x, y, z; pitch, yaw, roll) is that board. Other kinds -> "unsupported" (libsa1)
+//   PreviewRender / PreviewBatches / PreviewEmitBatch / PreviewInfo as for the SET types
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -115,6 +123,17 @@ bool field_array(ILuaBase *L, int t, const char *k, int n, float *out, bool &pre
     return ok;
 }
 
+// version 2 (0.9.5): the board model's preview type (SA1_PREVIEW_BOARD) is taken besides the SET types 1..64
+bool is_board_type(double v)
+{
+#if defined(SA1_PREVIEW_BOARD)
+    return v == (double)SA1_PREVIEW_BOARD;
+#else
+    (void)v;
+    return false;
+#endif
+}
+
 pv::Copy *copy_arg(ILuaBase *L, int i)
 {
     int32_t id = 0;
@@ -135,12 +154,12 @@ GSA1_FN(gsa1_preview_PreviewTypes)
         return not_ready(LUA);
     }
     int t = out_table(LUA, 1);
-    for (uint32_t type = 1; type <= 64u; type++) {
+    auto put = [&](uint32_t type) {
         sa1_preview_type pt;
         std::memset(&pt, 0, sizeof pt);
         pt.struct_size = sizeof pt;
         if (sa1_preview_type_get(ctx, type, &pt) != SA1_OK) {
-            break;
+            return false;
         }
         int e = raw_subtable_i(LUA, t, (int)type);
         raw_num(LUA, e, "type", pt.type);
@@ -148,7 +167,16 @@ GSA1_FN(gsa1_preview_PreviewTypes)
         raw_num(LUA, e, "rotation", pt.rotation);
         raw_num(LUA, e, "settle", pt.settle_steps);
         LUA->Pop();
+        return true;
+    };
+    for (uint32_t type = 1; type <= 64u; type++) {
+        if (!put(type)) {
+            break;
+        }
     }
+#if defined(SA1_PREVIEW_BOARD)
+    put(SA1_PREVIEW_BOARD);   // version 2: the board model (not a SET type)
+#endif
     return 1;
 }
 
@@ -156,8 +184,8 @@ GSA1_FN(gsa1_preview_PreviewTypes)
 GSA1_FN(gsa1_preview_PreviewAdd)
 {
     static const char *usage =
-        "PreviewAdd({kind = 0..8, type = 1..4, params = {p1, p2, p3}, rotation = {9 numbers} | nil, state = 1..3, "
-        "user_bits = 0..255})";
+        "PreviewAdd({kind = 0..8, type = 1..4 (or gsa1.PREVIEW.BOARD with kind 0 | 2), params = {p1, p2, p3}, rotation = "
+        "{9 numbers} | nil, state = 1..3, user_bits = 0..255})";
     if (!LUA->IsType(1, LT::Table)) {
         return push_nil_msg(LUA, usage, "bad_argument");
     }
@@ -168,7 +196,7 @@ GSA1_FN(gsa1_preview_PreviewAdd)
         return push_nil_msg(LUA, usage, "bad_argument");
     }
     d.kind = (int32_t)v;
-    if (!raw_get_number(LUA, t, "type", v) || v < 1.0 || v > 64.0 || std::floor(v) != v) {
+    if (!raw_get_number(LUA, t, "type", v) || std::floor(v) != v || !((v >= 1.0 && v <= 64.0) || is_board_type(v))) {
         return push_nil_msg(LUA, usage, "bad_argument");
     }
     d.type = (uint32_t)v;
@@ -475,6 +503,9 @@ void preview_open(ILuaBase *L, int t)
     raw_num(L, c, "ROT_INNER", SA1_PREVIEW_ROT_INNER);
     raw_num(L, c, "MAX", SA1_PREVIEW_MAX);
     raw_num(L, c, "IDLE_PAIRS", SA1_PREVIEW_IDLE_PAIRS);
+#if defined(SA1_PREVIEW_BOARD)
+    raw_num(L, c, "BOARD", SA1_PREVIEW_BOARD);   // version 2 (0.9.5): the board model
+#endif
     L->RawSet(t);
 }
 
@@ -506,7 +537,12 @@ const gsa1::FeatureFn k_preview_fns[] = {
 
 }  // namespace
 
+// version 1 (0.9.4b): the SET types; version 2 (0.9.5, with libsa1's SA1_PREVIEW_BOARD): the board model (gsa1.PREVIEW.BOARD)
+#if defined(SA1_PREVIEW_BOARD)
+GSA1_FEATURE(preview, 2, k_preview_fns, preview_open, preview_close, gsa1::kCloseDefault);
+#else
 GSA1_FEATURE(preview, 1, k_preview_fns, preview_open, preview_close, gsa1::kCloseDefault);
+#endif
 GSA1_FEATURE_ON_SHUTDOWN(preview, preview_shutdown);
 
 #endif  // GSA1_HAS_PREVIEW (a libsa1 without previews: no feature "preview"; the addon keeps its outlines)

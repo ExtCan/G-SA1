@@ -1711,6 +1711,70 @@ else
 end
 
 end
+-- 0.9.5 (gsa1_095_plan.md 6.4 tasks 5 and 7): the open wheel's actions (W.OPEN_ACTIONS: feat/cl_board.lua's board key), their
+-- hint, and the board's two rows on the page
+do
+    if not GSA1.Char then spawn("sonic") end
+    if W.open then release() end
+    local acted, mode = 0, "close"
+    W.OPEN_ACTIONS = W.OPEN_ACTIONS or {}
+    W.OPEN_ACTIONS[#W.OPEN_ACTIONS + 1] = { name = "test", down = function(c) return keys[12] == true end,
+        act = function(c)
+            acted = acted + 1
+            if mode == "close" then W.Close(nil, true) end
+        end,
+        hint = function(c) return "B: test" end }
+    open()
+    local hint = W.HintLine()
+    keys[12] = true
+    frames(1)
+    local closed, guard = not W.open, (W.guardTicks or 0) > 0
+    keys[12] = nil
+    release()
+    -- held while opening: no press; an action that does not close leaves the wheel open
+    keys[12] = true
+    open()
+    frames(2)
+    local held_ok = acted == 1 and W.open
+    keys[12] = nil
+    frames(1)
+    mode = "stay"
+    keys[12] = true
+    frames(1)
+    local stayed = acted == 2 and W.open
+    keys[12] = nil
+    release()
+    table.remove(W.OPEN_ACTIONS)
+    check(acted == 2 and closed and guard and held_ok and stayed and string.find(hint, "B: test", 1, true) ~= nil,
+        "(0.9.5) an open-wheel action (W.OPEN_ACTIONS) fires on its key's edge right after the cancel: it closed the wheel "
+        .. "(the press held back); a key held while opening is no press; an action that does not close leaves it open; "
+        .. "its hint is in the hint line")
+    -- the board's two rows (shown with the board's settings: feat/sh_board.lua makes them)
+    local before = false
+    build_page()
+    for _, P in ipairs(made) do if P.convar == "gsa1_board_key" then before = true end end
+    CreateClientConVar("gsa1_board_key", "12", true, false)
+    CreateClientConVar("gsa1_board_pad", "128", true, false)
+    build_page()
+    local bk, bp = false, false
+    for _, P in ipairs(made) do
+        if P.convar == "gsa1_board_key" then bk = true end
+        if P.kind == "ComboBox" and P.OnSelect then
+            local v0 = M.convars.gsa1_board_pad.v
+            pcall(P.OnSelect, P, 1, "x", "64")
+            if M.convars.gsa1_board_pad.v == "64" then bp = true end
+            M.convars.gsa1_board_pad.v = v0
+        end
+    end
+    local note = false
+    for _, P in ipairs(made) do
+        for _, c in ipairs(P.calls) do
+            if c[1] == "ControlHelp" and string.find(tostring(c[2]), "to ride one: Board page", 1, true) then note = true end
+        end
+    end
+    check(not before and bk and bp and note, "(0.9.5) with the board's settings the page has the board key binder and the "
+        .. "board button combo; the board rows' note points to the Board page")
+end
 GSA1.LogFlush()
 local errs = {}
 for _, e in ipairs(M.reported) do errs[#errs + 1] = e end

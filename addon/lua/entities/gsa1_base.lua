@@ -114,7 +114,7 @@ end
 
 -- the picture of the real object, the outline while editing and the hover outline (feat/cl_objects.lua O.DrawEntity);
 -- flags: the STUDIO flags (the depth views draw the opaque batches only: cl_render.lua GSA1.ViewKind)
-function ENT:Draw(flags)
+local function draw(self, flags)
     local O = GSA1 and GSA1.Objects
     if O and O.DrawEntity then
         O.DrawEntity(self, 0, flags)
@@ -122,8 +122,25 @@ function ENT:Draw(flags)
         O.DrawMarker(self)
     end
 end
-
-function ENT:DrawTranslucent(flags)
+local function draw_translucent(self, flags)
     local O = GSA1 and GSA1.Objects
     if O and O.DrawEntity then O.DrawEntity(self, 1, flags) end
+end
+-- 0.9.5 (sadc docs/research/board095_perf.md P2): the garbage meter's slot "Draw / objects" (entity draws are not hooks;
+-- cl_gcmeter.lua, looked up at the draw: the entity files may load before or after it)
+local gm_slot = nil
+local function measured(fn, self, flags)
+    local GM = GSA1 and GSA1.GcMeter
+    if not (GM and GM.on and GM.Slot) then return fn(self, flags) end
+    gm_slot = gm_slot or GM.Slot("Draw", "objects")
+    local k0, outer = GM.Enter()
+    fn(self, flags)
+    GM.Add(gm_slot, k0, outer)
+end
+function ENT:Draw(flags)
+    measured(draw, self, flags)
+end
+
+function ENT:DrawTranslucent(flags)
+    measured(draw_translucent, self, flags)
 end

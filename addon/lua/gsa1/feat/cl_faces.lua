@@ -68,8 +68,13 @@ local cv = {
         .. "keep the mouth open, 'ee' only for a real 'ee', 's' told from 'f'), 1 = as in 0.9.4c", 1, 2),
     custom = GSA1.ConVar("gsa1_lipsync_shapes_custom", 1, "Use my mouths (Faces page > Mouth shape tester); 0 = G-SA1's "
         .. "mouths for everyone (your choices stay saved in garrysmod/data/gsa1/mouth_shapes.txt)", 0, 1),
-    closeup = GSA1.ConVar("gsa1_mouth_closeup", 1, "A small live picture of your character's face on the Faces page's "
-        .. "mouth shape tester while the page is open", 0, 1),
+    -- 0.9.5 (sadc docs/research/board095_perf.md P1): 0..2 (an old saved 1 = the character alone, the new default) and
+    -- the pictures per second
+    closeup = GSA1.ConVar("gsa1_mouth_closeup", 1, "The close-up of your character's face on the Faces page's mouth "
+        .. "shape tester: 0 = off, 1 = the character alone (fast), 2 = with the world behind it (draws the world again: "
+        .. "slower)", 0, 2),
+    closeup_fps = GSA1.ConVar("gsa1_mouth_closeup_fps", 30, "Close-up pictures per second while you use the mouth shape "
+        .. "tester (5 a second otherwise)", 5, 60),
     msummary = GSA1.ConVar("gsa1_mouth_summary", "", "Read-only: your own mouths, for the session log (the mouths themselves "
         .. "are garrysmod/data/gsa1/mouth_shapes.txt)"),
     style = GSA1.ConVar("gsa1_lipsync_style", 2, "The mouth: 0 = it opens with your voice (like Garry's Mod's mouths), "

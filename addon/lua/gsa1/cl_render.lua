@@ -73,11 +73,25 @@
 -- drawn by the Objects page's switch (gsa1_set_draw), whatever gsa1_effects says (tested before the effects test, like
 -- the shadow; an object's blob shadow also follows gsa1_shadow), and IN FIRST PERSON TOO: there DrawCharacter draws only
 -- the OBJECT batches (the character's own stay hidden), in the colour pass and the depth views alike.
+--
+-- 0.9.5 (sadc docs/research/gsa1_095_plan.md 4.10, 5.5 with its review R.10; board095_perf.md P1, P2):
+--   * The board (libsa1's SA1_DRAW_BOARD 0x4000: Sonic's and Tails' sand / snow board, its own batches by the module's
+--     batch key) is part of the character: drawn in every view the character is drawn in - colour, the depth views, the
+--     Faces page's close-up, the sun silhouette - whatever gsa1_effects says (its draws carry SA1_DRAW_EFFECT too: the
+--     test comes first), and IN FIRST PERSON TOO (C.boardBatches counted beside C.objectBatches; the Objects page's
+--     gsa1_set_draw never hides it). A board batch that is also SA1_DRAW_SHADOW follows gsa1_shadow. No new option.
+--   * GSA1.DrawCharacterView(C, v): the character ALONE in a view of its own - the Faces page's close-up (perspective,
+--     feat/cl_mouthtest.lua) and the sun silhouette (orthographic, feat/cl_liveshadow.lua) - instead of render.RenderView
+--     of the whole world: both passes of THIS frame's batches through the colour pass's own draw_batches, only in a frame
+--     whose main view prepared the character (C.viewFrame), camera-relative like the main view, counted as its own view
+--     kind ("closeup" / "sunshadow", never "main"), timed as the hitch section "Closeup" (or the caller's).
+--   * The garbage meter (cl_gcmeter.lua): ENT:Draw / DrawTranslucent are its slot "Draw / the character".
 GSA1 = GSA1 or {}
 
 local band = bit.band
 local DRAW_EFFECT, DRAW_SHADOW, DRAW_AFTERIMAGE, WRAP_MASK = 0x40, 0x800, 0x100, 8
 local DRAW_OBJECT = 0x1000
+local DRAW_BOARD = 0x4000        -- 0.9.5: the character's board (libsa1 SA1_DRAW_BOARD)
 local NONE = {}
 local CONTENTS_WATER_ = CONTENTS_WATER or 0x20
 
@@ -254,11 +268,15 @@ local function relative_wanted()
     return true
 end
 
--- the colour pass draws a batch (its pass, triangles and C.hidden aside): a game object by the Objects page's switch
--- (0.9.4: before the shadow and effects tests - it is EFFECT too; its blob shadow also by gsa1_shadow), the shadow by its
--- own switch (before the effects test: it is EFFECT too), effects by gsa1_effects; in first person only the objects. The
--- depth views use the same test (review RC2)
+-- the colour pass draws a batch (its pass, triangles and C.hidden aside): the board always, in first person too (0.9.5:
+-- before the first-person return and the effects test - it is EFFECT too; a board's shadow batch by gsa1_shadow), a game
+-- object by the Objects page's switch (0.9.4: before the shadow and effects tests - it is EFFECT too; its blob shadow also
+-- by gsa1_shadow), the shadow by its own switch (before the effects test: it is EFFECT too), effects by gsa1_effects; in
+-- first person only the board and the objects. The depth views use the same test (review RC2)
 local function batch_on(f, effects, shadows, objects, first_person)
+    if band(f, DRAW_BOARD) ~= 0 then
+        return shadows or band(f, DRAW_SHADOW) == 0
+    end
     if band(f, DRAW_OBJECT) ~= 0 then
         return objects and (shadows or band(f, DRAW_SHADOW) == 0)
     end
@@ -276,26 +294,28 @@ end
 
 -- this draw's view (GSA1.ViewInfo) and the views per frame (the debug line)
 local VI = { frame = -1 }
-local VT = { frame = -1, cur = { main = 0, ssao = 0, shadowdepth = 0, water = 0, late = 0 },
-             last = { main = 0, ssao = 0, shadowdepth = 0, water = 0, late = 0 } }
+local VT = { frame = -1, cur = { main = 0, ssao = 0, shadowdepth = 0, water = 0, late = 0, closeup = 0, sunshadow = 0 },
+             last = { main = 0, ssao = 0, shadowdepth = 0, water = 0, late = 0, closeup = 0, sunshadow = 0 } }
 local function tally(kind)
     local fn = FrameNumber()
     if VT.frame ~= fn then
         VT.frame = fn
         VT.cur, VT.last = VT.last, VT.cur
         local c = VT.cur
-        c.main, c.ssao, c.shadowdepth, c.water, c.late = 0, 0, 0, 0, 0
+        c.main, c.ssao, c.shadowdepth, c.water, c.late, c.closeup, c.sunshadow = 0, 0, 0, 0, 0, 0, 0
     end
     VT.cur[kind] = (VT.cur[kind] or 0) + 1
 end
 local depthRan, lateDone = -1, -1       -- the frame of the last depth pass that drew the character, of the last R1b
 
--- the batches of one pass (inside the relative view when there is one); main: the main view (the pre-warm steps there)
-local function draw_batches(C, pass, first_person, te, main)
+-- the batches of one pass (inside the relative view when there is one); main: the main view (the pre-warm steps there);
+-- 0.9.5 (GSA1.DrawCharacterView): filter(b) -> bool also has to pass; override: one material for every batch drawn (the
+-- sun silhouette's flat white: unlit, a static mesh of this pair and origin is drawn again under it, never rebuilt)
+local function draw_batches(C, pass, first_person, te, main, filter, override)
     local B = C.batches
     local cv = GSA1.cv
     if C.matsDirty then GSA1.ResolveMaterials(C) end
-    local lit = cv.lighting:GetBool()
+    local lit = cv.lighting:GetBool() and not override
     if lit then
         update_lighting(C)
         render.SuppressEngineLighting(true)
@@ -322,12 +342,12 @@ local function draw_batches(C, pass, first_person, te, main)
     local ox, oy, oz = 0, 0, 0
     if O then ox, oy, oz = O.x, O.y, O.z end
     local hidden = C.hidden or NONE
-    -- (0.9.4, review R.1: in first person only the game's objects; 0.9.3a drew nothing there)
-    for i = 1, ((first_person and (C.objectBatches or 0) == 0) and 0 or B.count) do
+    -- (0.9.4, review R.1: in first person only the game's objects; 0.9.3a drew nothing there; 0.9.5: and the board)
+    for i = 1, ((first_person and (C.objectBatches or 0) == 0 and (C.boardBatches or 0) == 0) and 0 or B.count) do
         local b = B[i]
         if b and b.pass == pass and b.tris > 0 and not hidden[i] then
-            if batch_on(b.flags, effects, shadows, objects, first_person) then
-                local mat = C.mats[i]
+            if batch_on(b.flags, effects, shadows, objects, first_person) and (not filter or filter(b)) then
+                local mat = override or C.mats[i]
                 render.SetMaterial(mat)
                 if not VI.mat then VI.mat = mat end
                 local tone = nil
@@ -339,7 +359,18 @@ local function draw_batches(C, pass, first_person, te, main)
                         if tone then render.SetToneMappingScaleLinear(TONE_ONE) end
                     end
                 end
-                if static then
+                if static and override then
+                    -- (an extra view's own material: the pair's static mesh drawn again, else streamed - never cached)
+                    local sm = C.static[i]
+                    if sm and sm.imesh and sm.gen == C.renderGen and sm.tris == b.tris and sm.ox == ox and sm.oy == oy and
+                       sm.oz == oz then
+                        sm.imesh:Draw()
+                    else
+                        mesh.Begin(MATERIAL_TRIANGLES, b.tris)
+                        emit(C, i)
+                        mesh.End()
+                    end
+                elseif static then
                     local sm = C.static[i]
                     if not sm or sm.gen ~= C.renderGen or sm.mat ~= mat or sm.tris ~= b.tris or sm.ox ~= ox or
                        sm.oy ~= oy or sm.oz ~= oz then
@@ -376,7 +407,7 @@ end
 -- depth material, else the batch is streamed (the depth pass comes before the screen, which rebuilds the static meshes of
 -- a new pair)
 local function draw_depth(C, color, first_person, te)
-    if first_person and (C.objectBatches or 0) == 0 then return te end
+    if first_person and (C.objectBatches or 0) == 0 and (C.boardBatches or 0) == 0 then return te end
     local B = C.batches
     if C.matsDirty then GSA1.ResolveMaterials(C) end
     local cv = GSA1.cv
@@ -409,27 +440,72 @@ local function draw_depth(C, color, first_person, te)
     return te
 end
 
+local prepare_frame
+-- the frame's origin of camera-relative drawing: the drawn root (constant within a game pair with gsa1_interpolate 0, so
+-- the static meshes stay valid); decided with the main view's eye (R2b)
+local function rel_origin(C, fn)
+    if C.relFrame ~= fn then
+        C.relFrame = fn
+        C.relOrigin = nil
+        if relative_wanted() then
+            C.relO = C.relO or Vector()
+            C.relO:Set(C.drawPos)
+            C.relOrigin = C.relO
+        end
+    end
+end
+
+-- the frame's view of the character, once per frame: PrepareView with the main view's eye (the sprites face it, the
+-- coverage figure), the draw time's frame (C.viewFrame: GSA1.DrawCharacterView draws only in such a frame)
+function prepare_frame(C, fn)
+    rel_origin(C, fn)
+    local cv = GSA1.cv
+    C.viewFrame = fn
+    C.drawMs, C.drawMsFrame = C.drawMsNext or 0, nil
+    C.drawMsNext = 0
+    -- R2b: the main view's eye, whichever view comes first (the water reflection's is mirrored under the water)
+    local eye, ang = main_eye()
+    local tv = SysTime()
+    -- the screen for the coverage figure: CalcView's field of view (cl_character.lua) of this frame, else the player's
+    -- setting
+    local v = GSA1.view
+    local fov = (v and v.frame and fn - v.frame <= 2 and v.fov) or (cv_fov and cv_fov:GetFloat()) or 75
+    -- (0.9.4d: the axes into the character's own Vectors, not two new ones a frame)
+    C.viewR, C.viewU = C.viewR or Vector(), C.viewU or Vector()
+    GSA1.AngleAxes(ang, nil, C.viewR, C.viewU)
+    gsa1.PrepareView(C.id, eye, C.viewR, C.viewU, cv.flip:GetBool(), cv.vcolor:GetBool(),
+        cv.line_width:GetFloat(), cv.lighting:GetBool(), fov, ScrW(), ScrH(), C.relOrigin)
+    if GSA1.HitchAdd then GSA1.HitchAdd("PrepareView", SysTime() - tv) end
+end
+
 -- pass 0: opaque batches, 1: blended batches (in the game's order); flags: the STUDIO flags of ENT:Draw /
 -- ENT:DrawTranslucent (0.9.2: they say which of Source's views is drawing)
 function GSA1.DrawCharacter(C, pass, flags)
     local B = C and C.batches
     if not B or (B.count or 0) == 0 or not C.drawPos then return end
     local first_person = GSA1.FirstPerson and GSA1.FirstPerson()
-    -- first person: the game's objects only (0.9.4, review R.1), or the pre-warm while it runs (the OBJECT batches
-    -- counted once per batch structure; ResolveMaterials counts them too)
+    -- first person: the game's objects only (0.9.4, review R.1) and the board (0.9.5, review R.10: whatever the Objects
+    -- page says), or the pre-warm while it runs (the OBJECT and BOARD batches counted once per batch structure;
+    -- ResolveMaterials counts them too)
     if first_person and C.objectGen ~= C.batchGen then
-        local n = 0
+        local n, nb = 0, 0
         for i = 1, B.count do
             local b = B[i]
             if b and band(b.flags or 0, DRAW_OBJECT) ~= 0 then n = n + 1 end
+            if b and band(b.flags or 0, DRAW_BOARD) ~= 0 then nb = nb + 1 end
         end
-        C.objectBatches, C.objectGen = n, C.batchGen
+        C.objectBatches, C.boardBatches, C.objectGen = n, nb, C.batchGen
     end
-    local fp_objects = first_person and (C.objectBatches or 0) > 0 and objects_on()
-    if first_person and not fp_objects and not (GSA1.Warm and GSA1.Warm.total and not GSA1.Warm.total.done) then return end
+    local fp_objects = first_person and (((C.objectBatches or 0) > 0 and objects_on()) or (C.boardBatches or 0) > 0)
+    local fn = FrameNumber()
+    if first_person and not fp_objects and not (GSA1.Warm and GSA1.Warm.total and not GSA1.Warm.total.done) then
+        -- 0.9.5: nothing of the character in this view, but an extra view wants this frame's batches (the sun shadow in
+        -- first person, gsa1_sunshadow_fp): the frame's origin and PrepareView only, nothing drawn, no view counted
+        if C.viewWanted and C.viewFrame ~= fn then prepare_frame(C, fn) end
+        return
+    end
     local cv = GSA1.cv
     local t0 = SysTime()
-    local fn = FrameNumber()
     -- the view: depth views (gsa1_depthfix 1 / 2) get the DepthWrite draw; with gsa1_depthfix 0 they are drawn as 0.9.1
     -- drew them (as the main view)
     local kind, rtname, viewid = view_kind(flags)
@@ -440,35 +516,8 @@ function GSA1.DrawCharacter(C, pass, flags)
     if pass == 0 then tally(kind) end
     if depth and kind == "ssao" then depthRan = fn end
     if depth and pass ~= 0 then return end
-    -- the frame's origin of camera-relative drawing: the drawn root (constant within a game pair with
-    -- gsa1_interpolate 0, so the static meshes stay valid); decided with the main view's eye (R2b)
-    if C.relFrame ~= fn then
-        C.relFrame = fn
-        C.relOrigin = nil
-        if relative_wanted() then
-            C.relO = C.relO or Vector()
-            C.relO:Set(C.drawPos)
-            C.relOrigin = C.relO
-        end
-    end
-    if C.viewFrame ~= fn and (not first_person or fp_objects) then
-        C.viewFrame = fn
-        C.drawMs, C.drawMsFrame = C.drawMsNext or 0, nil
-        C.drawMsNext = 0
-        -- R2b: the main view's eye, whichever view comes first (the water reflection's is mirrored under the water)
-        local eye, ang = main_eye()
-        local tv = SysTime()
-        -- the screen for the coverage figure: CalcView's field of view (cl_character.lua) of this frame, else the
-        -- player's setting
-        local v = GSA1.view
-        local fov = (v and v.frame and fn - v.frame <= 2 and v.fov) or (cv_fov and cv_fov:GetFloat()) or 75
-        -- (0.9.4d: the axes into the character's own Vectors, not two new ones a frame)
-        C.viewR, C.viewU = C.viewR or Vector(), C.viewU or Vector()
-        GSA1.AngleAxes(ang, nil, C.viewR, C.viewU)
-        gsa1.PrepareView(C.id, eye, C.viewR, C.viewU, cv.flip:GetBool(), cv.vcolor:GetBool(),
-            cv.line_width:GetFloat(), cv.lighting:GetBool(), fov, ScrW(), ScrH(), C.relOrigin)
-        if GSA1.HitchAdd then GSA1.HitchAdd("PrepareView", SysTime() - tv) end
-    end
+    rel_origin(C, fn)
+    if C.viewFrame ~= fn and (not first_person or fp_objects) then prepare_frame(C, fn) end
     local te = SysTime()
     -- the main view (and 0.9.1's way for depth views with gsa1_depthfix 0): camera-relative under cam.Start3D; every
     -- other view (depth, water): world positions through a model matrix (R2), so Source's view stays as it is
@@ -512,7 +561,7 @@ local function draw_depth_late(C)
     local tex = render.GetResolvedFullFrameDepth and render.GetResolvedFullFrameDepth()
     if not tex then return end
     local first_person = GSA1.FirstPerson and GSA1.FirstPerson() or false
-    if first_person and (C.objectBatches or 0) == 0 then return end
+    if first_person and (C.objectBatches or 0) == 0 and (C.boardBatches or 0) == 0 then return end
     local t0 = SysTime()
     render.PushRenderTarget(tex)
     local O = C.relOrigin
@@ -535,6 +584,50 @@ local function draw_depth_late(C)
     C.drawMsNext = (C.drawMsNext or 0) + (SysTime() - t0) * 1000
 end
 GSA1.DrawCharacterDepthLate = draw_depth_late
+
+-- 0.9.5 (sadc docs/research/board095_perf.md P1; gsa1_095_plan.md 4.17, 5.5): the character ALONE in a view of its own.
+--   v = { eye = Vector, ang = Angle, fov = number (perspective) | ortho = { left, right, top, bottom } (orthographic),
+--         x, y, w, h, znear, zfar, filter = function(b) -> bool | nil, material = IMaterial | nil (one for every batch:
+--         unlit), opaque = true (pass 0 only), kind = "closeup" (default) | "sunshadow", hitch = section name (default
+--         "Closeup"; false: the caller times it) }
+-- Both passes of THIS frame's batches through the colour pass's own draw_batches (batch_on: gsa1_effects, gsa1_shadow,
+-- the Objects page's switch, the board always; the hidden batches; no pre-warm step; never the first-person rule: the
+-- caller decides) under cam.Start3D(eye - origin, ang, fov, x, y, w, h, znear, zfar) - or cam.Start with the ortho box -
+-- into the current render target, camera-relative like the main view (the eye minus this frame's C.relOrigin). Only in a
+-- frame whose main view prepared the character (C.viewFrame == FrameNumber(): its PrepareView and origin; nothing is
+-- prepared or rendered again), else false, why (nothing drawn: the caller keeps its last picture). Counted as its own view
+-- kind (GSA1.ViewsLine), never as "main"; the time goes into the character's draw time.
+local CV_DATA = { type = "3D" }
+function GSA1.DrawCharacterView(C, v)
+    local B = C and C.batches
+    if not B or (B.count or 0) == 0 or not C.drawPos then return false, "no batches" end
+    local fn = FrameNumber()
+    if C.viewFrame ~= fn then return false, "not drawn this frame" end
+    if type(v) ~= "table" or not (v.eye and v.ang) then return false, "no view" end
+    local t0 = SysTime()
+    local O = C.relFrame == fn and C.relOrigin or nil
+    C.cvEye = C.cvEye or Vector()
+    C.cvEye:Set(v.eye)
+    if O then C.cvEye:Sub(O) end
+    tally(v.kind or "closeup")
+    local ortho = v.ortho
+    if ortho and cam.Start then
+        local d = CV_DATA
+        d.origin, d.angles, d.x, d.y, d.w, d.h, d.ortho, d.znear, d.zfar = C.cvEye, v.ang, v.x or 0, v.y or 0, v.w,
+            v.h, ortho, v.znear, v.zfar
+        cam.Start(d)
+    else
+        cam.Start3D(C.cvEye, v.ang, v.fov, v.x or 0, v.y or 0, v.w, v.h, v.znear, v.zfar)
+    end
+    local ok, err = pcall(draw_batches, C, 0, false, 0, false, v.filter, v.material)
+    if ok and not v.opaque then ok, err = pcall(draw_batches, C, 1, false, 0, false, v.filter, v.material) end
+    cam.End3D()
+    local dt = SysTime() - t0
+    if v.hitch ~= false and GSA1.HitchAdd then GSA1.HitchAdd(v.hitch or "Closeup", dt) end
+    C.drawMsNext = (C.drawMsNext or 0) + dt * 1000
+    if not ok then error(err, 0) end
+    return true
+end
 
 -- the depth pass bracket (view_kind): GMod calls PreDrawOpaqueRenderables(isDrawingDepth, isDrawSkybox, isDraw3DSkybox)
 -- before a view's opaque renderables and PostDrawOpaqueRenderables after them; nested views keep their own entry, and
@@ -610,8 +703,11 @@ end
 -- the views that drew the character in the last frame ("main 1, depth pass 1, ..."; the debug line)
 function GSA1.ViewsLine()
     local t = VT.frame == FrameNumber() and VT.cur or VT.last
-    return string.format("main %d, depth pass %d, shadow depth %d, water %d, depth after the opaque pass %d", t.main or 0,
-        t.ssao or 0, t.shadowdepth or 0, t.water or 0, t.late or 0)
+    local cu, ss = t.closeup or 0, t.sunshadow or 0
+    return string.format("main %d, depth pass %d, shadow depth %d, water %d, depth after the opaque pass %d%s%s", t.main or 0,
+        t.ssao or 0, t.shadowdepth or 0, t.water or 0, t.late or 0,
+        cu > 0 and string.format(", the Faces page's close-up %d", cu) or "",
+        ss > 0 and string.format(", sun shadow %d", ss) or "")
 end
 
 -- 0.9.1 (T1, review R3.3): a blended batch that leaves the picture as it is - a lit see-through batch of alpha 0
@@ -628,12 +724,13 @@ function GSA1.ResolveMaterials(C)
     local mats = C.mats or {}
     local hidden = C.hidden or {}
     local n = C.batches.count or 0
-    local shadow, after, nhidden, objects = 0, 0, 0, 0
+    local shadow, after, nhidden, objects, boards = 0, 0, 0, 0, 0
     for i = 1, n do
         local b = C.batches[i]
         mats[i] = GSA1.Tex.Material(C.kind, b)
         if band(b.flags, DRAW_SHADOW) ~= 0 then shadow = shadow + 1 end
         if band(b.flags, DRAW_OBJECT) ~= 0 then objects = objects + 1 end
+        if band(b.flags, DRAW_BOARD) ~= 0 then boards = boards + 1 end
         if band(b.all or b.flags, DRAW_AFTERIMAGE) ~= 0 then after = after + 1 end
         if invisible(b) then
             hidden[i] = true
@@ -651,6 +748,7 @@ function GSA1.ResolveMaterials(C)
     C.shadowBatches, C.afterimageBatches, C.hiddenBatches = shadow, after, nhidden
     C.objectBatches, C.objectGen = objects, C.batchGen   -- 0.9.4: the game's objects (SA1_DRAW_OBJECT), drawn in
                                                          -- first person too
+    C.boardBatches = boards                              -- 0.9.5: the board (SA1_DRAW_BOARD), the same
 end
 
 -- (GSA1.DrawCharacter through the global: cl_log.lua's draw counter wraps it and passes every argument on)
@@ -661,11 +759,26 @@ local draw_blended = GSA1.Guard and GSA1.Guard("DrawTranslucent", function(C, fl
 
 -- flags: the STUDIO flags of this render operation (0.9.2: STUDIO_SSAODEPTHTEXTURE in the depth pass,
 -- STUDIO_SHADOWDEPTHTEXTURE in a lamp's shadow depth)
+-- 0.9.5 (board095_perf.md P2): the garbage meter's slot of the character's draws (entity draws are not hooks)
+local GM = GSA1.GcMeter
+local gm_slot = GM and GM.Slot and GM.Slot("Draw", "the character")
 function ENT:Draw(flags)
+    if gm_slot and GM.on then
+        local k0, outer = GM.Enter()
+        draw_opaque(self.char, flags)
+        GM.Add(gm_slot, k0, outer)
+        return
+    end
     draw_opaque(self.char, flags)
 end
 
 function ENT:DrawTranslucent(flags)
+    if gm_slot and GM.on then
+        local k0, outer = GM.Enter()
+        draw_blended(self.char, flags)
+        GM.Add(gm_slot, k0, outer)
+        return
+    end
     draw_blended(self.char, flags)
 end
 
@@ -675,7 +788,7 @@ scripted_ents.Register(ENT, "gsa1_render")
 local FLAG_NAMES = {
     { 0x1, "BLEND" }, { 0x2, "ATEST" }, { 0x4, "2SIDED" }, { 0x8, "ENV" }, { 0x10, "UNLIT" }, { 0x20, "PAL" },
     { 0x40, "EFFECT" }, { 0x80, "NOTEX" }, { 0x100, "AFTERIMAGE" }, { 0x200, "ADD" }, { 0x400, "USE_ALPHA" },
-    { 0x800, "SHADOW" }, { 0x1000, "OBJECT" },
+    { 0x800, "SHADOW" }, { 0x1000, "OBJECT" }, { 0x4000, "BOARD" },
 }
 local PRIM_NAMES = { [0] = "triangles", [1] = "sprites", [2] = "lines" }
 local SOURCE_NAMES = { [0] = "character", [1] = "model", [2] = "sprite", [3] = "line", [4] = "polygon", [5] = "pose" }

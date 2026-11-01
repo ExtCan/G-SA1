@@ -19,6 +19,10 @@
 -- = the buttons left after the hooks), the mock module's host flags and host camera in Tick (M.ticks: the last tick's
 -- arguments), the start rings in Create (M.creates), the game's water in GetState (M.mchars[id].water_attr /
 -- water_level), the module's 0.9.2 constants (opts.host_flags = false / opts.host_camera = true change them).
+-- 0.9.5 (095-gsa1-render): cam.Start (a table view, also orthographic: M.camStarts), render.BlurRenderTarget and
+-- render.OverrideDepthEnable (counted), surface.SetMaterial / DrawTexturedRectUV (counted), util.TraceLine (M.traceLine(t)
+-- -> a result; none: no hit; M.traces records each trace's start / end), file.Open on an in-memory file of the "GAME" path
+-- (M.gamefiles[path] = its bytes as a string; Read / Seek / Tell / Size / Close; M.fileReads = { bytes of each Read }).
 -- No GMod code or data is used; the mock only follows the documented function signatures.
 local M = {
     T = 1000.0, frameNo = 0, dt = 1 / 60, paused = false, ui = false, focus = true,
@@ -219,6 +223,16 @@ util = {
         out.Hit = false
         return out
     end,
+    -- 0.9.5: M.traceLine(t) -> the result (Hit, HitPos, Fraction, ...); without it nothing is hit
+    TraceLine = function(t)
+        count("TraceLine")
+        if M.traces then M.traces[#M.traces + 1] = { start = Vector(t.start), endpos = Vector(t.endpos), mask = t.mask } end
+        if M.traceLine then return M.traceLine(t) end
+        local out = t.output or {}
+        out.Hit, out.HitWorld, out.Fraction = false, false, 1
+        out.HitPos = Vector(t.endpos)
+        return out
+    end,
 }
 file = {
     Size = function(p) return M.files[p] and #M.files[p] or -1 end,
@@ -247,7 +261,30 @@ file = {
         table.sort(out)
         return out, {}
     end,
-    Open = function() return nil end,
+    -- 0.9.5: an in-memory file of M.gamefiles (path = the string of its bytes), else nil as before
+    Open = function(path, mode, where)
+        local data = M.gamefiles and M.gamefiles[path]
+        if not data then return nil end
+        count("file.Open")
+        local f = { pos = 0 }
+        function f:Read(n)
+            n = math.max(0, math.min(n or 0, #data - self.pos))
+            M.fileReads = M.fileReads or {}
+            M.fileReads[#M.fileReads + 1] = n
+            if n == 0 then return nil end
+            local out = string.sub(data, self.pos + 1, self.pos + n)
+            self.pos = self.pos + n
+            return out
+        end
+        function f:Seek(p) self.pos = math.max(0, math.min(p, #data)) end
+        function f:Tell() return self.pos end
+        function f:Size() return #data end
+        function f:EndOfFile() return self.pos >= #data end
+        function f:Close() self.closed = true end
+        M.openFiles = M.openFiles or {}
+        M.openFiles[#M.openFiles + 1] = f
+        return f
+    end,
 }
 
 -- drawing
@@ -288,7 +325,17 @@ function mesh.AdvanceVertex()
     if M.inMesh then M.inMesh.verts = M.inMesh.verts + 1 end
 end
 cam = { Start2D = noop, End2D = noop, Start3D = noop, End3D = noop }
-surface = { SetDrawColor = noop, DrawRect = function() count("DrawRect") end }
+-- 0.9.5: a view from a table (cam.Start: type, origin, angles, x, y, w, h, fov | ortho = { left, right, top, bottom })
+M.camStarts = {}
+function cam.Start(t)
+    count("cam.Start")
+    if M.camStarts then M.camStarts[#M.camStarts + 1] = t end
+end
+function render.BlurRenderTarget() count("BlurRenderTarget") end
+function render.OverrideDepthEnable() count("OverrideDepthEnable") end
+surface = { SetDrawColor = noop, DrawRect = function() count("DrawRect") end,
+            SetMaterial = function() count("surface.SetMaterial") end,
+            DrawTexturedRectUV = function() count("DrawTexturedRectUV") end }
 draw = { NoTexture = noop, SimpleText = noop, SimpleTextOutlined = noop }
 local MATMT = {}
 MATMT.__index = MATMT

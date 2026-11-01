@@ -233,6 +233,10 @@ local function camera_panel(panel)
     panel:ControlHelp("0 = first person (the character is hidden). The mouse wheel changes it while playing.")
     panel:NumSlider("Camera height", "gsa1_cam_height", -64, 128, 0)
     panel:ControlHelp("Above the character's centre. The camera stops at walls.")
+    -- 0.9.5 (sadc docs/research/board095_cam.md 5.4 item 5)
+    panel:CheckBox("The game uses this camera", "gsa1_cam_real")
+    panel:ControlHelp("Big's fishing line and the rings and item boxes that appear while he fishes follow the camera you "
+        .. "see. Off: the game uses a camera of its own behind the character (as in 0.9.4).")
 end
 
 local function controller_panel(panel)
@@ -288,6 +292,17 @@ local function rendering_panel(panel)
     panel:CheckBox("Character shadows (the game's blob)", "gsa1_shadow")
     panel:ControlHelp("Drawn where the game finds the ground under the character; it shrinks with height and disappears "
         .. "high up, as in the game. Not drawn in first person.")
+    -- 0.9.5 (sadc docs/research/gsa1_095_plan.md 4.17, 5.8; the owner: "The G-SA1 drawn sun shadow should be toggleable"):
+    -- feat/sh_liveshadow.lua's ConVars, feat/cl_liveshadow.lua draws it
+    panel:CheckBox("Sun shadow (like Garry's Mod's props on this map)", "gsa1_sunshadow")
+    panel:ControlHelp("Your character's shadow from the map's sun, in the direction, colour and length Garry's Mod uses "
+        .. "for the props on this map, on the ground and on props. Off: nothing of it is drawn or computed. The game's "
+        .. "round shadow above stays on its own switch.")
+    panel:CheckBox("Sun shadow in first person too", "gsa1_sunshadow_fp")
+    panel:NumSlider("Sun shadow darkness (0 = the map's own colour)", "gsa1_sunshadow_dark", 0, 100, 0)
+    live_label(panel, 1, function()
+        return { GSA1.SunShadowLine and GSA1.SunShadowLine() or "sun shadow: not loaded" }
+    end)
     panel:NumSlider("Line effect width (pixels)", "gsa1_line_width", 1, 8, 1)
     panel:CheckBox("Vertex colours on effects and models", "gsa1_vertexcolor")
     panel:ControlHelp("The characters' bodies are always texture x lighting, like the game.")
@@ -428,6 +443,8 @@ local function disc_panel(panel)
         .. "never have to copy console text: just say when you tested. Older sessions move to log_previous.txt; at "
         .. "most about 1 MB. No paths or names are written.")
     panel:NumSlider("Slow frame threshold for the log (ms)", "gsa1_log_hitch_ms", 20, 2000, 0)
+    -- 0.9.5 (sadc docs/research/board095_perf.md P2: cl_gcmeter.lua)
+    panel:CheckBox("Measure Lua garbage in the log (G-SA1's own and all of the game's)", "gsa1_log_garbage")
     panel:Button("Mark this moment in the log", "gsa1_log_mark", "marked from the menu")
     panel:ControlHelp("Or bind a key: bind f9 \"gsa1_log_mark lag\" and press it when something happens.")
     panel:CheckBox("Log slow frames (hitches) to the console", "gsa1_hitch_log")

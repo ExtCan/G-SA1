@@ -193,6 +193,11 @@ function GSA1.LogHeader()
         push(string.format("settings 0.9.2: water follows Garry's Mod's water %s, depth for post-processing %s, start rings "
             .. "%s", c.hostwater and c.hostwater:GetString() or "?", c.depthfix and c.depthfix:GetString() or "?",
             c.start_rings and c.start_rings:GetString() or "?"))
+        -- 0.9.5 (sadc docs/research/gsa1_095_plan.md 5.8): the host camera, the sun shadow, the garbage meter, the close-up
+        push(string.format("settings 0.9.5: the game uses this camera (gsa1_cam_real) %s, sun shadow %s (first person %s, "
+            .. "darkness %s), garbage meter %s, Faces close-up %s at %s pictures a second", cvstr("gsa1_cam_real"),
+            cvstr("gsa1_sunshadow"), cvstr("gsa1_sunshadow_fp"), cvstr("gsa1_sunshadow_dark"), cvstr("gsa1_log_garbage"),
+            cvstr("gsa1_mouth_closeup"), cvstr("gsa1_mouth_closeup_fps")))
     end
     -- the module: loaded already in the usual case (a session's first line is its "loaded" message); its vector mode
     -- (how EmitBatch hands Vectors to the mesh library) is decided when it opens (review R.3 G4 of gsa1_lsd_lag.md)
@@ -454,6 +459,12 @@ function GSA1.LogFrame(dt, sections, counted, gc)
                 (V.soo or 0) / V.frames, GSA1.ViewsLine and (" (last frame: " .. tostring(GSA1.ViewsLine()) .. ")") or "")
         end
         V.frames, V.so, V.sb, V.mo, V.mb, V.soo = 0, 0, 0, 0, 0, 0
+        -- 0.9.5: the sun shadow's time (feat/cl_liveshadow.lua, hitch section "SunShadow") and the garbage meter's field
+        -- (cl_gcmeter.lua, board095_perf.md P2)
+        local sun = w.sect.SunShadow
+        if sun and sun > 0 then views = views .. string.format("; sun shadow %.2f ms per frame", sun * 1000 / w.frames) end
+        local gm = GSA1.GcMeter and GSA1.GcMeter.TakeField and GSA1.GcMeter.TakeField(now)
+        if gm then views = views .. "; " .. gm end
         GSA1.Log("perf", "%d frames, %.1f fps, frame %.1f ms mean / %.0f ms worst; G-SA1 %.2f ms per frame (worst "
             .. "%.1f): %s; mode/action %s; up to %d vertices, %d blended batches, effects up to %.2f screens; ticks of 2+ "
             .. "pairs %d (largest %d); Lua heap %.1f MB (the GC freed %.1f MB in the window)%s%s", w.frames,
@@ -461,6 +472,25 @@ function GSA1.LogFrame(dt, sections, counted, gc)
             w.gmax * 1000, table.concat(parts, ", "), table.concat(mm, ", "), w.verts, w.blended, w.cover, w.multi,
             w.kmax, collectgarbage("count") / 1024, w.gcFreed / 1024, mesh, views)
         L.win = nil
+    end
+end
+
+-- 0.9.5 (sadc docs/research/board095_cam.md 5.4 item 6): which camera the game's code measures against, one line per
+-- change (cl_character.lua calls it every tick while the module takes the host camera): yours (G-SA1's view passed in
+-- sa1_input), its own because "The game uses this camera" is off, or its own because G-SA1's view is not in use (a camera
+-- entity, another addon's view: GSA1.TickCamera gave none)
+local camWas = nil
+function GSA1.LogCamera(passed)
+    local state = passed and 1 or ((GSA1.cv and GSA1.cv.cam_real and not GSA1.cv.cam_real:GetBool()) and 2 or 3)
+    if state == camWas then return end
+    camWas = state
+    if state == 1 then
+        GSA1.Log("camera", "the game's camera: yours (the view G-SA1 shows)")
+    elseif state == 2 then
+        GSA1.Log("camera", "the game's camera: its own, behind the character (\"The game uses this camera\" is off)")
+    else
+        GSA1.Log("camera", "the game's camera: its own (G-SA1's view not in use: a camera entity or another addon's "
+            .. "view)")
     end
 end
 
@@ -535,6 +565,9 @@ function GSA1.LogSummary(reason)
         string.format("Lua: heap %.1f MB now; the GC freed %.1f MB in %d frames of the session", collectgarbage("count")
             / 1024, L.gcFreed / 1024, L.gcCycles),
     }
+    -- 0.9.5 (board095_perf.md P2): the garbage meter's session figure
+    local gmLine = GSA1.GcMeter and GSA1.GcMeter.SummaryLine and GSA1.GcMeter.SummaryLine()
+    if gmLine then lines[#lines + 1] = gmLine end
     local game = {}
     for _, grp in ipairs({ "deaths", "restarts", "respawns", "jingles", "faults", "player deaths", "teleports" }) do
         local g = L.counts[grp]

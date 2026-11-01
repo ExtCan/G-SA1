@@ -779,6 +779,15 @@ void Session::take_events()
             // 0.9.3: a Perfect Chaos stage tone of a Super world is not played from Emerald Coast's stage bank
             // (kStageTonesFirst; the event still goes to Lua); 0.9.4a: the whoosh is, through its stage rule (admit_sound)
             const sa1_event &e = buf[i];
+#if defined(SA1_API_BOARD)
+            // 0.9.5: the board's events of a character's world go to its board core (the one-shot refusal / frees)
+            if (e.type == board::kEventBoard) {
+                Character *bc = get((int32_t)e.character);
+                if (bc) {
+                    board::on_event(bc->board, e.id, e.arg, bc->st.held_object != 0u);
+                }
+            }
+#endif
             if (admit_sound(e)) {
                 audio_.event(e);
             }
@@ -863,6 +872,15 @@ uint32_t Session::whoosh_characters() const
 
 bool Session::admit_sound(const sa1_event &e)
 {
+    // 0.9.5 (gsa1.BoardSounds(false)): a rider's board tones stay out of the mixer; stops always pass (board::admit)
+    if (!board_sounds_ && e.type == SA1_EVENT_SOUND && board::board_tone(e.id)) {
+        Character *bc = get((int32_t)e.character);
+        if (bc && !board::admit(board_sounds_, bc->board.rider, e.type, e.id)) {
+            bc->board.tones_muted++;
+            board_tones_dropped_++;
+            return false;
+        }
+    }
     if (!mute_stage_tones_ || (e.type != SA1_EVENT_SOUND && e.type != SA1_EVENT_SOUND_STOP) || e.id < kStageTonesFirst ||
         e.id > kStageTonesLast) {
         return true;
@@ -877,6 +895,59 @@ bool Session::admit_sound(const sa1_event &e)
     c->stage_tones_muted++;
     stage_tones_dropped_++;
     return false;
+}
+
+// ---- 0.9.5: the board's sounds through libsa1's stage rules (sadc docs/research/gsa1_095_plan.md 4.11, 6.3 task 2 with
+// its review R.12; board095_lib.md 2.3 H, 2.4) ----------------------------------------------------------------------------
+void Session::board_rules(Character &c, bool on)
+{
+    board::apply_rules(audio_, c.id, on);
+    c.board.rules_on = on;
+}
+
+void Session::board_after_tick(Character &c)
+{
+    board::refresh(ctx_, c.id, c.board);
+    c.board.rider = !c.faulted && board::rider(c.kind, c.st.mode, c.st.flags);
+    bool want = board_sounds_ && c.board.rider && !c.puppet;
+    if (want != c.board.rules_on) {
+        board_rules(c, want);
+    }
+}
+
+bool Session::set_board_sounds(bool on)
+{
+    bool was = board_sounds_;
+    board_sounds_ = on;
+    for (const auto &cp : chars_) {
+        Character &c = *cp;
+        if (c.puppet) {
+            continue;
+        }
+        if (was && !on && c.board.rider && audio_.is_open()) {
+            // what a rider's board tones play now ends (review R.12: Sand Hill's ride loop 690 is 18.6 s long, and its own
+            // stop would come as a rider's tone); a stop matches by tone, whatever bank the sound came from
+            const uint32_t ranges[2][2] = {{board::kSnowToneFirst, board::kSnowToneLast},
+                                           {board::kSandToneFirst, board::kSandToneLast}};
+            for (const auto &rg : ranges) {
+                for (uint32_t tone = rg[0]; tone <= rg[1]; tone++) {
+                    sa1_event e;
+                    std::memset(&e, 0, sizeof e);
+                    e.type = SA1_EVENT_SOUND_STOP;
+                    e.id = tone;
+                    e.character = c.id;
+                    std::memcpy(e.position, c.st.position, sizeof e.position);
+                    e.step = c.st.step;
+                    audio_.event(e);
+                }
+            }
+        }
+        bool want = on && c.board.rider;
+        if (want != c.board.rules_on) {
+            board_rules(c, want);
+        }
+    }
+    return audio_.has_stage_rules();
 }
 
 void Session::poll_events(std::vector<sa1_event> &out)
@@ -933,12 +1004,18 @@ sa1_status Session::tick(int32_t id, float stick_x, float stick_y, float camera_
                std::isfinite(extra->cam_pos[2]) && std::isfinite(extra->cam_target[0]) &&
                std::isfinite(extra->cam_target[1]) && std::isfinite(extra->cam_target[2]);
     c->host_camera_last = cam;
+    c->host_camera_passed = false;
     if (cam) {
         std::memcpy(c->host_cam_last, extra->cam_pos, sizeof extra->cam_pos);
         std::memcpy(c->host_cam_last + 3, extra->cam_target, sizeof extra->cam_target);
 #if defined(SA1_INPUT_HOST_CAMERA)
         std::memcpy(in.host_cam_pos, extra->cam_pos, sizeof in.host_cam_pos);
         std::memcpy(in.host_cam_target, extra->cam_target, sizeof in.host_cam_target);
+        // 0.9.5 (board095_cam.md 5.4 item 1): the bit that makes libsa1 take it - only here, for a valid camera (the Lua
+        // host flags are masked by kHostFlagsKnown above, so they never set it); host_flags_last keeps the water bits
+        in.host_flags |= SA1_INPUT_HOST_CAMERA;
+        c->host_camera_passed = true;
+        c->host_camera_ticks++;
 #endif
     }
     float before[3];
@@ -957,11 +1034,13 @@ sa1_status Session::tick(int32_t id, float stick_x, float stick_y, float camera_
             c->fault_status = st;
         }
         refresh_state(*c);
+        board_after_tick(*c);
         take_events();
         last_error_ = scrub(format("%s: %s", sa1_status_string(st), sa1_last_error(ctx_)));
         return st;
     }
     refresh_state(*c);
+    board_after_tick(*c);
     // 0.9.3: the form (Super Sonic or normal Sonic) after this tick
     bool sup = (c->st.flags & kStateSuper) != 0;
     if (sup != c->super) {

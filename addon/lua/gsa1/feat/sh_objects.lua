@@ -106,8 +106,11 @@ O.CLASSES = {
 O.BY_CLASS = {}
 for _, c in ipairs(O.CLASSES) do O.BY_CLASS[c.class] = c end
 
+-- 0.9.5 (gsa1_095_plan.md 5.5, review R.10): a G-SA1 trigger box (GSA1Trigger: Board On / Off, a left board) carries
+-- GSA1Object for the collision and interaction scanners but is not one of these objects
 function O.IsObject(ent)
     return ent ~= nil and ent ~= NULL and type(ent) ~= "number" and ent.GSA1Object == true
+        and ent.GSA1Trigger ~= true
 end
 
 -- the settings --------------------------------------------------------------------------------------------------------

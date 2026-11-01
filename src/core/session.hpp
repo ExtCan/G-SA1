@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "audio.hpp"
+#include "board.hpp"
 #include "libsa1_internal_api.hpp"
 #include "movers.hpp"
 #include "prepare.hpp"
@@ -92,9 +93,18 @@ const uint32_t kBatchObjectFlag = SA1_DRAW_OBJECT;
 #else
 const uint32_t kBatchObjectFlag = 0u;
 #endif
+// 0.9.5 (sadc docs/research/gsa1_095_plan.md 4.10, 6.3 task 2): SA1_DRAW_BOARD (the board under Sonic's / Tails' feet or
+// left on the ground, and the BOARD preview's draws) the same way, so a board draw never shares a batch with the body's and
+// the batch's flags show 0x4000: the addon draws board batches with the character, in first person too, whatever
+// gsa1_effects says (cl_render.lua; the board's draws also carry SA1_DRAW_EFFECT)
+#if defined(SA1_DRAW_BOARD)
+const uint32_t kBatchBoardFlag = SA1_DRAW_BOARD;
+#else
+const uint32_t kBatchBoardFlag = 0u;
+#endif
 const uint32_t kBatchKeyFlags = SA1_DRAW_BLEND | SA1_DRAW_ALPHA_TEST | SA1_DRAW_DOUBLE_SIDED | SA1_DRAW_ENV_MAP |
                                 SA1_DRAW_UNLIT | SA1_DRAW_PALETTE_LIT | SA1_DRAW_EFFECT | SA1_DRAW_NO_TEXTURE |
-                                SA1_DRAW_ADDITIVE | SA1_DRAW_SHADOW | kBatchObjectFlag;
+                                SA1_DRAW_ADDITIVE | SA1_DRAW_SHADOW | kBatchObjectFlag | kBatchBoardFlag;
 // a batch never holds more triangles than this (one mesh.Begin; Source's dynamic vertex buffer). 0.9.4 (review R.1): a
 // libsa1 draw above it (libsa1 merges consecutive same-state draws: 84+ rings in a row) is split over batches (0.9.3a
 // skipped it whole)
@@ -162,6 +172,9 @@ struct ViewOptions {
 //   camera: the host's view (origin and a target point, host space) for sa1_input.host_cam_pos / host_cam_target, which
 //     libsa1 reads from round 0.9.4 on (the SET round's camera position). Copied only when libsa1.h defines
 //     SA1_INPUT_HOST_CAMERA (kHostCameraInput); otherwise recorded in the Character (host_camera_*) and nothing else.
+//     0.9.5 (sadc docs/research/board095_cam.md 5.4 items 1-2): with it the tick also sets SA1_INPUT_HOST_CAMERA in
+//     sa1_input.host_flags - only for a valid camera (six finite floats), never from host_flags (kHostFlagsKnown keeps the
+//     water bits only: the Lua side cannot set the camera bit) - and Character::host_camera_passed says it did.
 struct TickExtra {
     uint32_t host_flags = 0;
     bool camera = false;
@@ -265,6 +278,13 @@ struct Character {
     uint64_t host_flag_ticks = 0;      // ticks that passed host flags (nonzero)
     bool host_camera_last = false;     // the last tick had a host camera (passed to libsa1 only with kHostCameraInput)
     float host_cam_last[6] = {0, 0, 0, 0, 0, 0};
+    // 0.9.5: the last tick passed the camera to libsa1 (SA1_INPUT_HOST_CAMERA set in sa1_input.host_flags; the session log
+    // and the tests); false without kHostCameraInput or a valid camera
+    bool host_camera_passed = false;
+    uint64_t host_camera_ticks = 0;    // ticks that passed it
+    // 0.9.5 (the feature "board", board.hpp): the character's board - libsa1's state after the last tick, the one-shot
+    // refusal / frees of SA1_EVENT_BOARD, the board's stage rules. A re-created character starts with a fresh one
+    board::Track board;
     sa1_state_ex st{};
     float prev_pos[3] = {0, 0, 0};     // position at the start of the last pair (informational)
     double acc = 0.0;                  // mirror of libsa1's pair accumulator (seconds)
@@ -434,8 +454,22 @@ public:
     // super-capable characters whose whoosh is routed
     uint32_t whoosh_characters() const;
     // the stage-tone guard of take_events (0.9.3; 0.9.4a: the whoosh exception): false = the event is kept out of the
-    // mixer (counted in Character::stage_tones_muted and stage_tones_dropped()); every other event: true
+    // mixer (counted in Character::stage_tones_muted and stage_tones_dropped()); every other event: true. 0.9.5 (board.hpp
+    // admit): with the board sounds off, a rider's board tones (208-238, 690-698) too (Character::board.tones_muted,
+    // board_tones_dropped()); a SOUND_STOP always passes
     bool admit_sound(const sa1_event &e);
+    // 0.9.5 (sadc docs/research/gsa1_095_plan.md 4.11, 6.3 task 2 with its review R.12; gsa1.BoardSounds): the board's
+    // sounds. On (the default): a character whose player 0 rides a board (board::rider after its tick) holds the two stage
+    // rules {8, 208-238} (Ice Cap's snow lean, jump, ...) and {38, 690-698} (Sand Hill's ride loop and sand lean) in Audio's
+    // slots kRuleBoardSnow / kRuleBoardSand - set at the tick that sees him ride, cleared at the tick that sees the ride end,
+    // re-applied to every new mixer by Audio - so the board sounds play from their own stages' banks instead of Emerald
+    // Coast's (whose 690 is a wrong 1.19 s loop). Off: the rules cleared, every board tone a rider plays now stopped (one
+    // SOUND_STOP per tone and rider, as set_super_whoosh does: Sand Hill's ride loop is 18.6 s long) and his new board tones
+    // kept out of the mixer (admit_sound); the events still reach Lua. false: this libsa1 has no stage rules (only the
+    // flag changes)
+    bool set_board_sounds(bool on);
+    bool board_sounds() const { return board_sounds_; }
+    uint64_t board_tones_dropped() const { return board_tones_dropped_; }
     int32_t create_puppet(int32_t kind, std::string &err);
     // 0.9.2a (sadc docs/research/gsa1_091b_itembox.md E2 with its review R.4.1): destroying a character also drops its
     // events still queued for poll_events (a removed or restarted character's fault, death or sounds never reach the next
@@ -498,6 +532,9 @@ public:
 
 private:
     void refresh_state(Character &c);
+    // 0.9.5: after refresh_state - the board's state (board::refresh) and the rider's stage rules (board_rules)
+    void board_after_tick(Character &c);
+    void board_rules(Character &c, bool on);
     void take_events();
     void build_batches(Character &c);
     bool set_event_flags(sa1_character_id id, const std::vector<uint16_t> &flags, std::string &err);
@@ -535,6 +572,8 @@ private:
     bool mute_stage_tones_ = true;
     uint64_t stage_tones_dropped_ = 0;
     bool whoosh_ = true;                  // 0.9.4a: set_super_whoosh
+    bool board_sounds_ = true;            // 0.9.5: set_board_sounds
+    uint64_t board_tones_dropped_ = 0;
     void whoosh_rule(const Character &c); // 0.9.4a: the character's rule as whoosh_ says (a super-capable one)
     uint64_t stale_events_dropped_ = 0;   // 0.9.2a, E2
 };

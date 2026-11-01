@@ -11,6 +11,11 @@
 -- kind - NormalizeKinds("Snow, fast"), Describe("wallslide"), a 0.8 surfaces.txt read unchanged, the page's checklist
 -- (12 kinds with their explanations, footprints hidden, snow "slow to speed up", "walls only", the precedence note, a
 -- Normal button), the live line decoding every kind, each kind's share in the summary, feature version 2.
+-- 0.9.5 (sadc docs/research/gsa1_095_plan.md 6.3 task 4; the module's surfaces feature version 3): the board-time kinds
+-- "boardsnow" / "boardsand" (words, aliases "board snow" / "board-sand", described, decoded, two more rows of the checklist
+-- that the page shows only with version 3, tooltips "only under a board"), and the one-time move of a 0.9.4f surfaces.txt's
+-- snow / sand entry still equal to 0.9.4f's default "dig" (gone, the file written again, one log line) while an owner's own
+-- entry and a file 0.9.5 wrote keep theirs.
 --   lua_host tests/feat_surfaces_test.lua <tests dir> <addon/lua dir>
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
 local M = host_load(host_read(tests .. "/lua_mock.lua"), "lua_mock.lua")()
@@ -159,17 +164,18 @@ for _, k in ipairs(S.KINDS or {}) do
     in_order = in_order and order_set[k.id] == true
     tips = tips and type(k.tip) == "string" and #k.tip > 10 and type(k.bit) == "number"
 end
-check(#(S.KINDS or {}) == 13 and #(S.ORDER or {}) == 13 and visible == 12 and in_order and tips and ids.footprints and
+check(#(S.KINDS or {}) == 15 and #(S.ORDER or {}) == 15 and visible == 14 and in_order and tips and ids.footprints and
     ids.footprints.hidden and ids.snow and ids.snow.title == "Snow (slow to speed up)" and
     string.find(ids.snow.tip, "a seventh of the acceleration, you stop normally", 1, true) ~= nil and
     string.find(ids.noland.title, "walls only", 1, true) ~= nil and string.find(ids.wallslide.title, "walls only", 1, true)
     ~= nil and string.find(S.PRECEDENCE or "", "snow, ice, slow sand and fast ground only the first counts", 1, true) ~= nil,
-    "the checklist: 13 kinds (12 shown, footprints hidden until a footprint task exists), each with an explanation; snow "
+    "the checklist: 15 kinds (14 shown, footprints hidden until a footprint task exists), each with an explanation; snow "
     .. "\"Snow (slow to speed up)\" (C5); \"walls only\" on not a floor / slide-off wall; the precedence note")
 local every = 0
 for _, k in ipairs(S.KINDS or {}) do every = every + k.bit end
 local dec = S.DecodeGame and S.DecodeGame(every) or {}
-check(#dec == 13 and dec[1] == "diggable" and dec[13] == "footprints" and #S.DecodeGame(1) == 0 and S.WithKind and
+check(#dec == 15 and dec[1] == "diggable" and dec[13] == "footprints" and dec[14] == "board snow" and #S.DecodeGame(1) == 0
+    and S.WithKind and
     S.WithKind("dig", "snow", true) == "dig,snow" and S.WithKind("dig,snow", "dig", false) == "snow" and
     S.WithKind("snow", "snow", false) == "normal" and S.HasKind("fast,noland", "noland") and not S.HasKind("normal", "dig"),
     "the game's SA1_SURFACE_* bits decode to every kind (%s); a kind ticked / unticked in a kinds string",
@@ -436,6 +442,74 @@ check(o2.world_key == nil and n_of("SetSurfaceTable") == calls_before and
     not string.find(t2s, "CheckBox", 1, true),
     "a module with only version 1 of the surfaces part (0.9.1's): no table, no world key, the page says it needs G-SA1 "
     .. "module 0.9.2 (version 2)")
+-- 9. round 0.9.5: the board-time kinds -----------------------------------------------------------------------------------
+check(S.NormalizeKinds("Board Snow, dig") == "dig,boardsnow" and S.NormalizeKinds("board-sand") == "boardsand" and
+    S.NormalizeKinds("board_snow,boardsand") == "boardsnow,boardsand" and S.Describe("dig,boardsnow") ==
+    "diggable, board snow" and S.HasKind("dig,boardsand", "boardsand") and S.WithKind("dig", "boardsnow", true) ==
+    "dig,boardsnow" and ids.boardsnow and ids.boardsnow.needs == 3 and ids.boardsnow.bit == 0x100000 and ids.boardsand and
+    ids.boardsand.bit == 0x200000 and string.find(ids.boardsnow.tip, "only under a board", 1, true) ~= nil and
+    string.find(ids.boardsand.tip, "walking is unchanged", 1, true) ~= nil,
+    "0.9.5's kinds: \"Board Snow, dig\" -> %s, aliases board-sand / board_snow, described \"%s\"; the rows Board snow / "
+    .. "Board sand (bits 0x100000 / 0x200000, shown from surfaces version 3)", tostring(S.NormalizeKinds("Board Snow, dig")),
+    tostring(S.Describe("dig,boardsnow")))
+-- the page with a module that has them (surfaces 3)
+G.FEATURES = { surfaces = 3 }
+M.menu = {}
+M.run_hook("PopulateToolMenu")
+for _, e in ipairs(M.menu) do
+    if e.class == "gsa1_feat_surfaces" then entry = e end
+end
+local panel3 = standin("DForm")
+entry.cpanel(panel3)
+local boxes3, helps3 = {}, {}
+for _, call in ipairs(panel3.calls) do
+    if call[1] == "CheckBox" and not call[3] and TITLE[call[2]] then boxes3[TITLE[call[2]].id] = call.ret end
+    if call[1] == "ControlHelp" then helps3[#helps3 + 1] = tostring(call[2]) end
+end
+local n3 = 0
+for _ in pairs(boxes3) do n3 = n3 + 1 end
+check(n3 == 14 and boxes3.boardsnow and boxes3.boardsand and boxes3.boardsnow.tip == ids.boardsnow.tip and
+    string.find(table.concat(helps3, " "), "only under Sonic's or Tails' board", 1, true) ~= nil and not kindbox.boardsnow,
+    "surfaces version 3: the page has %d kind boxes with Board snow and Board sand and their note; version 2 (above) had "
+    .. "neither", n3)
+-- the one-time move of a 0.9.4f file
+local OLD94 = "# G-SA1 ground types: your changes to the Surfaces page's table (Options > G-SA1 > Surfaces).\n"
+    .. "# One \"surface type = kinds\" per line; kinds: normal, dig, slippery, sand, hurt, noclimb, snow, fast, slide, "
+    .. "speedpath, stairs, noland, wallslide (several: dig,sand).\nconcrete = dig\nsand = dig\nsnow = dig\n"
+local moved_t = S.Parse(OLD94)
+local moved = S.MigrateBoardKinds(moved_t, OLD94)
+local own_t = S.Parse(OLD94 .. "gravel = dig,snow\n")
+own_t.snow = "dig,slippery"
+local own_moved = S.MigrateBoardKinds(own_t, OLD94)
+local new_t = S.Parse(S.Serialize({ snow = "dig" }))
+local new_moved = S.MigrateBoardKinds(new_t, S.Serialize({ snow = "dig" }))
+check(#moved == 2 and moved[1] == "sand" and moved[2] == "snow" and moved_t.snow == nil and moved_t.sand == nil and
+    moved_t.concrete == "dig" and #own_moved == 1 and own_moved[1] == "sand" and own_t.snow == "dig,slippery" and
+    #new_moved == 0 and new_t.snow == "dig" and string.find(S.Serialize({}), "boardsnow", 1, true) ~= nil,
+    "S.MigrateBoardKinds: a 0.9.4f file's snow = dig and sand = dig move to 0.9.5's default (%s), concrete = dig stays; "
+    .. "an owner's own snow entry stays; a file 0.9.5 wrote (its header names boardsnow) keeps snow = dig", table.concat(moved, ", "))
+M.files[S.FILE] = OLD94
+GSA1 = nil
+M.included = {}
+local ok3 = pcall(M.load, "autorun/gsa1_autorun.lua")
+local S3 = GSA1 and GSA1.Surfaces
+local text3 = M.files[S3 and S3.FILE or "gsa1/surfaces.txt"] or ""
+local again3 = S3 and S3.Parse(text3) or {}
+local relog = S3 and S3.movedNote
+local S3b
+if ok3 and S3 then
+    GSA1 = nil
+    M.included = {}
+    pcall(M.load, "autorun/gsa1_autorun.lua")
+    S3b = GSA1 and GSA1.Surfaces
+end
+check(ok3 and S3 and S3.overrides.snow == nil and S3.overrides.sand == nil and S3.overrides.concrete == "dig" and
+    again3.snow == nil and again3.concrete == "dig" and string.find(text3, "boardsnow", 1, true) ~= nil and relog and
+    string.find(relog, "0.9.4f's default", 1, true) ~= nil and S3b and S3b.movedNote == nil,
+    "the addon loads a 0.9.4f surfaces.txt with snow / sand = dig: both moved, the file written again (%s), one note "
+    .. "(\"%s\"); the next load moves nothing", string.gsub(string.match(text3, "[^\n]*\n[^\n]*\n(.*)") or "", "\n", "; "),
+    tostring(relog))
+
 check(#M.reported == 0, "no Lua error%s", #M.reported > 0 and (": " .. M.reported[1]) or "")
 info("module calls: SetSurfaceTable %d, SurfaceInfo %d, SurfaceKind %d", n_of("SetSurfaceTable"), n_of("SurfaceInfo"),
     n_of("SurfaceKind"))

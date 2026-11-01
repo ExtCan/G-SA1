@@ -1,7 +1,7 @@
 -- G-SA1 shared configuration: constants, character names, ConVars, network strings.
 GSA1 = GSA1 or {}
 
-GSA1.VERSION = "0.9.4f"
+GSA1.VERSION = "0.9.5"
 GSA1.REQUIRED_API = 6          -- gsa1.API_VERSION the addon is written for
 GSA1.SCALE = 4.0               -- Hammer units per SA1 unit (libsa1's Source preset)
 GSA1.MODULE = "gsa1"           -- require("gsa1") -> garrysmod/lua/bin/gmcl_gsa1_<platform>.dll
@@ -159,6 +159,8 @@ if CLIENT then
         -- camera
         cam_dist     = cv("gsa1_cam_distance", "150", "Chase camera distance in Hammer units (0 = first person)", 0, 1000),
         cam_height   = cv("gsa1_cam_height", "20", "Chase camera height above the character's centre", -64, 128),
+        -- 0.9.5 (sadc docs/research/board095_cam.md 5.4 item 3): the host camera position in libsa1 worlds
+        cam_real     = cv("gsa1_cam_real", "1", "The game uses this camera: 1 = the game's own code that looks at the camera (Big's fishing line fades with its distance from it; while Big's lure is in the water, rings and item boxes appear around it) uses the camera you see, 0 = a camera of its own 40 units behind the character (0.9.4)", 0, 1),
         -- rendering
         interp       = cv("gsa1_interpolate", "1", "Interpolate the animation and the movement between the game's 30 Hz frames (0 = the raw frames)", 0, 1),
         lighting     = cv("gsa1_lighting", "1", "Light the character with the map's lighting (0 = fullbright)", 0, 1),

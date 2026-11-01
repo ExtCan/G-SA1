@@ -277,6 +277,12 @@ function W.Open(C, how)
     W.glow, W.pointDeg, W.fadeFrom = {}, nil, nil
     -- the edges start from what is held now: a face key or button held while opening is no press
     W.faceWas, W.cancelWas, W.padWas, W.keysWas = W.FaceDown(), cancel_down(), pad_raw(), slot_keys()
+    -- 0.9.5: the open wheel's actions (W.OPEN_ACTIONS: the board key) start from what is held now too
+    W.actWas = {}
+    for _, a in ipairs(W.OPEN_ACTIONS or {}) do
+        local ok, d = pcall(a.down, C)
+        W.actWas[a.name] = ok and d == true
+    end
     W.stats.opened = W.stats.opened + 1
     log("wheel opened (%s): %s's wheel, page 1 of %d", tostring(how), W.Title(W.entry), #W.Pages(W.wheel))
 end
@@ -351,6 +357,18 @@ function W.PlayBody(C, slot, page, s, how, face, entry)
             log("%s back to standing (chosen again: page %d slot %d)", e.name, page or 0, s or 0)
             toast("> %s: back to standing", e.name)
             return true
+        end
+    end
+    -- 0.9.5 (gsa1_095_plan.md 6.4, review R.12): a feature may refuse a row now - the board rows while a board lies in his
+    -- world (feat/cl_board.lua: the game's board task would hold that board to him). W.PLAY_GATES: { name, gate =
+    -- fn(C, e) -> why | nil }
+    for _, g in ipairs(W.PLAY_GATES or {}) do
+        local gok, gwhy = pcall(g.gate, C, e)
+        if gok and gwhy then
+            W.stats.refused = W.stats.refused + 1
+            log("%s refused: %s", e.name ~= "" and e.name or e.key, tostring(gwhy))
+            toast("%s can't do that now: %s", title, tostring(gwhy))
+            return false
         end
     end
     local flags = 0
@@ -492,8 +510,29 @@ function W.Think()
     W.padHeld = cv.pad:GetInt() > 0 and band(pad_raw(), cv.pad:GetInt()) ~= 0
 end
 
+-- 0.9.5 (gsa1_095_plan.md 5.5; the owner's answer 14.1ad 1): actions a feature reads only in the OPEN wheel, right after the
+-- cancel, edge-triggered (a key held while the wheel opened is no press): { name, down = fn(C) -> bool, act = fn(C),
+-- hint = fn(C) -> text | nil } - the board key / button (feat/cl_board.lua); 0.9.6 may add "call the followers". True when
+-- an action closed the wheel
+W.OPEN_ACTIONS = W.OPEN_ACTIONS or {}
+function W.OpenActions(C)
+    W.actWas = W.actWas or {}
+    for _, a in ipairs(W.OPEN_ACTIONS) do
+        local ok, d = pcall(a.down, C)
+        d = ok and d == true
+        local was = W.actWas[a.name]
+        W.actWas[a.name] = d
+        if d and not was then
+            local aok, err = pcall(a.act, C)
+            if not aok then log("error in the wheel's %s action: %s", tostring(a.name), tostring(err)) end
+            if not W.open then return true end
+        end
+    end
+    return false
+end
+
 -- the open wheel's inputs of this frame: the face trigger and a cancel first (a press in the frame of the release still
--- counts), then the release, the pages, keys 1-8, the right stick
+-- counts), then the open wheel's actions, the release, the pages, keys 1-8, the right stick
 function W.OpenThink(C, now, raw)
     local fd = W.FaceDown()
     if fd and not W.faceWas then
@@ -509,6 +548,8 @@ function W.OpenThink(C, now, raw)
         return
     end
     W.cancelWas = cd
+    -- 0.9.5 (gsa1_095_plan.md 5.5): the open wheel's actions (the board key / button), edge-triggered, right after the cancel
+    if W.OpenActions(C) then return end
     if not raw then
         W.Release(C)
         return
@@ -740,8 +781,9 @@ function W.KeyRefused(code)
     local lookup = input and input.LookupBinding
     local keycode = input and input.GetKeyCode
     local sk = GetConVar("gsa1_super_key")
+    local bk = GetConVar("gsa1_board_key")          -- 0.9.5: the wheel key refuses the board key
     return W.KeyRefusal(code, lookup and function(b) return lookup(b) end or nil,
-        keycode and function(n) return keycode(n) end or nil, sk and sk:GetInt() or nil)
+        keycode and function(n) return keycode(n) end or nil, sk and sk:GetInt() or nil, bk and bk:GetInt() or nil)
 end
 cvars.AddChangeCallback("gsa1_wheel_key", function(name, old, new)
     local why = W.KeyRefused(tonumber(new))
@@ -999,9 +1041,17 @@ function W.HintLine()
     local F = GSA1.Faces
     local faces = F ~= nil and F.Play ~= nil and (not F.HasFaces or F.HasFaces(W.entry))
     local pages = W.wheel and #W.Pages(W.wheel) > 1
-    return string.format("release: play%s - right click / B: cancel%s", faces and string.format(" - %s / %s: with its face",
+    -- 0.9.5: the open wheel's actions' hints ("B / RS: board" for Sonic and Tails)
+    local extra = ""
+    for _, a in ipairs(W.OPEN_ACTIONS) do
+        if a.hint then
+            local ok, h = pcall(a.hint, W.char)
+            if ok and type(h) == "string" and h ~= "" then extra = extra .. " - " .. h end
+        end
+    end
+    return string.format("release: play%s - right click / B: cancel%s%s", faces and string.format(" - %s / %s: with its face",
         W.PadTitleShort(cv.face_pad:GetInt()), W.KeyName(cv.face_key:GetInt())) or "",
-        pages and " - mouse wheel / LB / RB: pages" or "")
+        pages and " - mouse wheel / LB / RB: pages" or "", extra)
 end
 function W.PadTitleShort(b)
     local t = W.PadTitle(b)
@@ -1810,6 +1860,13 @@ function W.BuildPage(panel)
         .. "animation; the wheel closes. Mouse buttons are fine: they do nothing else while the wheel is open.")
     choice_combo(panel, "Face trigger (controller)", "gsa1_wheel_face_pad", W.PAD_BUTTONS)
     panel:ControlHelp("LT does not turn the camera while the wheel is open.")
+    -- 0.9.5 (gsa1_095_plan.md 5.8): the board key and button in the open wheel - the Board page's own two settings
+    if GetConVar("gsa1_board_key") then
+        panel:Help("Board key in the open wheel")
+        binder(panel, "gsa1_board_key")
+        choice_combo(panel, "Board button in the open wheel", "gsa1_board_pad", W.PAD_BUTTONS)
+        panel:ControlHelp("Sonic and Tails get on a board, or off it, and the wheel closes. More on the Board page.")
+    end
     -- pointing and the look
     panel:NumSlider("Mouse sensitivity in the wheel", "gsa1_wheel_mouse", 0.25, 4, 2)
     panel:ControlHelp("How far the mouse moves to reach a slot.")
@@ -1970,7 +2027,8 @@ function W.BuildPage(panel)
     E.resetButton = resetB
     panel:ControlHelp("Your wheels are kept in garrysmod/data/gsa1/emote_wheel.txt. The list shows the internal names the "
         .. "game's developers gave the animations (custom names come later); animations made for props (carrying, set "
-        .. "pieces, Big's fishing, the board) play without the prop; an animation pauses while your character is off "
+        .. "pieces, Big's fishing, the board - to ride one: Board page) play without the prop; an animation pauses while "
+        .. "your character is off "
         .. "screen.")
     panel:Help("Status")
     live_label(panel, function() return W.StatusLines(E) end)

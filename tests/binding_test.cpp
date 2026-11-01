@@ -589,6 +589,21 @@ static void test_092(MockLua &L, const Val &g)
           "Tick(..., rawStick, hostFlags 1, camOrigin, camTarget) -> %g pairs; GetState: host_flags %g, water_attr %g, "
           "in_water %s, the camera recorded", r.empty() ? -1.0 : r[0].num, st.tab->field("host_flags").num,
           st.tab->field("water_attr").num, st.tab->field("in_water").b ? "true" : "false");
+    // 0.9.5 (sadc docs/research/board095_cam.md 6.3 G3): gsa1.TICK_HOST_CAMERA is true with libsa1's SA1_INPUT_HOST_CAMERA
+    // and the tick that had camOrigin / camTarget passed them (the session set SA1_INPUT_HOST_CAMERA); host flag 0x4 from
+    // Lua never does (only the water bits are taken), nor a tick without a camera
+    {
+        bool passed = c && c->host_camera_passed;
+        auto r4 = L.call("Tick", {Val::number(rid), Val::number(0), Val::number(0), Val::number(180), Val::number(0),
+                                  Val::number(1.0 / 30.0), Val::boolean(false), Val::number(4)});
+        bool lua_bit = c && c->host_camera_passed;
+        uint32_t flags_after = c ? c->host_flags_last : 99u;
+        CHECK(g.tab->field("TICK_HOST_CAMERA").b == gsa1::kHostCameraInput && passed == gsa1::kHostCameraInput &&
+                  r4.size() == 1 && !lua_bit && flags_after == 0u,
+              "G3: gsa1.TICK_HOST_CAMERA %s; Tick(..., camOrigin, camTarget) %s the camera to libsa1 (host_camera_passed); "
+              "hostFlags 4 without a camera passes nothing (flags 0x%X)", gsa1::kHostCameraInput ? "true" : "false",
+              passed ? "passed" : "did not pass", (unsigned)flags_after);
+    }
     bad += is_nil_msg(L.call("Tick", {Val::number(rid), Val::number(0), Val::number(0), Val::number(180), Val::number(0),
                                       Val::number(1.0 / 30.0), Val::boolean(false), Val::string("water")}));
     bad += is_nil_msg(L.call("Tick", {Val::number(rid), Val::number(0), Val::number(0), Val::number(180), Val::number(0),

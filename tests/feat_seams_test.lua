@@ -5,7 +5,9 @@
 -- The addon's client through its autorun on tests/lua_mock.lua, in Garry's Mod's own LuaJIT:
 --   lua_host tests/feat_seams_test.lua <tests dir> <addon/lua dir>
 -- Part 1: with no feature using them nothing changes (0.9.1's behaviour: the view's yaw, the chase view, the keys, the
--- 20 Hz state send). Part 2: every seam is called and does what it says.
+-- 20 Hz state send). Part 2: every seam is called and does what it says. 0.9.5 (sadc docs/research/board095_cam.md 6.3 G4,
+-- G5): "The game uses this camera" (gsa1_cam_real) - 0: GSA1.TickCamera gives nothing and the tick has no camera; 1: this
+-- frame's view and a point 100 units ahead of it; one session-log line per change; its check box on the Camera page.
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
 local M = host_load(host_read(tests .. "/lua_mock.lua"), "lua_mock.lua")()
 M.root = root
@@ -151,6 +153,80 @@ G.TICK_HOST_CAMERA = false
 check(asked_without == 0 and cam_calls >= 2 and M.ticks.last.co and M.ticks.last.co.z == 7 and M.ticks.last.ct.z == 8,
     "GSA1.TickCamera: not asked while the module does not take a camera; then its origin and target go into the tick")
 GSA1.TickCamera = tc0
+
+-- 0.9.5 G4: gsa1_cam_real (default 1) - the default seam passes this frame's view, 0 passes none
+do
+    local camLines = {}
+    local log0 = GSA1.Log
+    GSA1.Log = function(kind, fmt, ...)
+        if kind == "camera" then camLines[#camLines + 1] = string.format(fmt, ...) end
+        return log0(kind, fmt, ...)
+    end
+    local cr = GSA1.cv.cam_real
+    G.TICK_HOST_CAMERA = true
+    frames(3)
+    local v = GSA1.view
+    local vo, fwd = Vector(v.origin), v.angles:Forward()
+    frames(1)
+    local t1 = M.ticks.last
+    local d = t1.ct and t1.co and (t1.ct - t1.co) or Vector()
+    local on_ok = t1.co ~= nil and (t1.co - vo):Length() < 1e-6 and math.abs(d:Length() - 100) < 1e-6 and
+        (d * 0.01 - fwd):Length() < 1e-6
+    RunConsoleCommand("gsa1_cam_real", "0")
+    frames(2)
+    local off_ok = GSA1.TickCamera(C) == nil and M.ticks.last.co == nil and M.ticks.last.ct == nil
+    RunConsoleCommand("gsa1_cam_real", "1")
+    frames(2)
+    local back_ok = M.ticks.last.co ~= nil
+    -- a camera entity (G-SA1's view not in use): no camera, the line says why
+    M.player.view_entity = { removed = false }
+    frames(4)
+    local ent_ok = M.ticks.last.co == nil
+    M.player.view_entity = nil
+    frames(3)
+    G.TICK_HOST_CAMERA = false
+    GSA1.Log = log0
+    check(cr ~= nil and cr:GetString() == "1" and cr.lo == 0 and cr.hi == 1 and cr.client and cr.save,
+        "gsa1_cam_real: a client setting, archived, default 1, 0 .. 1")
+    check(on_ok and off_ok and back_ok and ent_ok, "G4 gsa1_cam_real 1: the tick gets this frame's view and a point 100 "
+        .. "units ahead (%s); 0: GSA1.TickCamera gives nil and the tick has no camera (%s); 1 again (%s); a camera entity: "
+        .. "none (%s)", tostring(on_ok), tostring(off_ok), tostring(back_ok), tostring(ent_ok))
+    -- (the TickCamera case above already logged "yours": a line only when it changes)
+    local want = { "the game's camera: its own, behind the character", "the game's camera: yours",
+                   "the game's camera: its own (G-SA1's view not in use", "the game's camera: yours" }
+    local lines_ok = #camLines == #want
+    for i, w in ipairs(want) do
+        lines_ok = lines_ok and camLines[i] ~= nil and string.find(camLines[i], w, 1, true) == 1
+    end
+    check(lines_ok, "the session log: one line per change (%d lines: %s)", #camLines, table.concat(camLines, " | "))
+end
+
+-- 0.9.5 G5: the check box on Options > G-SA1 > Camera
+do
+    M.menu = {}
+    M.run_hook("PopulateToolMenu")
+    local page
+    for _, e in ipairs(M.menu) do if e.class == "gsa1_camera" then page = e end end
+    local calls = {}
+    local any = setmetatable({}, { __index = function(t) return function() return t end end })
+    local P = setmetatable({}, { __index = function(_, k)
+        return function(_, ...)
+            calls[#calls + 1] = { k, ... }
+            return any
+        end
+    end })
+    local built = page and pcall(page.cpanel, P)
+    local box, help = nil, nil
+    for i, c in ipairs(calls) do
+        if c[1] == "CheckBox" and c[3] == "gsa1_cam_real" then
+            box = c
+            help = calls[i + 1]
+        end
+    end
+    check(built and box and box[2] == "The game uses this camera" and help and help[1] == "ControlHelp" and
+        string.find(tostring(help[2]), "Big's fishing line", 1, true) ~= nil, "G5 Options > G-SA1 > Camera: \"%s\" "
+        .. "(gsa1_cam_real) with its help line", box and box[2] or "-")
+end
 
 -- 3. L6, the client half: CreateMove lets jump and attack through while the player is dead --------------------------------
 M.keys = IN_JUMP + IN_ATTACK + IN_ATTACK2 + IN_DUCK

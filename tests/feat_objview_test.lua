@@ -756,4 +756,44 @@ do
         .. "copy (pictures %d)", tostring(markers), pics(fr))
 end
 
+-- 0.9.5 (gsa1_095_plan.md 5.5, review R.11): pictures that are not SET objects (the boards of feat/cl_board.lua) through the
+-- same copy, refresh and draw path - V.ExtraAdd / ExtraDraw / ExtraBounds / ExtraRemove: their own kind, one copy per
+-- description shared by every key, drawn at any pose, kept by V.ClearCopies, freed V.RETIRE s after the last key
+do
+    local c0 = #MOD.calls
+    local desc = { kind = 2, type = 0x100, params = { 1, 0, 0 }, state = 1 }
+    local okadd = V.ExtraAdd("test:a", desc) and V.ExtraAdd("test:b", desc)
+    frame(4)
+    local adds, last = 0, nil
+    for i = c0 + 1, #MOD.calls do
+        local c = MOD.calls[i]
+        if c[1] == "PreviewAdd" and c[3] == 0x100 then
+            adds = adds + 1
+            last = c
+        end
+    end
+    pushes = {}
+    local d1 = V.ExtraDraw("test:a", Vector(10, 20, 30), Angle(0, 45, 0), 0)
+    local d2 = V.ExtraDraw("test:b", Vector(-10, 0, 0), Angle(0, 0, 0), 1)
+    local p1 = pushes[1]
+    local _, _, minz = V.ExtraBounds("test:a")
+    local clr0 = n_of("PreviewClear")
+    V.ClearCopies("a test", true)
+    local kept = V.ExtraDraw("test:a", Vector(10, 20, 30), Angle(0, 45, 0), 0)
+    local no_clear = n_of("PreviewClear") == clr0
+    V.ExtraRemove("test:a")
+    V.ExtraRemove("test:b")
+    local r0 = n_of("PreviewRemove")
+    M.T = M.T + V.RETIRE + 1
+    frame(2)
+    local freed = n_of("PreviewRemove") > r0 and next(V.xdescs) == nil
+    check(okadd and adds == 1 and last and last[2] == 2 and last[4] == 1 and d1 == true and d2 == true and p1 and
+        p1.t.x == 10 and p1.t.z == 30 and p1.a.y == 45 and minz == -12 and kept == true and no_clear and freed and
+        V.ExtraDraw("test:a", Vector(), Angle(), 0) == false,
+        "(0.9.5) the extra pictures: two keys of one description (Tails' BOARD, variant 1) share ONE PreviewAdd with their "
+        .. "own kind (2, whatever the objects' kind is); drawn at a pose (the model matrix at 10 20 30, yaw 45); "
+        .. "ExtraBounds gives PreviewInfo's bounds (minz %s); V.ClearCopies keeps them (no PreviewClear); removed: the copy "
+        .. "goes V.RETIRE s later", tostring(minz))
+end
+
 return done()

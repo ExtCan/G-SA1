@@ -554,6 +554,8 @@ function S.KeyDown()
 end
 function S.KeyThink(C)
     local down = S.KeyDown()
+    -- 0.9.5: nothing while the emote wheel is open or a press just closed it (its board key / button may be this one)
+    if GSA1.Wheel and (GSA1.Wheel.open or (GSA1.Wheel.guardTicks or 0) > 0) then S.keyDown = down return end
     if down and not S.keyDown then S.Press(C, S.cmdDown and "the command +gsa1_super" or "the key") end
     S.keyDown = down
 end

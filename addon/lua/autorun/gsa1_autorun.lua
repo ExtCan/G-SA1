@@ -11,9 +11,9 @@
 GSA1 = GSA1 or {}
 
 local shared = { "gsa1/sh_config.lua", "gsa1/sh_net.lua" }
-local client = { "gsa1/cl_log.lua", "gsa1/cl_hitch.lua", "gsa1/cl_module.lua", "gsa1/cl_collision.lua", "gsa1/cl_pad.lua",
-                 "gsa1/cl_textures.lua", "gsa1/cl_warm_census.lua", "gsa1/cl_warm.lua", "gsa1/cl_render.lua",
-                 "gsa1/cl_character.lua", "gsa1/cl_menu.lua" }
+local client = { "gsa1/cl_log.lua", "gsa1/cl_hitch.lua", "gsa1/cl_gcmeter.lua", "gsa1/cl_module.lua",
+                 "gsa1/cl_collision.lua", "gsa1/cl_pad.lua", "gsa1/cl_textures.lua", "gsa1/cl_warm_census.lua",
+                 "gsa1/cl_warm.lua", "gsa1/cl_render.lua", "gsa1/cl_character.lua", "gsa1/cl_menu.lua" }
 
 -- the feature files, by kind (sh / cl / sv), each sorted
 local function feature_files()

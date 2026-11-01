@@ -17,6 +17,11 @@
 -- their pair and origin, gsa1_depthfix 0 / 1 / 2 (R1b: one push of the depth texture per frame after the main view's opaque
 -- renderables; none with 1, none in depth views), GSA1.ViewInfo (D1), the Rendering page's control, the debug line.
 -- On 0.9.1's files the R1 / R2 / R2b checks fail (5 per variant); with 0.9.2's all pass.
+-- 0.9.5 (sadc docs/research/gsa1_095_plan.md 4.10, 5.5 with its review R.10; board095_perf.md P1): section 3 - the board's
+-- batches (SA1_DRAW_BOARD 0x4000) drawn with gsa1_effects 0 and in first person (gsa1_set_draw never hides them), a
+-- BOARD | SHADOW batch by gsa1_shadow; GSA1.DrawCharacterView draws exactly the batches one colour view draws (both passes,
+-- the effects / shadow / objects switches, the hidden batches), never in a frame the main view did not draw, counted as its
+-- own kind and never as "main". The sun shadow (its own test, feat_liveshadow_test.lua) is off in these worlds.
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
 -- (GMod's own print goes to the engine console, which lua_host does not have: the mock's print writes through host_write;
 -- before the first mock is loaded host_write is used directly)
@@ -37,6 +42,17 @@ local function batch_list(variant)
         { 2, 58, 0x841, 4, 5, 11, 1, 2, 1 },
     }
     if variant == "fxoff" then L[#L + 1] = { 0, 3, 0x40, 1, 0, 3, 0, 20, 1 } end
+    if variant == "board" then
+        L = {
+            { 0, 0, 0x20, 1, 0, 3, 0, 100, 1 },         -- 1 the body
+            { -1, -1, 0x40C0, 1, 0, 0, 0, 44, 1 },      -- 2 the board (BOARD | EFFECT | NO_TEXTURE: board095_lib.md 2.3 G)
+            { 1, 2, 0x255, 4, 1, 3, 1, 2, 2 },          -- 3 an additive effect sprite
+            { 2, 58, 0x841, 4, 5, 11, 1, 2, 1 },        -- 4 the blob shadow (mask)
+            { 2, 58, 0x4841, 4, 5, 11, 1, 2, 1 },       -- 5 a board batch that is a shadow too (BOARD | SHADOW)
+            { 0, 1, 0x1040, 1, 0, 3, 0, 10, 1 },        -- 6 a game object (OBJECT | EFFECT)
+            { 0, 3, 0x40, 1, 0, 3, 0, 20, 1 },          -- 7 an opaque effect
+        }
+    end
     return L
 end
 
@@ -125,6 +141,8 @@ local function world(variant)
     GSA1.World.state, GSA1.World.info = "applied", { min_z = -10000 }
     GSA1.worldMap, GSA1.worldInfo = game.GetMap(), { min_z = -10000 }
     GSA1.cv.prewarm:SetString("0")
+    -- (0.9.5: the sun shadow pushes a render target of its own after the opaque renderables: tested in its own file)
+    if GetConVar("gsa1_sunshadow") then RunConsoleCommand("gsa1_sunshadow", "0") end
     if variant == "fxoff" then GSA1.cv.effects:SetString("0") end
     GSA1.Spawn("sonic")
     E.C = GSA1.Char
@@ -448,6 +466,127 @@ else
         ~= nil, "the debug line: %s", line)
 end
 finish(M)
+
+-- 3. 0.9.5: the board's batches; GSA1.DrawCharacterView --------------------------------------------------------------------
+host_write("\n-- 0.9.5: the board's batches, GSA1.DrawCharacterView\n")
+do
+    local E3 = world("board")
+    local M3 = E3.M
+    local check3 = M3.check
+    if not (E3.C and E3.ent) then
+        check3(false, "the addon loads and Sonic spawns%s", E3.loadError and (": " .. E3.loadError) or "")
+    else
+        local C = E3.C
+        local MAIN = { { name = "main", viewid = V_MAIN } }
+        local function main_batches()
+            local out = E3.frame(MAIN)
+            return sorted_batches(out.main)
+        end
+        -- one extra view right after this frame's main view, recorded like a view (the recorders' sink)
+        local function view_batches(v)
+            E3.late = E3.newView("extra")
+            local ok, why = GSA1.DrawCharacterView(C, v)
+            local rec = E3.late
+            E3.late = nil
+            return sorted_batches(rec), ok, why, rec
+        end
+        local VIEW = { eye = Vector(C.drawPos.x + 46, C.drawPos.y, C.drawPos.z + 31), ang = Angle(0, 180, 0), fov = 30,
+                       x = 0, y = 0, w = 256, h = 192, znear = 4, zfar = 400 }
+        local cv = GSA1.cv
+        E3.frame(MAIN)
+        -- (a) third person: everything; Effects off: the board stays (it is EFFECT too); Shadows off: the board's shadow
+        -- batch goes with the blob; gsa1_set_draw 0: the board stays, the object goes
+        local tp = main_batches()
+        local tpView, okv, why = view_batches(VIEW)
+        cv.effects:SetString("0")
+        local fx0 = main_batches()
+        local fx0View = view_batches(VIEW)
+        cv.effects:SetString("1")
+        cv.shadow:SetString("0")
+        local sh0 = main_batches()
+        local sh0View = view_batches(VIEW)
+        cv.shadow:SetString("1")
+        RunConsoleCommand("gsa1_set_draw", "0")
+        local obj0 = main_batches()
+        local obj0View = view_batches(VIEW)
+        RunConsoleCommand("gsa1_set_draw", "1")
+        check3(tp == "1 2 3 4 5 6 7" and fx0 == "1 2 4 5 6" and sh0 == "1 2 3 6 7" and obj0 == "1 2 3 4 5 7",
+            "third person: all \"%s\"; Effects off \"%s\" (the board stays); Shadows off \"%s\" (the board's shadow "
+            .. "batch goes with the blob); gsa1_set_draw 0 \"%s\" (the board stays)", tp, fx0, sh0, obj0)
+        check3(okv == true and tpView == tp and fx0View == fx0 and sh0View == sh0 and obj0View == obj0,
+            "GSA1.DrawCharacterView draws exactly the batches of one colour view, both passes, under every switch "
+            .. "(\"%s\", \"%s\", \"%s\", \"%s\"; %s)", tpView, fx0View, sh0View, obj0View, tostring(why or "drawn"))
+        -- (b) the hidden batches stay hidden in the extra view too
+        E3.frame(MAIN)
+        C.hidden = C.hidden or {}
+        C.hidden[3] = true
+        local hid = view_batches(VIEW)
+        C.hidden[3] = nil
+        check3(hid == "1 2 4 5 6 7", "a hidden batch is not drawn in the extra view either (\"%s\")", hid)
+        -- (c) never in a frame the main view did not draw
+        M3.frameNo = M3.frameNo + 1
+        local nd, okn, whyn = view_batches(VIEW)
+        check3(okn == false and whyn == "not drawn this frame" and nd == "", "a frame the main view did not draw: "
+            .. "nothing (%s, \"%s\")", tostring(okn), tostring(whyn))
+        -- (d) its own kind in the views line, never "main"; the camera-relative eye; the filter and one material
+        E3.frame(MAIN)
+        local _, _, _, rec = view_batches(VIEW)
+        local line = GSA1.ViewsLine()
+        local O = C.relOrigin
+        local relOk = rec.relEye ~= nil and (O == nil or (math.abs(rec.relEye.x - (VIEW.eye.x - O.x)) < 1e-6 and
+            math.abs(rec.relEye.z - (VIEW.eye.z - O.z)) < 1e-6))
+        check3(string.find(line, "main 1,", 1, true) ~= nil and string.find(line, "the Faces page's close-up 1", 1, true)
+            ~= nil and relOk, "counted as its own view (\"%s\"), not as main; its eye camera-relative (%s)", line,
+            O and "relative" or "absolute")
+        E3.frame(MAIN)
+        local flat = CreateMaterial("test_flat", "UnlitGeneric", {})
+        local fv = { eye = VIEW.eye, ang = VIEW.ang, ortho = { left = -48, right = 48, top = -48, bottom = 48 }, x = 0,
+                     y = 0, w = 256, h = 256, znear = 1, zfar = 400, opaque = true, material = flat, kind = "sunshadow",
+                     hitch = false, filter = function(b) return b.pass == 0 and bit.band(b.flags, 0x1000) == 0 end }
+        local starts0 = #M3.camStarts
+        local fb, okf, _, recf = view_batches(fv)
+        local onlyFlat = #recf.mats > 0
+        for _, m in ipairs(recf.mats) do if m ~= flat then onlyFlat = false end end
+        local cs = M3.camStarts[#M3.camStarts]
+        check3(okf and fb == "1 2 7" and onlyFlat and #M3.camStarts == starts0 + 1 and cs and cs.ortho == fv.ortho and
+            string.find(GSA1.ViewsLine(), "sun shadow 1", 1, true) ~= nil, "an orthographic extra view (cam.Start with "
+            .. "the ortho box) with a filter and one material for every batch: \"%s\", %d materials all the given one: %s",
+            fb, #recf.mats, tostring(onlyFlat))
+        -- (e) first person: the board (and the object), never the body; Effects off: the board stays; Shadows off: its
+        -- shadow batch goes; gsa1_set_draw 0: the board stays (review R.10)
+        local dist = cv.cam_dist:GetString()
+        cv.cam_dist:SetString("0")
+        local fp = main_batches()
+        cv.effects:SetString("0")
+        local fpfx0 = main_batches()
+        cv.effects:SetString("1")
+        cv.shadow:SetString("0")
+        local fpsh0 = main_batches()
+        cv.shadow:SetString("1")
+        RunConsoleCommand("gsa1_set_draw", "0")
+        local fpobj0 = main_batches()
+        RunConsoleCommand("gsa1_set_draw", "1")
+        cv.cam_dist:SetString(dist)
+        check3(fp == "2 5 6" and fpfx0 == "2 5 6" and fpsh0 == "2 6" and fpobj0 == "2 5", "first person: the board and "
+            .. "the object only \"%s\"; Effects off \"%s\"; Shadows off \"%s\"; gsa1_set_draw 0 \"%s\" (the board stays: "
+            .. "review R.10)", fp, fpfx0, fpsh0, fpobj0)
+        check3((C.boardBatches or 0) == 2, "C.boardBatches counts the board's batches (%s)", tostring(C.boardBatches))
+        -- (f) the depth pass in first person with only the board: drawn there too (the board is part of the character)
+        cv.cam_dist:SetString("0")
+        RunConsoleCommand("gsa1_set_draw", "0")
+        local VD = { { name = "ssao", viewid = V_SSAO, rt = "_rt_ResolvedFullFrameDepth", flags = F_RENDER + F_SSAO,
+                       depth = true }, { name = "main", viewid = V_MAIN } }
+        local D = E3.frame(VD)
+        RunConsoleCommand("gsa1_set_draw", "1")
+        cv.cam_dist:SetString(dist)
+        check3(sorted_batches(D.ssao) == "2", "first person, gsa1_set_draw 0: the depth pass draws the board (\"%s\")",
+            sorted_batches(D.ssao))
+        -- (g) the draw list names the bit
+        check3(GSA1.DrawFlagText(0x40C0) == "EFFECT|NOTEX|BOARD", "the draw list's flag names: %s",
+            GSA1.DrawFlagText(0x40C0))
+    end
+    finish(M3)
+end
 
 print(string.format("\n%d checks, %d failed", TOTAL, FAILED))
 return FAILED == 0

@@ -5,6 +5,11 @@
 -- pre-warm and the materials are in the session log, and measures the Lua garbage and Lua time per frame.
 --   lua_host tests/frame_test.lua <tests dir> <addon/lua dir> [measure]
 -- (measure: only print the figures - for an older addon without the session log or the pre-warm.) Round 4c.
+-- 0.9.5 (sadc docs/research/board095_perf.md G1 / 3.3, gsa1_095_plan.md 6.5 task 7): first 1200 frames with the module and
+-- the world ready and NO character - G-SA1's own Lua garbage per frame under 64 bytes (0.9.4f: 320, one Vector and one
+-- Angle a frame for the sound listener: cl_character.lua update_audio) -; then the charge as before, now with the board's
+-- batches (a riding character: SA1_DRAW_BOARD) and the sun shadow on (feat/cl_liveshadow.lua: the frame runs the main
+-- view's PreRender / PostDrawOpaqueRenderables too), inside the same 4 KB budget.
 local tests, root, measure_only = arg[1] or "tests", arg[2] or "addon/lua", arg[3] == "measure"
 local M = host_load(host_read(tests .. "/lua_mock.lua"), "lua_mock.lua")()
 M.root = root
@@ -24,6 +29,9 @@ local function batches(pair, kind)
     memo[id] = out
     for i = 0, 17 do out[#out + 1] = { 0, i, 0x20, 1, 0, 3, 0, 55, 1 } end
     out[#out + 1] = { 0, 18, 0x21, 4, 5, 3, 1, 20, 1 }
+    -- 0.9.5: riding - the board's model draw and its motion draw (SA1_DRAW_BOARD | EFFECT | NO_TEXTURE (+ PALETTE_LIT))
+    out[#out + 1] = { -1, -1, 0x40C0, 1, 0, 0, 0, 44, 1 }
+    out[#out + 1] = { -1, -1, 0x40E0, 1, 0, 0, 0, 44, 1 }
     if pair >= 60 then
         out[#out + 1] = { 0, 19, 0x20, 1, 0, 3, 0, 40, 1 }
         out[#out + 1] = { 1, 0, 0x271, 1, 1, 3, 1, 120, 1 }
@@ -70,6 +78,87 @@ GSA1.LoadModule()
 GSA1.World.state, GSA1.World.info = "applied", { min_z = -10000 }
 GSA1.worldMap, GSA1.worldInfo = game.GetMap(), { min_z = -10000 }
 GSA1.cv.upgrade_light_speed_shoes = nil
+
+-- the frame with the main view's hooks (the sun shadow draws after the opaque renderables), its arguments made once
+local CMDT = setmetatable({}, { __index = function() return function() return 0 end end })
+local EYE, ANG = Vector(704, 132, -79), Angle(M.pitch, M.yaw, 0)
+local HUD = { "CHudHealth", "CHudBattery", "CHudAmmo", "CHudCrosshair", "CHudWeaponSelection", "CHudChat", "CHudGMod" }
+local function frame_full(dt)
+    M.dt = dt
+    M.T = M.T + dt
+    M.frameNo = M.frameNo + 1
+    M.run_hook("Think")
+    M.run_hook("CreateMove", CMDT)
+    local view = M.run_hook("CalcView", M.player, EYE, ANG, M.fov, 3, 30000)
+    M.view_origin = view and view.origin or EYE
+    M.run_hook("PreRender")
+    M.run_hook("PreDrawOpaqueRenderables", false, false, false)
+    for _, e in ipairs(M.entities) do
+        if not e.removed and e.Draw then e:Draw() end
+    end
+    M.run_hook("PostDrawOpaqueRenderables", false, false, false)
+    M.run_hook("PreDrawTranslucentRenderables", false, false)
+    for _, e in ipairs(M.entities) do
+        if not e.removed and e.DrawTranslucent then e:DrawTranslucent() end
+    end
+    M.run_hook("PostDrawTranslucentRenderables", false, false)
+    for _, n in ipairs(HUD) do M.run_hook("HUDShouldDraw", n) end
+    M.run_hook("HUDPaint")
+    M.run_hook("PostRender")
+end
+M.camStarts = nil     -- (the mock's own record of table views is not the addon's garbage)
+-- the ground for the sun shadow's traces (the trace's result table and its HitPos reused: what is measured is the addon's)
+M.traceLine = function(t)
+    local out = t.output or {}
+    local st, en = t.start, t.endpos
+    out.HitPos = out.HitPos or Vector()
+    out.Hit, out.StartSolid, out.Fraction = false, false, 1
+    local z = -143
+    if st.z >= z and en.z <= z and st.z ~= en.z then
+        local f = (st.z - z) / (st.z - en.z)
+        out.Hit, out.Fraction = true, f
+        out.HitPos:SetUnpacked(st.x + (en.x - st.x) * f, st.y + (en.y - st.y) * f, z)
+    end
+    return out
+end
+
+-- 0.9.5: no character - G-SA1's hooks' own garbage per frame (each outermost hook call measured; the driver's and the mock
+-- module's left out), one collection before the window and the collector stopped for it (board095_perf.md 1: a
+-- collection before every frame would count the Lua stack growing again as garbage)
+local nochar_per
+do
+    local acc, depth = 0, 0
+    local run0 = M.run_hook
+    local cg = collectgarbage
+    local function measured(ev, ...)
+        local first
+        for _, fn in pairs(M.hooks[ev] or {}) do
+            local outer = depth == 0
+            depth = depth + 1
+            local k0, m0 = cg("count"), mock_kb
+            local r = fn(...)
+            if outer then acc = acc + (cg("count") - k0) - (mock_kb - m0) end
+            depth = depth - 1
+            if first == nil and r ~= nil then first = r end
+        end
+        return first
+    end
+    -- (a long warm-up: the JIT compiler's traces are objects of the collector too, made once)
+    for _ = 1, 900 do frame_full(1 / 60) end
+    M.run_hook = measured
+    for _ = 1, 300 do frame_full(1 / 60) end
+    acc = 0
+    cg("collect")
+    cg("stop")
+    for _ = 1, 1200 do frame_full(1 / 60) end
+    cg("restart")
+    M.run_hook = run0
+    nochar_per = acc * 1024 / 1200
+    info("no character, the module and the world ready: G-SA1's hooks made %.1f bytes of Lua garbage per frame over 1200 "
+        .. "frames (0.9.4f: about 320 in this mock - the sound listener's Vector and Angle every frame)", nochar_per)
+    check(GSA1.Char == nil and nochar_per < 64, "no character: G-SA1's own Lua garbage under 64 bytes per frame (%.1f; "
+        .. "0.9.4f: 320)", nochar_per)
+end
 GSA1.Spawn("sonic")
 check(GSA1.Char ~= nil, "Sonic spawned")
 if not GSA1.Char then
@@ -90,7 +179,7 @@ for f = 1, 600 do
     end
     local k0 = collectgarbage("count") - mock_kb
     local t0 = host_clock()
-    M.frame(1 / 60)
+    frame_full(1 / 60)
     local t1 = host_clock()
     local k1 = collectgarbage("count") - mock_kb
     if measure then
@@ -105,6 +194,13 @@ info("Lua garbage per frame while charged (frames 361-600; the mock module's own
     .. "are tables, larger than GMod's userdata): %.0f bytes; Lua time per frame (with the mock module): %.3f ms", per_frame,
     lua_ms / math.max(lua_n, 1))
 info("materials made: %d; render targets made: %d; mesh.Begin calls: %d", M.nmaterials, M.nrts, M.calls["mesh.Begin"] or 0)
+-- 0.9.5: the sun shadow drew in the measured frames (its silhouettes and receivers are inside the budget)
+local SS = GSA1.SunShadow
+local CB = GSA1.Char and GSA1.Char.boardBatches or 0
+check(SS and SS.stats and SS.stats.refreshes >= 200 and SS.grid and SS.grid.ncells > 0 and CB == 2,
+    "the sun shadow drew while charging on the board (%d silhouettes, %d receiver cells, %d board batches; the light: %s)",
+    SS and SS.stats and SS.stats.refreshes or 0, SS and SS.grid and SS.grid.ncells or 0, CB, SS and SS.light and
+    SS.light.text or "none")
 check(#M.reported == 0, "no Lua error in 600 frames%s", #M.reported > 0 and (": " .. M.reported[1]) or "")
 check(draws_missing == 0, "the character drew in every frame (%d frames without a draw)", draws_missing)
 -- owner note (plan 14.1e): a spawned camera (the Camera tool's gmod_cameraprop) sets the player's view entity; G-SA1's

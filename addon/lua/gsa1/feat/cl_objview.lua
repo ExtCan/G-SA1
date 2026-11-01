@@ -81,6 +81,14 @@ local QUARTER = Angle(0, 90, 0)       -- the record's rotation: the entity's ang
 local NONE = {}                       -- (an empty table that is never written)
 
 V.descs = V.descs or {}      -- [key] = description entry D (the copy, its batches, materials and static meshes)
+-- 0.9.5 (gsa1_095_plan.md 5.5, review R.11): pictures that are not SET objects (the board lying in a Board On box, the left
+-- boards: feat/cl_board.lua) through the same copy, refresh and draw path - V.ExtraAdd / V.ExtraRemove / V.ExtraDraw /
+-- V.ExtraBounds below. Each description carries its OWN kind (D.kind: 0 or 2, whatever V.kind is - a Knuckles player sees
+-- Sonic's board) and resolves its materials with it; one copy per (kind, type, variant, state) is drawn at every pose
+-- (libsa1 holds 256 copies of a kind); they are not dropped by V.ClearCopies (a character change), only by a fault or
+-- when no extra has used them for V.RETIRE seconds
+V.xdescs = V.xdescs or {}    -- [key] = an extra's description entry D (D.kind, D.refs)
+V.extras = V.extras or {}    -- [the caller's key] = { desc, D, light, lightOrigin }
 V.ents = V.ents or {}        -- [entity index] = E (the entity's layout and this frame's pictures)
 V.pending = V.pending or {}  -- [entity index] = this client's own take of it, waiting for the server's state
 V.places = V.places or {}    -- [layout key] = the ring places of a ring group (gsa1.PreviewRingPlaces)
@@ -170,12 +178,14 @@ end
 -- every copy out (a kind change, a fault, the pictures off); call: tell the module
 function V.ClearCopies(why, call)
     local n = 0
+    -- 0.9.5: with extras alive the objects' copies are removed one by one (PreviewClear would take the extras too)
+    local keep = call ~= false and next(V.xdescs) ~= nil and gsa1 ~= nil and gsa1.PreviewRemove ~= nil
     for k, D in pairs(V.descs) do
         if D.id then n = n + 1 end
-        drop(D, false)
+        drop(D, keep)
         V.descs[k] = nil
     end
-    if call ~= false and gsa1 and gsa1.PreviewClear and n > 0 then gsa1.PreviewClear() end
+    if call ~= false and not keep and gsa1 and gsa1.PreviewClear and n > 0 then gsa1.PreviewClear() end
     V.places = {}
     if n > 0 and why then log("pictures: %d kinds of object cleared (%s)", n, why) end
 end
@@ -183,7 +193,7 @@ end
 local addDesc = { kind = 0, type = 1, params = { 0, 0, 0 }, state = 1, user_bits = 0 }
 local function add_copy(D, now)
     if (D.retry or 0) > now then return false end
-    addDesc.kind, addDesc.type, addDesc.state = V.kind or 0, D.type, D.state
+    addDesc.kind, addDesc.type, addDesc.state = D.kind or V.kind or 0, D.type, D.state
     addDesc.params[1] = D.p1
     local id, err, code = gsa1.PreviewAdd(addDesc)
     if id then
@@ -214,6 +224,7 @@ function V.Fault(err)
     V.working = false
     V.faultAt = now_s()
     V.ClearCopies(nil, false)
+    for _, D in pairs(V.xdescs) do drop(D, false) end       -- (0.9.5: the extras are made again with the rest)
 end
 
 -- the materials of a description's batches: cl_textures.lua's of the pictures' kind; logoMats: the same with the Extra
@@ -225,7 +236,7 @@ local function resolve_mats(D)
     D.hasLogo = false
     for i = 1, D.batches.count do
         local b = D.batches[i]
-        local m = T and T.Material(V.kind or 0, b) or nil
+        local m = T and T.Material(D.kind or V.kind or 0, b) or nil
         D.mats[i] = m
         D.logoMats[i] = m
         if extra and panel and b.archive == panel[1] and b.tex == panel[2] then
@@ -628,6 +639,18 @@ function V.Think()
             if D.id and D.anchor then V.Refresh(D, eye, ang, D.anchor) end
         end
     end
+    -- 0.9.5: the extras' copies (used while an extra holds them; refreshed like the objects')
+    for key, D in pairs(V.xdescs) do
+        if (D.refs or 0) > 0 then D.used = now end
+        if now - D.used > V.RETIRE then
+            drop(D, true)
+            V.xdescs[key] = nil
+        else
+            any = true
+            if not D.id then add_copy(D, now) end
+            if D.id then V.Refresh(D, eye, ang, D.anchor) end
+        end
+    end
     if any then V.lastGone = now end
     if (any or (V.lastGone and now - V.lastGone < V.TICK_AFTER)) and gsa1.PreviewTick then
         local ok, err, code = gsa1.PreviewTick(FrameTime())
@@ -666,7 +689,7 @@ function V.DrawDesc(D, pass, depth, color, logo, alphaBlend, inst)
         if b and b.pass == pass and b.tris > 0 then
             local mat
             if depth then
-                mat = T.DepthMaterial(V.kind or 0, b, color)
+                mat = T.DepthMaterial(D.kind or V.kind or 0, b, color)
             else
                 mat = mats[i]
             end
@@ -754,6 +777,107 @@ function V.DrawEntity(ent, pass, flags)
     end
     if res == 0 and E.wait then return "pending" end
     return res > 0
+end
+
+-- 0.9.5: the extra pictures (gsa1_095_plan.md 5.5, review R.11) ----------------------------------------------------------
+-- V.ExtraAdd(key, desc): a picture under the caller's key (desc: a gsa1.PreviewAdd description {kind, type, params, state};
+-- the same table again changes nothing); its copy is shared per (kind, type, params[1], state) and made in V.Think
+function V.ExtraAdd(key, desc)
+    if key == nil or type(desc) ~= "table" then return false end
+    local e = V.extras[key]
+    if e and e.desc == desc and e.D then return true end
+    local kind, t = tonumber(desc.kind) or 0, tonumber(desc.type) or 0
+    local p = type(desc.params) == "table" and desc.params or NONE
+    local p1, state = tonumber(p[1]) or 0, tonumber(desc.state) or 1
+    local dkey = string.format("x%d:%d:%d:%d", kind, t, p1, state)
+    local D = V.xdescs[dkey]
+    if not D then
+        D = { key = dkey, type = t, p1 = p1, state = state, kind = kind, extra = true, gen = -1, batches = { count = 0 },
+              mats = {}, logoMats = {}, meshes = {}, used = now_s(), born = now_s(), refs = 0 }
+        V.xdescs[dkey] = D
+    end
+    if e and e.D and e.D ~= D then e.D.refs = math.max(0, (e.D.refs or 1) - 1) end
+    if not (e and e.D == D) then D.refs = (D.refs or 0) + 1 end
+    V.extras[key] = { desc = desc, D = D, light = e and e.light or nil, lightOrigin = e and e.lightOrigin or nil }
+    D.used = now_s()
+    return true
+end
+
+-- V.ExtraRemove(key): the picture goes (its copy V.RETIRE seconds after its last extra)
+function V.ExtraRemove(key)
+    local e = V.extras[key]
+    if not e then return false end
+    V.extras[key] = nil
+    if e.D then e.D.refs = math.max(0, (e.D.refs or 1) - 1) end
+    return true
+end
+
+-- V.ExtraBounds(key) -> minx, miny, minz, maxx, maxy, maxz (HU, object space; the copy's last pair) | nil
+function V.ExtraBounds(key)
+    local e = V.extras[key]
+    local D = e and e.D
+    if not (D and D.id and gsa1 and gsa1.PreviewInfo) then return nil end
+    if D.boundsGen ~= D.gen then
+        D.boundsGen = D.gen
+        local ok, steps, settled, a, b, c, d, f, g = pcall(gsa1.PreviewInfo, D.id)
+        if ok and steps and (a ~= 0 or b ~= 0 or c ~= 0 or d ~= 0 or f ~= 0 or g ~= 0) then
+            local bb = D.bounds or {}
+            bb[1], bb[2], bb[3], bb[4], bb[5], bb[6] = a, b, c, d, f, g
+            D.bounds = bb
+        end
+    end
+    local bb = D.bounds
+    if not bb then return nil end
+    return bb[1], bb[2], bb[3], bb[4], bb[5], bb[6]
+end
+
+-- V.ExtraDraw(key, pos, ang, pass, flags): the picture at a pose (pass 0 opaque, 1 blended; flags: the STUDIO flags - the
+-- depth views draw the opaque batches with the depth material), lit by its own ambient cube (sampled when it moved);
+-- true when its copy is there (a new copy draws nothing in its first pair: false)
+function V.ExtraDraw(key, pos, ang, pass, flags)
+    local e = V.extras[key]
+    local D = e and e.D
+    if not (D and D.ready and D.id and pos and ang) then return false end
+    D.used = V.now or now_s()
+    if D.anchorFrame ~= V.frameNo then
+        D.anchorFrame = V.frameNo
+        D.anchor = D.anchor or Vector()
+        D.anchor:SetUnpacked(pos.x, pos.y, pos.z)
+    end
+    local kind = GSA1.ViewKind and GSA1.ViewKind(flags) or "main"
+    local df = GSA1.cv and GSA1.cv.depthfix
+    local depth = (kind == "ssao" or kind == "shadowdepth") and (not df or df:GetInt() >= 1)
+    if depth and pass ~= 0 then return true end
+    local lit = GSA1.cv and GSA1.cv.lighting and GSA1.cv.lighting:GetBool()
+    local light = lit and not depth and GSA1.LightCube ~= nil and GSA1.ApplyLightCube ~= nil
+    if light then
+        local lo = e.lightOrigin
+        if not lo then
+            lo = Vector()
+            e.lightOrigin = lo
+        end
+        if not e.light or math.abs(lo.x - pos.x) + math.abs(lo.y - pos.y) + math.abs(lo.z - 16 - pos.z) > 4 then
+            lo:SetUnpacked(pos.x, pos.y, pos.z + 16)
+            e.light = GSA1.LightCube(lo, e.light or {})
+        end
+        GSA1.ApplyLightCube(lo, e.light)
+    end
+    M = M or Matrix()
+    M:Identity()
+    M:SetTranslation(pos)
+    M:SetAngles(ang)
+    cam.PushModelMatrix(M)
+    local ok, err = pcall(V.DrawDesc, D, pass, depth, kind == "ssao", false, false, nil)
+    cam.PopModelMatrix()
+    if light then GSA1.EndLightCube() end
+    if not ok then
+        if not V.drawError then
+            V.drawError = true
+            log("pictures: drawing failed: %s", tostring(err))
+        end
+        return false
+    end
+    return true
 end
 
 -- the Dreamcast logo, drawn by code (owner answer O4) -----------------------------------------------------------------

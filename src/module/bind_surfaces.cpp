@@ -19,6 +19,12 @@
 //       puts `hash` into its world key so that a change starts one) and into the physics props' shapes (gsa1.ShapePhy;
 //       a change drops the props' shapes and the moving objects, which the addon then rebuilds).
 //   gsa1.SurfaceDefaults() -> { [type] = kinds string }, { [letter] = kinds string }   (the built-in table)
+// Version 3 (round 0.9.5: sadc docs/research/gsa1_095_plan.md 4.5, 5.4, 6.3 task 4 with its Review R.1; libsa1's
+// SA1_SURFACE_BOARD_SNOW / _SAND): the board-time kinds "boardsnow" / "boardsand" (aliases "board snow", "board sand"; COL
+// 0x8 / 0x10 only while that world's player rides a board), in SetSurfaceTable, SurfaceKind, SurfaceInfo (their walkable
+// areas `boardsnow` / `boardsand`, walls, kind_tris) and the defaults: snow and the letter J "dig,boardsnow", sand and N
+// "dig,boardsand". Physics props may carry them (they are floors); a prop's (COL word, board bits) pairs are capped to
+// SA1_MAX_OBJECT_GROUPS.
 //   gsa1.SurfaceKind(name [, letter]) -> kinds string, how   (what the current table makes of a surface type: the
 //       applied map's base chain when it knows the type; letter: the game-material letter, a one-character string or its
 //       code, for types the map does not know; how: "listed", "base <name>", "letter <L>" or "")
@@ -397,4 +403,9 @@ static const gsa1::FeatureFn k_surfaces_fns[] = {
     {"SurfaceKind", gsa1_surfaces_SurfaceKind},
     {"SurfaceInfo", gsa1_surfaces_SurfaceInfo},
 };
+// version 2 (0.9.2): every SA1 ground kind; version 3 (0.9.5, with libsa1's SA1_SURFACE_BOARD_SNOW): the board-time kinds
+#if defined(SA1_SURFACE_BOARD_SNOW)
+GSA1_FEATURE(surfaces, 3, k_surfaces_fns, nullptr, nullptr, gsa1::kCloseDefault);
+#else
 GSA1_FEATURE(surfaces, 2, k_surfaces_fns, nullptr, nullptr, gsa1::kCloseDefault);
+#endif

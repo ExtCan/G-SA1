@@ -23,12 +23,16 @@
 --   L11 an older module (no VisemeOverride; FEATURES.faces 2): the tester works, "Your mouths" greyed with its text.
 --   L12 the page build: the tester's controls with roles (mouthbtn x 8, showas, playall, stop, closeup, custom, resetchar,
 --       resetall, 7 mouthrow) and every ConVar of lipsync2_plan.md 7.1 / 7.2 bound to its control.
---   L13 the close-up's guard (review R.4b): RenderView only while the panel is painted visible, the box ticked and a
---       character with a face exists; this file's RenderView runs every render hook the loaded addon registered (and the
---       entities' Draw / DrawTranslucent, as the engine does) with EyePos() = the close-up's origin, a test-only hook proves
---       it ran (negative control: a RenderView that runs nothing fails that proof); during it no GSA1PreTick, Think,
---       gsa1.Tick, gsa1.Render, PollEvents, AudioUpdate or frame / tick counter advances; first person -> the text line, no
---       RenderView (review R.10); an error -> the text line, one log line, no further RenderView this session.
+--   L13 (0.9.5, sadc docs/research/board095_perf.md 2.4) the close-up draws the character ALONE into a 256 x 192 render
+--       target from PostRender: idle 5 pictures a second, no RenderView, one cam.Start3D(eye, ang, 30, 0, 0, 256, 192, 4,
+--       400) per picture with the eye 40 HU in front of the mouth (minus the frame's root when camera-relative); the target
+--       pushed / popped and cleared, Paint draws the texture; pointing at a sound: a picture in the same frame, then 30 a
+--       second (gsa1_mouth_closeup_fps); pointing at the picture: 30 a second; not painted / hidden: nothing after 0.25 s;
+--       off: nothing; a picture advances no tick, Render, PollEvents, AudioUpdate, clock or frame; it draws exactly the
+--       batches of one colour view (mesh.Begin and SetMaterial counts); the views line names it; fog off and restored;
+--       choice 2: RenderView into the target at the same rates with zfar 1500; first person -> the text line, no picture
+--       (review R.10); E-102 -> "E-102 has no face in the game"; an error -> one log line, the text, no further picture
+--       this session; one log line at the first picture.
 --   L14 garbage: 600 idle frames (the tester shown with nothing pointed at, and not shown) allocate nothing in the tester's
 --       code (F.TesterFrame and the tester's controls' Think; collectgarbage("count") with the collector stopped).
 --   lua_host tests/feat_mouthtest_test.lua <tests dir> <addon/lua dir>
@@ -55,11 +59,13 @@
 --   (F.MouthSerializeFile + the unreadable lines kept at its end), F.VisemeTableReset(kind), the summary ConVar. Keys:
 --   "AA", "AA.quiet", "AA.loud" (the "Show as" variant). The switch: VisemeOverride(kind, "" | spec) for every kind with a
 --   line, the file untouched.
---   The close-up: render.RenderView{origin, angles, x, y, w, h, fov = 30, drawviewmodel / drawhud / dopostprocess /
---   drawviewer = false} from the panel's Paint in pcall; the camera F.CLOSEUP_DIST (40) HU in front of
---   VisemeTable(kind).mouth_at {forward, up} (else 0.85 x CharacterInfo's height) looking back. It runs no tick and no
---   gsa1.Render (cl_render.lua draws the last batches); the session log's "views" line counts it as a second main view;
---   sprites in it face the main camera (PrepareView runs once per frame with the main eye).
+--   The close-up (0.9.5): gsa1_mouth_closeup 0 off / 1 the character alone (GSA1.DrawCharacterView into the render target
+--   gsa1_closeup_<format>, 256 x 192, near 4 / far 400) / 2 the world behind it (render.RenderView into the same target,
+--   far 1500); gsa1_mouth_closeup_fps 5..60 (30) while busy (T.active or the picture hovered), F.CLOSEUP_IDLE_FPS 5 else,
+--   only while Paint ran in the last F.CLOSEUP_SEEN 0.25 s (PostRender hook gsa1_mouthtest_closeup); the camera
+--   F.CLOSEUP_DIST (40) HU in front of VisemeTable(kind).mouth_at {forward, up} (else 0.85 x CharacterInfo's height)
+--   looking back. It runs no tick and no gsa1.Render; the session log's "views" line counts it as "the Faces page's
+--   close-up"; sprites in it face the main camera (PrepareView runs once per frame with the main eye).
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
 local M = host_load(host_read(tests .. "/lua_mock.lua"), "lua_mock.lua")()
 M.root = root
@@ -420,7 +426,7 @@ local function standin(kind)
                 return line
             end
             local child = standin(k)
-            if k == "CheckBox" or k == "NumSlider" or k == "TextEntry" then child.convar = a[2] end
+            if k == "CheckBox" or k == "NumSlider" or k == "TextEntry" or k == "ComboBox" then child.convar = a[2] end
             if k == "Help" or k == "ControlHelp" then child.text = a[1] end
             return child
         end
@@ -575,7 +581,7 @@ collect_thinkers()
 local btn = roles("mouthbtn")
 local words = {}
 for i, b in ipairs(btn) do words[i] = tostring(rawget(b, "gsa1Class")) end
-local want = { "showas", "playall", "stop", "closeup", "custom", "resetchar", "resetall", "closeuppic", "showing",
+local want = { "showas", "playall", "stop", "closeup", "closeupfps", "custom", "resetchar", "resetall", "closeuppic", "showing",
                "changelist", "usefor", "keya", "keyb", "weight", "scales", "pairshow", "pairuse", "mouthsummary",
                "microphone", "listening", "hearing", "warmup", "warmline" }
 local missing = {}
@@ -588,12 +594,13 @@ check(pok and #btn == 8 and table.concat(words, " ") == "1 2 3 4 5 6 7 8" and #r
 do
     local bound = bound_convars()
     local cvs = { "gsa1_lipsync_device_name", "gsa1_lipsync_hearing", "gsa1_lipsync_shapes_adapt", "gsa1_lipsync_shapes_log",
-                  "gsa1_mouth_closeup", "gsa1_lipsync_shapes_custom", "gsa1_mouth_summary" }
+                  "gsa1_mouth_closeup", "gsa1_mouth_closeup_fps", "gsa1_lipsync_shapes_custom", "gsa1_mouth_summary" }
     local miss = {}
     for _, n in ipairs(cvs) do
         if not bound[n] then miss[#miss + 1] = n end
     end
-    local defs = { gsa1_lipsync_device_name = { "" }, gsa1_lipsync_hearing = { "2", 1, 2 }, gsa1_mouth_closeup = { "1", 0, 1 },
+    local defs = { gsa1_lipsync_device_name = { "" }, gsa1_lipsync_hearing = { "2", 1, 2 }, gsa1_mouth_closeup = { "1", 0, 2 },
+                   gsa1_mouth_closeup_fps = { "30", 5, 60 },
                    gsa1_lipsync_shapes_custom = { "1", 0, 1 }, gsa1_mouth_summary = { nil } }
     local wrong = {}
     for n, w in pairs(defs) do
@@ -1030,93 +1037,211 @@ do
     frames(5, page_think)
 end
 
--- L13. the close-up ---------------------------------------------------------------------------------------------------------------
+-- L13. the close-up (0.9.5, sadc docs/research/board095_perf.md P1 / 2.4): the character alone, at a lower rate, only while
+-- the panel is painted ------------------------------------------------------------------------------------------------------
 do
     local pic = role("closeuppic")
-    local function paint() pic.Paint(pic, 256, 192) end
-    local counted = {}
-    local pre, think = 0, 0
-    hook.Add("GSA1PreTick", "gsa1_test_count", function() pre = pre + 1 end)
-    hook.Add("Think", "gsa1_test_count", function() think = think + 1 end)
-    frames(3, page_think)
-    local function snapshot()
-        return { pre = pre, think = think, tick = R.counts.Tick, render = R.counts.Render, poll = R.counts.PollEvents,
-                 audio = R.counts.AudioUpdate, T = M.T, frame = M.frameNo, clast = C.last, llast = L.last,
-                 gen = C.renderGen, vframe = GSA1.view and GSA1.view.frame }
+    local CU = F.closeup
+    local cuStarts, cuPush, cuPop, cuClear = {}, 0, 0, 0
+    local realStart3D, rp, rpop, rclr = cam.Start3D, render.PushRenderTarget, render.PopRenderTarget, render.Clear
+    local realFogMode, realGetFog = render.FogMode, render.GetFogMode
+    local realSetMat, realRectUV = surface.SetMaterial, surface.DrawTexturedRectUV
+    -- (only the close-up's: the ones with a viewport and planes; the main view's camera-relative Start3D has two arguments)
+    cam.Start3D = function(...) if select("#", ...) >= 9 then cuStarts[#cuStarts + 1] = { ... } end end
+    render.PushRenderTarget = function(...) cuPush = cuPush + 1 return rp(...) end
+    render.PopRenderTarget = function(...) cuPop = cuPop + 1 return rpop(...) end
+    render.Clear = function(...) cuClear = cuClear + 1 return rclr(...) end
+    render.GetFogMode = function() return 1 end
+    local fogSet = {}
+    render.FogMode = function(m) fogSet[#fogSet + 1] = m end
+    local texDraws = 0
+    surface.SetMaterial = function() end
+    surface.DrawTexturedRectUV = function() texDraws = texDraws + 1 end
+    local savedFogNone = MATERIAL_FOG_NONE
+    MATERIAL_FOG_NONE = 0
+    check(pic ~= nil and CU ~= nil and GSA1.DrawCharacterView ~= nil and role("closeupfps") ~= nil, "L13 the close-up's "
+        .. "parts are there (the picture, its state, GSA1.DrawCharacterView, the pictures-per-second slider)")
+    -- one frame as Garry's Mod runs it with the page shown: the page's Thinks, the world (M.frame: Think ... the character's
+    -- Draw / DrawTranslucent ... PostRender), the panel's Paint after the world (VGUI), so its picture is the last frame's
+    local painted = true
+    local function frame1()
+        page_think()
+        M.frame(1 / 60)
+        if painted then pic.Paint(pic, 256, 192) end
     end
-    local function same(a, b)
-        for k, v in pairs(a) do
-            if b[k] ~= v then return false, k end
-        end
-        return true
+    local function count_refreshes(n)
+        local r0, rv0, s0 = CU.made, rv.calls, #cuStarts
+        for _ = 1, n do frame1() end
+        return CU.made - r0, rv.calls - rv0, #cuStarts - s0
     end
-    -- the negative control: a RenderView that runs nothing does not prove the hooks ran
-    rv.mode = "nothing"
-    local h0 = rv.hookSeen
-    paint()
-    local negative = rv.hookSeen == h0 and rv.calls == 1
-    rv.mode = "run"
-    local s0 = snapshot()
-    h0 = rv.hookSeen
-    local e0 = #rv.eyes
-    local calls0 = rv.calls
-    paint()
-    local s1 = snapshot()
-    local stable, which = same(s0, s1)
-    local eye = rv.eyes[#rv.eyes]
-    local lv = rv.last
-    local eyeOk = #rv.eyes == e0 + 1 and eye and lv and math.abs(eye.x - lv.origin.x) < 1e-6 and
-        math.abs(eye.z - lv.origin.z) < 1e-6
-    -- the camera: 40 HU in front of the mouth point (VisemeTable's mouth_at {6, 31}) facing back
-    local yaw = math.rad(tonumber(C.drawYaw) or 0)
-    local camOk = lv and math.abs(lv.origin.x - (C.drawPos.x + math.cos(yaw) * 46)) < 1e-6 and
-        math.abs(lv.origin.z - (C.drawPos.z + 31)) < 1e-6 and lv.fov == 30 and lv.hud == false and lv.post == false and
-        lv.vm == false and lv.w == 256 and lv.h == 192 and lv.x == 100 and lv.y == 200
-    check(negative, "L13 the negative control: a RenderView that runs nothing leaves the test hook unrun")
-    check(rv.calls == calls0 + 1 and rv.hookSeen == h0 + 1 and eyeOk and camOk, "L13 the close-up: one RenderView "
-        .. "{origin 40 HU in front of the mouth, fov 30, 256 x 192 at the panel, no HUD / view model / post-processing}; "
-        .. "the render hooks ran with EyePos() = its origin")
-    check(stable, "L13 during it no GSA1PreTick, Think, gsa1.Tick, gsa1.Render, PollEvents, AudioUpdate, clock, frame or "
-        .. "tick counter advanced%s", stable and "" or (": " .. tostring(which)))
-    -- not visible, the box off, no character, first person: no RenderView
-    local c1 = rv.calls
-    rawset(pic, "visible", false)
-    paint()
-    rawset(pic, "visible", nil)
-    RunConsoleCommand("gsa1_mouth_closeup", "0")
-    paint()
     RunConsoleCommand("gsa1_mouth_closeup", "1")
-    local dist = GSA1.cv.cam_dist:GetString()
-    RunConsoleCommand(GSA1.cv.cam_dist.name, "0")
+    RunConsoleCommand("gsa1_mouth_closeup_fps", "30")
+    frames(3, page_think)
+    pic.Paint(pic, 256, 192)
+    -- (1) idle: 5 pictures a second, no RenderView, one cam.Start3D per picture
+    local rv00 = rv.calls
+    local made, rvs, starts = count_refreshes(120)
+    check(made >= 9 and made <= 11 and rvs == 0 and starts == made, "L13 idle (nothing pointed at): %d pictures in 2 s "
+        .. "(5 a second), %d RenderView, %d cam.Start3D (one per picture)", made, rvs, starts)
+    -- (2) the picture's camera: 40 HU in front of the mouth point, minus the frame's camera-relative origin when there is one
+    local s = cuStarts[#cuStarts]
+    local O = C.relOrigin
+    local yaw = math.rad(tonumber(C.drawYaw) or 0)
+    local ex = C.drawPos.x + math.cos(yaw) * 46 - (O and O.x or 0)
+    local ez = C.drawPos.z + 31 - (O and O.z or 0)
+    check(s and math.abs(s[1].x - ex) < 1e-6 and math.abs(s[1].z - ez) < 1e-6 and s[3] == 30 and s[4] == 0 and s[5] == 0 and
+        s[6] == 256 and s[7] == 192 and s[8] == 4 and s[9] == 400, "L13 cam.Start3D(eye, ang, 30, 0, 0, 256, 192, 4, 400) "
+        .. "with the eye 40 HU in front of the mouth (camera-relative: %s)", O and "yes" or "no")
+    -- (4) the render target pushed / popped, cleared; Paint draws the texture
+    check(cuPush == cuPop and cuClear >= made and texDraws > 0, "L13 the render target pushed / popped %d / %d, cleared, "
+        .. "the picture drawn in Paint (%d)", cuPush, cuPop, texDraws)
+    -- (3) camera-relative drawing (module feature "render" 1): the eye minus the frame's drawn root
+    G.FEATURES.render = 1
+    CU.at = -1e9
+    frame1()
+    frame1()
+    local s2 = cuStarts[#cuStarts]
+    local O2 = C.relOrigin
+    local yaw2 = math.rad(tonumber(C.drawYaw) or 0)
+    check(O2 ~= nil and s2 and math.abs(s2[1].x - math.cos(yaw2) * 46) < 1e-6 and math.abs(s2[1].z - 31) < 1e-6,
+        "L13 camera-relative: the eye is the close-up's origin minus the frame's root (%s; eye %s _ %s, want %s _ 31)",
+        O2 and "relative" or "absolute", tostring(s2 and s2[1].x), tostring(s2 and s2[1].z), tostring(math.cos(yaw2) * 46))
+    G.FEATURES.render = nil
+    frames(2, page_think)
+    -- (5) pointing at a sound: a picture at once, then 30 a second
+    local btn1 = roles("mouthbtn")[2]
+    hover(btn1, true)
+    local m0 = CU.made
+    frame1()
+    local first = CU.made - m0
+    made = count_refreshes(119)
+    hover(btn1, false)
+    check(first == 1 and made >= 58 and made <= 61, "L13 pointing at \"ah\": a picture in the same frame (%d), then %d in "
+        .. "the next 119 frames (30 a second)", first, made)
+    frames(30, page_think)
+    -- (6) pointing at the picture itself: 30 a second too
+    rawset(pic, "hovered", true)
+    made = count_refreshes(60)
+    rawset(pic, "hovered", nil)
+    check(made >= 29 and made <= 31, "L13 pointing at the picture: %d pictures in 1 s", made)
+    -- (7) not painted (the page hidden, the menu closed): nothing after F.CLOSEUP_SEEN
+    painted = false
+    made = count_refreshes(60)
+    painted = true
+    check(made <= 8, "L13 not painted: %d pictures in 1 s (only in the first 0.25 s: F.CLOSEUP_SEEN x 30)", made)
+    rawset(pic, "visible", false)
+    made = count_refreshes(60)
+    rawset(pic, "visible", nil)
+    check(made <= 8, "L13 the panel hidden: %d pictures in 1 s", made)
+    -- (8) off: nothing
+    RunConsoleCommand("gsa1_mouth_closeup", "0")
+    made = count_refreshes(60)
+    RunConsoleCommand("gsa1_mouth_closeup", "1")
+    check(made == 0, "L13 off: %d pictures", made)
+    -- (9) a picture advances no tick, Render, PollEvents, AudioUpdate; the clock and the frame stay
+    frames(2, page_think)
+    pic.Paint(pic, 256, 192)
+    CU.at = -1e9
+    local snap = { R.counts.Tick, R.counts.Render, R.counts.PollEvents, R.counts.AudioUpdate, M.T, M.frameNo, C.last,
+                   C.renderGen }
+    local okr = F.CloseupRefresh(SysTime())
+    local snap2 = { R.counts.Tick, R.counts.Render, R.counts.PollEvents, R.counts.AudioUpdate, M.T, M.frameNo, C.last,
+                    C.renderGen }
+    local same = true
+    for i = 1, 8 do if snap[i] ~= snap2[i] then same = false end end
+    check(same and okr == true, "L13 a picture advances no tick, Render, PollEvents, AudioUpdate, clock or frame (made: %s)",
+        tostring(okr))
+    -- (10) the batches drawn: those of one colour view of the same frame (mesh.Begin + SetMaterial per drawn batch)
+    page_think()
+    M.frame(1 / 60)
+    local b0, m0b = M.calls["mesh.Begin"] or 0, M.calls["SetMaterial"] or 0
+    for _, e in ipairs(M.entities) do if not e.removed and e.Draw then e:Draw(0) end end
+    for _, e in ipairs(M.entities) do if not e.removed and e.DrawTranslucent then e:DrawTranslucent(0) end end
+    local mainB, mainM = (M.calls["mesh.Begin"] or 0) - b0, (M.calls["SetMaterial"] or 0) - m0b
+    CU.at = -1e9
+    pic.Paint(pic, 256, 192)
+    b0, m0b = M.calls["mesh.Begin"] or 0, M.calls["SetMaterial"] or 0
+    F.CloseupRefresh(SysTime())
+    local cuB, cuM = (M.calls["mesh.Begin"] or 0) - b0, (M.calls["SetMaterial"] or 0) - m0b
+    check(cuB == mainB and cuM == mainM and mainB > 0, "L13 the picture draws the batches of one colour view (%d / %d "
+        .. "mesh.Begin, %d / %d SetMaterial)", cuB, mainB, cuM, mainM)
+    -- (11) the views line names it (not a main view)
+    check(string.find(GSA1.ViewsLine(), "close-up 1", 1, true) ~= nil, "L13 the views line names it: \"%s\"",
+        GSA1.ViewsLine())
+    -- (12) fog off during the picture, restored
+    check(#fogSet >= 2 and fogSet[#fogSet - 1] == 0 and fogSet[#fogSet] == 1, "L13 fog off for the picture, restored")
+    -- (13) choice 2: the world behind, RenderView into the render target with the small far plane, at the same rates
+    RunConsoleCommand("gsa1_mouth_closeup", "2")
+    local rv0 = rv.calls
+    made = count_refreshes(60)
+    local lastv = F.closeup.view
+    check(rv.calls - rv0 == made and made >= 4 and made <= 6 and lastv.zfar == 1500 and lastv.znear == 4, "L13 with the "
+        .. "world: %d RenderView in 1 s idle (5 a second), far plane %s", rv.calls - rv0, tostring(lastv.zfar))
+    RunConsoleCommand("gsa1_mouth_closeup", "1")
+    -- first person and no face: the texts of 0.9.4e (review R.10), no picture
     local drawn = {}
     local realText = draw.SimpleText
     draw.SimpleText = function(t) drawn[#drawn + 1] = t end
-    paint()
-    RunConsoleCommand(GSA1.cv.cam_dist.name, dist)
+    local dist = GSA1.cv.cam_dist:GetString()
+    RunConsoleCommand(GSA1.cv.cam_dist.name, "0")
+    made = count_refreshes(30)
     local fpText = drawn[#drawn]
+    RunConsoleCommand(GSA1.cv.cam_dist.name, dist)
     GSA1.Spawn("gamma")
-    paint()
+    local gm = count_refreshes(10)
     local gText = drawn[#drawn]
     GSA1.Spawn("sonic")
     C = GSA1.Char
     frames(3, page_think)
-    check(rv.calls == c1 and fpText == "The close-up needs the third-person camera" and gText ==
-        "E-102 has no face in the game", "L13 no RenderView while the panel is hidden, the box is off, in first person "
-        .. "(\"%s\", review R.10) or without a face (\"%s\")", tostring(fpText), tostring(gText))
-    -- an error: the text line, one log line, no further RenderView this session
-    rv.mode = "error"
-    paint()
-    local c2 = rv.calls
-    paint()
-    paint()
+    check(made == 0 and gm == 0 and fpText == "The close-up needs the third-person camera" and gText ==
+        "E-102 has no face in the game", "L13 no picture in first person (\"%s\", review R.10) or without a face (\"%s\")",
+        tostring(fpText), tostring(gText))
+    -- measured (info): the close-up's own Lua garbage per frame at 30 pictures a second (its hook and Paint)
+    do
+        local hk = M.hooks.PostRender.gsa1_mouthtest_closeup
+        rawset(pic, "hovered", true)
+        for _ = 1, 30 do frame1() end
+        collectgarbage("collect")
+        collectgarbage("stop")
+        local kb, n = 0, 0
+        for _ = 1, 300 do
+            page_think()
+            M.T = M.T + 1 / 60
+            M.frameNo = M.frameNo + 1
+            for _, e in ipairs(M.entities) do if not e.removed and e.Draw then e:Draw(0) end end
+            for _, e in ipairs(M.entities) do if not e.removed and e.DrawTranslucent then e:DrawTranslucent(0) end end
+            local k0 = collectgarbage("count")
+            hk()
+            pic.Paint(pic, 256, 192)
+            kb = kb + collectgarbage("count") - k0
+            n = n + 1
+        end
+        collectgarbage("restart")
+        rawset(pic, "hovered", nil)
+        info("L13 the close-up's own Lua per frame at 30 pictures a second (its PostRender hook + Paint, the mock "
+            .. "module's EmitBatch included): %.1f bytes; %d pictures in all, %.3f ms each in the mock", kb * 1024 / n,
+            CU.made, CU.made > 0 and CU.ms / CU.made or 0)
+    end
+    -- (14) an error: one log line, the text, no more pictures this session
+    local realDV = GSA1.DrawCharacterView
+    GSA1.DrawCharacterView = function() error("test error") end
+    CU.at = -1e9
+    pic.Paint(pic, 256, 192)
+    F.CloseupRefresh(SysTime())
+    GSA1.DrawCharacterView = realDV
+    made = count_refreshes(30)
     local eText = drawn[#drawn]
-    rv.mode = "run"
+    check(F.closeupBroken ~= nil and made == 0 and #logs_with("the close-up stopped for this session") == 1 and
+        string.find(tostring(eText), "stopped", 1, true) ~= nil, "L13 an error: the close-up stops for the session with "
+        .. "one log line, the text line \"%s\"", tostring(eText))
+    -- (15) one log line at the first picture
+    check(#logs_with("mouth tester: the close-up draws the character alone") == 1, "L13 one log line at its first picture")
     draw.SimpleText = realText
-    check(rv.calls == c2 and #logs_with("the close-up stopped for this session") == 1 and string.find(tostring(eText),
-        "stopped", 1, true) ~= nil, "L13 an error: one log line, the text line \"%s\", no further RenderView",
-        tostring(eText))
-    hook.Remove("GSA1PreTick", "gsa1_test_count")
-    hook.Remove("Think", "gsa1_test_count")
+    F.closeupBroken = nil
+    cam.Start3D, render.PushRenderTarget, render.PopRenderTarget, render.Clear = realStart3D, rp, rpop, rclr
+    render.FogMode, render.GetFogMode = realFogMode, realGetFog
+    surface.SetMaterial, surface.DrawTexturedRectUV = realSetMat, realRectUV
+    MATERIAL_FOG_NONE = savedFogNone
 end
 
 -- L11. an older module (no VisemeOverride, feature "faces" 2) ------------------------------------------------------------------

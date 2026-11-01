@@ -639,10 +639,13 @@ W.RESERVED_BINDS = {
     { "+back", "a movement key" }, { "+moveleft", "a movement key" }, { "+moveright", "a movement key" },
     { "+use", "the interact key" }, { "+voicerecord", "the voice chat key" },
 }
-function W.KeyRefusal(code, lookup, keycode, super_key)
+-- 0.9.5 (gsa1_095_plan.md 6.4 task 5): board_key (gsa1_board_key) is refused too; the board key's own refusals are
+-- feat/cl_board.lua B.KeyRefused (this function plus the wheel's, the faces' and the interaction feature's keys)
+function W.KeyRefusal(code, lookup, keycode, super_key, board_key)
     code = tonumber(code) or 0
     if code <= 0 then return nil end
     if super_key and code == super_key then return "the Super transformation key" end
+    if board_key and board_key > 0 and code == board_key then return "the board key" end
     if lookup and keycode then
         for _, b in ipairs(W.RESERVED_BINDS) do
             local name = lookup(b[1])

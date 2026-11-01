@@ -27,6 +27,16 @@
 // Source space; a double-sided triangle also not with normal z <= -0.7): SA1 puts them only on walls, and on a floor they
 // are an inescapable trap (Review R.3: Sonic moves 4.1 units in 60 pairs and cannot jump). Moving objects never get them
 // either (a prop can turn over: its wall becomes its top). New kinds are opt-in: the defaults are 0.8's.
+// Round 0.9.5 (sadc docs/research/gsa1_095_plan.md 4.5 and 6.3 task 4 with its Review R.1; the owner's binding answer 14.1ad 2,
+// "the map's real surfaces"; libsa1's SA1_SURFACE_BOARD_SNOW / _SAND): two BOARD-TIME kinds, "boardsnow" and "boardsand"
+// (aliases "board snow", "board sand"): host-only surface bits that libsa1 turns into Ice Cap's snow (COL 0x8, weight 0.15) /
+// Sand Hill's sand (COL 0x10, weight 0.5) only in the world of a character whose player 0 rides a board, while he rides -
+// on foot nothing changes (Sonic on COL 0x8 would crawl at 0.35 u/step instead of 2.06). Defaults: snow and the letter J
+// "dig,boardsnow", sand and N "dig,boardsand" (a saved 0.9.4f default is moved once by the addon: cl_surfaces.lua). The
+// game's land attribute is per collision OBJECT (Review R.1): libsa1 keys GRID's objects and a moving object's groups by
+// (COL word, board bits), so surface_col leaves the board bits out (as libsa1's sa1ca_surface_to_col does) and
+// cap_object_words counts (COL word, board bits) as one word. Moving objects may carry them (they are floors). Without the
+// 0.9.5 header (no SA1_SURFACE_BOARD_SNOW) the two kinds do not exist (13 kinds, 0.9.4f's defaults).
 //
 // Where the pieces go: the map job (mapjob.hpp) reads the materials' .vmt and the scripts through the addon (Garry's
 // Mod's file system: map pak, workshop .gma, VPKs), tags every static triangle with the SLOT of its surface type
@@ -135,20 +145,35 @@ enum : uint32_t {
     kKindNoLand = 1024u,    // SA1_SURFACE_NO_LAND (COL 0x40: never a floor) - walls only
     kKindWallSlide = 2048u, // SA1_SURFACE_WALL_SLIDE (COL 0x200000: no landing, no climbing) - walls only
     kKindFootprints = 4096u,// SA1_SURFACE_FOOTPRINTS (COL 0x100000: Emerald Coast's footprints; no task reads it yet)
+    // round 0.9.5 (only with libsa1's SA1_SURFACE_BOARD_SNOW: the board-time kinds above)
+    kKindBoardSnow = 8192u, // SA1_SURFACE_BOARD_SNOW (COL 0x8 while riding a board, nothing on foot)
+    kKindBoardSand = 16384u,// SA1_SURFACE_BOARD_SAND (COL 0x10 while riding a board, nothing on foot)
+#if defined(SA1_SURFACE_BOARD_SNOW)
+    kKindsAll = 32767u,
+#else
     kKindsAll = 8191u,
+#endif
     kKindsWallOnly = kKindNoLand | kKindWallSlide,                         // never on a floor, never on a moving object
     kKindsSecondSlot = kKindHurt | kKindNoClimb | kKindNoLand | kKindWallSlide,   // a thin wall's other side adds these
 };
+#if defined(SA1_SURFACE_BOARD_SNOW)
+const unsigned kKindCount = 15;
+const uint32_t kBoardSurfaceBits = SA1_SURFACE_BOARD_SNOW | SA1_SURFACE_BOARD_SAND;
+#else
 const unsigned kKindCount = 13;
+const uint32_t kBoardSurfaceBits = 0u;
+#endif
 struct KindInfo {
     uint32_t kind;                                     // kKind*
     const char *word;                                  // the module's word ("speedpath")
     uint32_t surface;                                  // SA1_SURFACE_*
 };
-// the kinds in the module's order (the order of kinds_string: 0.8's five first, then 0.9.2's eight), kKindCount entries
+// the kinds in the module's order (the order of kinds_string: 0.8's five first, then 0.9.2's eight, then 0.9.5's two board
+// kinds), kKindCount entries
 const KindInfo *kind_table();
 // "normal" (0) or kind words joined by ',' ("dig,sand"; "snow,fast"); also "diggable", "ice", "hurts", "no_climb",
-// "boost", "speed_path", "speedtrack", "stair", "no_land", "wall_slide", "footprint"; separators ',', ' ', '+', '|';
+// "boost", "speed_path", "speedtrack", "stair", "no_land", "wall_slide", "footprint", 0.9.5 "board snow" / "board_snow" /
+// "board-snow" (and sand); separators ',', ' ', '+', '|';
 // false: an unknown word
 bool parse_kinds(const std::string &s, uint32_t &out);
 std::string kinds_string(uint32_t kinds);              // the module's order; "normal" for 0
@@ -156,7 +181,7 @@ uint32_t kinds_surface(uint32_t kinds);                // SA1_SURFACE_* bits
 const uint32_t kClassSurfaceBits = SA1_SURFACE_DIG | SA1_SURFACE_SLIPPERY | SA1_SURFACE_SAND | SA1_SURFACE_HURT |
                                    SA1_SURFACE_NO_CLIMB | SA1_SURFACE_SNOW | SA1_SURFACE_BOOST | SA1_SURFACE_SLIDE |
                                    SA1_SURFACE_SPEED_PATH | SA1_SURFACE_STAIRS | SA1_SURFACE_NO_LAND |
-                                   SA1_SURFACE_WALL_SLIDE | SA1_SURFACE_FOOTPRINTS;
+                                   SA1_SURFACE_WALL_SLIDE | SA1_SURFACE_FOOTPRINTS | kBoardSurfaceBits;
 // the class bits a moving object never gets: DIG (the game never digs a DynamicCOL object) and the walls-only kinds (a
 // prop can turn over)
 const uint32_t kMoverNeverSurfaceBits = SA1_SURFACE_DIG | SA1_SURFACE_NO_LAND | SA1_SURFACE_WALL_SLIDE;
@@ -212,10 +237,11 @@ void apply_surface_classes(std::vector<sa1_collision_tri> &world, const std::vec
                            const std::vector<SurfaceType> &types, const SurfaceSettings &s, SurfaceSummary &out);
 
 // ---- moving objects -------------------------------------------------------------------------------------------------
-uint32_t surface_col(uint32_t surface);               // libsa1's COL word of a surface word (its sa1ca_surface_col)
-// DIG removed always; then, when the triangles carry more than max_words distinct collidable COL words (libsa1's
-// obj_create refuses such an object with SA1_ERR_LIMIT), the `droppable` class bits are removed as well. Returns the
-// bits removed.
+uint32_t surface_col(uint32_t surface);               // libsa1's COL word of a surface word (its sa1ca_surface_col; the
+                                                      // board bits are host-only: left out, 0.9.5)
+// DIG removed always; then, when the triangles carry more than max_words distinct collidable surface words - a word being
+// (COL word, board bits) since 0.9.5, as libsa1 groups a moving object (Review R.1) - (libsa1's obj_create refuses such an
+// object with SA1_ERR_LIMIT), the `droppable` class bits are removed as well. Returns the bits removed.
 uint32_t cap_object_words(std::vector<sa1_collision_tri> &tris, uint32_t droppable,
                           uint32_t max_words = SA1_MAX_OBJECT_GROUPS);
 // shape_from_phy (shape.hpp) with surface kinds: solid_bits[i] = the SA1_SURFACE_* class bits of the .phy's solid i

@@ -18,12 +18,18 @@
 --     written only by those actions, the whole file each time; lines that cannot be used stay in the file and are listed.
 --     At load and whenever the module is (re)opened every face kind gets its line's spec or "" (review R.8: a module that
 --     outlived a Lua state keeps no stale override).
---   * The close-up (gsa1_mouth_closeup): a 256 x 192 picture from the panel's Paint with render.RenderView, the camera 40 HU
---     in front of the mouth (gsa1.VisemeTable(kind).mouth_at, else 0.85 x the character's height); only while the panel
---     is painted, the box is ticked and a character with a face exists; in first person a text line instead (review R.10:
---     the body is not drawn there); an error -> a text line, one log line, no further close-up this session. It runs no
---     tick, no Think and no gsa1.Render (cl_render.lua draws the character's last batches; cl_render.lua is not changed);
---     the session log's "views" line counts it as a second main view.
+--   * The close-up (gsa1_mouth_closeup; 0.9.5, sadc docs/research/board095_perf.md P1): a 256 x 192 render target holds a
+--     picture of the CHARACTER ALONE (1, the default: cl_render.lua GSA1.DrawCharacterView - this frame's batches once
+--     more, nothing else of the world, near 4 / far 400 HU, fog off) or, with 2, 0.9.4e's picture with the world behind it
+--     (render.RenderView into the same target, near 4 / far 1500 HU). The camera is 40 HU in front of the mouth
+--     (gsa1.VisemeTable(kind).mouth_at, else 0.85 x the character's height). Pictures are made in PostRender (hook
+--     gsa1_mouthtest_closeup), only while the panel was painted in the last F.CLOSEUP_SEEN (0.25) s, at
+--     gsa1_mouth_closeup_fps (30) a second while the tester shows a mouth or the picture is pointed at and
+--     F.CLOSEUP_IDLE_FPS (5) otherwise (a picture at once when it becomes busy); the panel's Paint only draws the last one.
+--     In first person a text line instead (review R.10: the body is not drawn there); an error -> a text line, one log
+--     line, no further close-up this session. It runs no tick, no Think and no gsa1.Render; the session log's "views"
+--     line counts it as "the Faces page's close-up", not as a main view. (0.9.4e drew the whole world again from Paint
+--     every frame: the owner's frame rate fell from 60 to 34-47 while the page showed.)
 -- Console (extras; the page has every control): gsa1_mouth_show <sound> [quiet|loud] (shows it 3 s), gsa1_mouth_reset
 -- [<character>|all].
 GSA1 = GSA1 or {}
@@ -789,9 +795,15 @@ function F.TesterRows(panel)
     pic.Paint = function(self, w, h) F.CloseupPaint(self, w, h) end
     sub:AddItem(pic)
     ui.closeuppic = pic
-    local cb = sub:CheckBox("Close-up of the face here", "gsa1_mouth_closeup")
+    local cb = sub:ComboBox("Close-up of the face", "gsa1_mouth_closeup")
     cb.gsa1Role = "closeup"
-    sub:ControlHelp("A small live picture of your character's face while this page is open.")
+    cb:AddChoice("Off", 0)
+    cb:AddChoice("The character alone (fast)", 1)
+    cb:AddChoice("With the world behind it (slower)", 2)
+    local fps = sub:NumSlider("Close-up pictures per second", "gsa1_mouth_closeup_fps", 5, 60, 0)
+    fps.gsa1Role = "closeupfps"
+    sub:ControlHelp("A small live picture of your character's face while this page is open: as many pictures a second as "
+        .. "set here while you point at a sound or at the picture, 5 a second otherwise.")
     -- your mouths
     tlabel(sub, function(now)
         local ps = F.TesterPageState(now)
@@ -1038,9 +1050,23 @@ function F.TesterRows(panel)
     return sub
 end
 
--- 4. the close-up (lipsync2_plan.md 4.8 with review R.4b / R.10) -------------------------------------------------------
+-- 4. the close-up (lipsync2_plan.md 4.8 with review R.4b / R.10; 0.9.5: sadc docs/research/board095_perf.md P1) ----------
+-- 0.9.4e drew it with render.RenderView of the whole world from the panel's Paint every frame: the owner's frame rate fell
+-- from 60 to 34-47 while the page showed. Now (gsa1_mouth_closeup 1, the default) a 256 x 192 render target holds a
+-- picture of the CHARACTER ALONE (cl_render.lua GSA1.DrawCharacterView: this frame's batches once more, nothing else of the
+-- world; near 4, far 400 HU), made in PostRender only while the panel was painted in the last F.CLOSEUP_SEEN s, at
+-- gsa1_mouth_closeup_fps (30) a second while the tester shows a mouth or the picture is pointed at and F.CLOSEUP_IDLE_FPS
+-- (5) otherwise (a mouth shown or the pointer arriving makes one at once); Paint only draws the picture. 2 = the 0.9.4e
+-- picture with the world behind it, into the same render target at the same rates, far plane F.CLOSEUP_FAR_WORLD.
 F.CLOSEUP_DIST, F.CLOSEUP_FOV, F.CLOSEUP_W, F.CLOSEUP_H = 40, 30, 256, 192
-local CU = { origin = Vector(), angles = Angle(), view = {} }
+F.CLOSEUP_NEAR, F.CLOSEUP_FAR, F.CLOSEUP_FAR_WORLD = 4, 400, 1500
+F.CLOSEUP_IDLE_FPS, F.CLOSEUP_SEEN = 5, 0.25
+F.CLOSEUP_BG = { 18, 18, 22 }
+local CU = { origin = Vector(), angles = Angle(), view = {}, at = -1e9, paintedAt = -1e9, hovered = false, busyWas = false,
+             made = 0, ms = 0, logged = false,
+             -- GSA1.DrawCharacterView's view (filled per picture; one table: no garbage)
+             cv = { kind = "closeup", hitch = "Closeup", fov = 30, x = 0, y = 0, w = 256, h = 192, znear = 4, zfar = 400 } }
+F.closeup = CU
 -- the camera: F.CLOSEUP_DIST HU in front of the mouth point (VisemeTable(kind).mouth_at turned by the character's facing,
 -- else 0.85 x its height above its position), looking back at it
 function F.CloseupCamera(C, origin, angles)
@@ -1059,11 +1085,13 @@ function F.CloseupCamera(C, origin, angles)
     angles.p, angles.y, angles.r = 0, yaw + 180, 0
     return origin, angles
 end
--- why there is no picture now (nil: draw it); "" = nothing at all (the box is not ticked)
+-- why there is no picture now (nil: draw it); "" = nothing at all (off)
 function F.CloseupBlocked()
-    if not cv.closeup:GetBool() then return "" end
+    local mode = cv.closeup:GetInt()
+    if mode <= 0 then return "" end
     if F.closeupBroken then return "The close-up stopped for this session (see the session log)" end
-    if not (render and render.RenderView) then return "The close-up is not available in this version" end
+    if mode == 1 and not GSA1.DrawCharacterView then return "The close-up is not available in this version" end
+    if mode >= 2 and not (render and render.RenderView) then return "The close-up is not available in this version" end
     local C = GSA1.Char
     if not (C and C.id and C.drawPos) then return "Spawn a character to see its face here" end
     local no = F.NoFaceText(C.name)
@@ -1071,11 +1099,83 @@ function F.CloseupBlocked()
     if GSA1.FirstPerson and GSA1.FirstPerson() then return "The close-up needs the third-person camera" end
     return nil
 end
--- the panel's Paint (only while the page is shown): render.RenderView into the panel's rectangle, in pcall
+-- the render target and its material (made at the first picture; cl_textures.lua's probed format, like the spawn-menu
+-- pictures: its own depth - a depth clear without a depth buffer clears nothing in D3D9 -, an opaque UnlitGeneric so the
+-- view depth Source writes into the alpha of opaque draws cannot make it pale: the 0.9.4d ring lesson)
+local function closeup_target()
+    if CU.rt then return CU.rt, CU.mat end
+    local Tx = GSA1.Tex
+    local fmt = Tx and Tx.format or { name = "BGRA8888", fmt = IMAGE_FORMAT_BGRA8888 or 12 }
+    CU.rt = GetRenderTargetEx("gsa1_closeup_" .. fmt.name, F.CLOSEUP_W, F.CLOSEUP_H, RT_SIZE_LITERAL or 5,
+        MATERIAL_RT_DEPTH_SEPARATE or 1, bit.bor(TEXTUREFLAGS_CLAMPS or 4, TEXTUREFLAGS_CLAMPT or 8), 0, fmt.fmt)
+    CU.mat = CreateMaterial("gsa1_closeup_" .. fmt.name, "UnlitGeneric", { ["$basetexture"] = CU.rt:GetName(),
+        ["$vertexcolor"] = 1, ["$ignorez"] = 1 })
+    return CU.rt, CU.mat
+end
+-- one picture, if one is due (PostRender, only while the panel was painted lately): true when made
+function F.CloseupRefresh(now)
+    if F.CloseupBlocked() then return false end
+    local busy = T.active or CU.hovered
+    local rate = busy and math.max(cv.closeup_fps:GetFloat(), 1) or F.CLOSEUP_IDLE_FPS
+    local due = (busy and not CU.busyWas) or now - CU.at >= 1 / rate - 1e-6
+    CU.busyWas = busy and true or false
+    if not due then return false end
+    local C = GSA1.Char
+    local mode = cv.closeup:GetInt()
+    if mode == 1 and C.viewFrame ~= FrameNumber() then return false end     -- (not drawn this frame: the picture stays)
+    local rt = closeup_target()
+    F.CloseupCamera(C, CU.origin, CU.angles)
+    local t0 = SysTime()
+    render.PushRenderTarget(rt)
+    local bg = F.CLOSEUP_BG
+    render.Clear(bg[1], bg[2], bg[3], 255, true, true)
+    local fog = render.GetFogMode and render.GetFogMode()
+    if render.FogMode then render.FogMode(MATERIAL_FOG_NONE or 0) end
+    local ok, err
+    if mode == 1 then
+        local v = CU.cv
+        v.eye, v.ang, v.fov, v.x, v.y, v.w, v.h = CU.origin, CU.angles, F.CLOSEUP_FOV, 0, 0, F.CLOSEUP_W, F.CLOSEUP_H
+        v.znear, v.zfar = F.CLOSEUP_NEAR, F.CLOSEUP_FAR
+        ok, err = pcall(GSA1.DrawCharacterView, C, v)
+    else
+        local v = CU.view
+        v.origin, v.angles, v.x, v.y, v.w, v.h, v.fov = CU.origin, CU.angles, 0, 0, F.CLOSEUP_W, F.CLOSEUP_H, F.CLOSEUP_FOV
+        v.znear, v.zfar = F.CLOSEUP_NEAR, F.CLOSEUP_FAR_WORLD
+        v.drawviewmodel, v.drawhud, v.dopostprocess, v.drawviewer = false, false, false, false
+        F.closeupDrawing = true
+        ok, err = pcall(render.RenderView, v)
+        F.closeupDrawing = false
+    end
+    if fog and render.FogMode then render.FogMode(fog) end
+    render.PopRenderTarget()
+    CU.at = now
+    if not ok then
+        F.closeupBroken = tostring(err)
+        log("mouth tester: the close-up stopped for this session: %s", F.closeupBroken)
+        return false
+    end
+    CU.made = CU.made + 1
+    F.closeupViews = (F.closeupViews or 0) + 1
+    local ms = (SysTime() - t0) * 1000
+    CU.ms = CU.ms + ms
+    if not CU.logged then
+        CU.logged = true
+        log("mouth tester: the close-up draws %s at up to %d pictures a second (the first in %.2f ms)", mode == 1 and
+            "the character alone" or "the world behind the character", math.floor(cv.closeup_fps:GetFloat() + 0.5), ms)
+    end
+    return true
+end
+hook.Add("PostRender", "gsa1_mouthtest_closeup", function()
+    local now = SysTime()
+    if now - CU.paintedAt > F.CLOSEUP_SEEN then return end      -- not on screen: one comparison
+    F.CloseupRefresh(now)
+end)
+-- the panel's Paint (only while the page is shown): the last picture; it notes that it was painted and hovered
 function F.CloseupPaint(panel, w, h)
     if panel.IsVisible and not panel:IsVisible() then return end
     w, h = math.min(w, F.CLOSEUP_W), math.min(h, F.CLOSEUP_H)
-    surface.SetDrawColor(18, 18, 22, 255)
+    local bg = F.CLOSEUP_BG
+    surface.SetDrawColor(bg[1], bg[2], bg[3], 255)
     surface.DrawRect(0, 0, w, h)
     local why = F.CloseupBlocked()
     if why then
@@ -1085,21 +1185,13 @@ function F.CloseupPaint(panel, w, h)
         end
         return
     end
-    local C = GSA1.Char
-    F.CloseupCamera(C, CU.origin, CU.angles)
-    local x, y = panel:LocalToScreen(0, 0)
-    local v = CU.view
-    v.origin, v.angles, v.x, v.y, v.w, v.h, v.fov = CU.origin, CU.angles, x, y, w, h, F.CLOSEUP_FOV
-    v.drawviewmodel, v.drawhud, v.dopostprocess, v.drawviewer = false, false, false, false
-    F.closeupDrawing = true
-    local ok, err = pcall(render.RenderView, v)
-    F.closeupDrawing = false
-    if not ok then
-        F.closeupBroken = tostring(err)
-        log("mouth tester: the close-up stopped for this session: %s", F.closeupBroken)
-        return
+    CU.paintedAt = SysTime()
+    CU.hovered = panel.IsHovered and panel:IsHovered() or false
+    if CU.made > 0 and CU.mat then
+        surface.SetMaterial(CU.mat)
+        surface.SetDrawColor(255, 255, 255, 255)
+        surface.DrawTexturedRectUV(0, 0, w, h, 0, 0, w / F.CLOSEUP_W, h / F.CLOSEUP_H)
     end
-    F.closeupViews = (F.closeupViews or 0) + 1
 end
 
 -- 5. console extras (the page has every control) ---------------------------------------------------------------------

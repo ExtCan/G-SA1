@@ -22,6 +22,13 @@
 // the new kinds (libsa1 refuses it; cap_object_words counts them and it registers) and a prop never getting the
 // walls-only kinds; with --gdi: Sonic on a "concrete = noland" floor runs more than 100 units in 60 pairs (the floor
 // with the bit, as a per-type kind without the walls-only rule makes it, traps him: about 4 units).
+// Round 0.9.5 (sadc docs/research/gsa1_095_plan.md 6.3 tasks 4 / 7 with its Review R.1; with libsa1's SA1_SURFACE_BOARD_SNOW):
+// the board-time kinds "boardsnow" / "boardsand" (words, aliases "board snow" / "Board-Sand", their host-only bits - no COL
+// word: surface_col leaves them out -, the defaults snow / J "dig,boardsnow", sand / N "dig,boardsand"), moving objects:
+// a prop of four COL words plus board snow is five (COL word, board bits) words - cap_object_words caps it so libsa1 takes
+// it - and board bits reach a classed prop; with --gdi and libsa1's board built: a 15-degree slope of GMod "snow" (classed
+// by the defaults) gathers board speed (>= 4.0 u/step at board pair 100) while Sonic on foot on it plays exactly as on a
+// plain "dig" slope; while libsa1 answers "the board is not built yet" (the contract snapshot) that run prints SKIP.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -32,6 +39,7 @@
 #include <string>
 #include <vector>
 
+#include "../src/core/board.hpp"
 #include "../src/core/bsp.hpp"
 #include "../src/core/phy.hpp"
 #include "../src/core/shape.hpp"
@@ -208,12 +216,14 @@ static void test_types(gamefs::GameFs &fs)
           "the manifest: %zu scripts (outside scripts/, .. and duplicates left out)", files.size());
     // the class table
     SurfaceTable t = SurfaceTable::defaults();
+    const uint32_t kBoardKinds = kKindBoardSnow | kKindBoardSand;   // 0.9.5: the board-time kinds (on snow / sand / J / N)
     std::string h1, h2, h3, h4, h5;
     uint32_t k1 = t.kinds_of(db.resolve("grass"), &h1), k2 = t.kinds_of(ca, &h2), k3 = t.kinds_of(mg, &h3),
              k4 = t.kinds_of(db.resolve("mystery"), &h4), k5 = t.kinds_of(lo, &h5), k6 = t.kinds_of(co),
              k7 = t.kinds_of(un);
     CHECK(k1 == kKindDig && h1 == "listed" && k2 == 0 && h2 == "listed" && k3 == kKindDig && h3 == "base grass" &&
-              k4 == kKindDig && h4 == "base dirt" && k5 == kKindDig && h5 == "letter N" && k6 == 0 && k7 == 0,
+              k4 == kKindDig && h4 == "base dirt" && (k5 & ~kBoardKinds) == kKindDig && h5 == "letter N" && k6 == 0 &&
+              k7 == 0,
           "the table: grass dig (%s); carpet normal although it derives from dirt (%s); mygrass dig (%s); mystery dig (%s); "
           "an unlisted type with letter N dig (%s); concrete and an unknown name normal", h1.c_str(), h2.c_str(),
           h3.c_str(), h4.c_str(), h5.c_str());
@@ -244,7 +254,7 @@ static void test_types(gamefs::GameFs &fs)
     uint32_t dig = 0, slip = 0, normal = 0;
     std::string digs, slips;
     for (const std::string &n : g.names()) {
-        uint32_t kk = t.kinds_of(g.resolve(n));
+        uint32_t kk = t.kinds_of(g.resolve(n)) & ~kBoardKinds;
         if (kk == kKindDig) {
             dig++;
             digs += n + " ";
@@ -548,7 +558,14 @@ static void test_kinds_092()
                 {"speedpath", kKindSpeedPath, SA1_SURFACE_SPEED_PATH, 0x800000u},
                 {"stairs", kKindStairs, SA1_SURFACE_STAIRS, 0x4000u}, {"noland", kKindNoLand, SA1_SURFACE_NO_LAND, 0x40u},
                 {"wallslide", kKindWallSlide, SA1_SURFACE_WALL_SLIDE, 0x200000u},
-                {"footprints", kKindFootprints, SA1_SURFACE_FOOTPRINTS, 0x100000u}};
+                {"footprints", kKindFootprints, SA1_SURFACE_FOOTPRINTS, 0x100000u},
+#if defined(SA1_SURFACE_BOARD_SNOW)
+                // 0.9.5: the board-time kinds - host-only bits, no COL word (libsa1 ORs 0x8 / 0x10 in while riding)
+                {"boardsnow", kKindBoardSnow, SA1_SURFACE_BOARD_SNOW, 0x0u},
+                {"boardsand", kKindBoardSand, SA1_SURFACE_BOARD_SAND, 0x0u},
+#endif
+    };
+    static_assert(sizeof want / sizeof want[0] == kKindCount, "one row per kind");
     int bad = 0;
     std::string bads;
     const KindInfo *kt = kind_table();
@@ -565,9 +582,15 @@ static void test_kinds_092()
             bads += std::string(" ") + w.word;
         }
     }
-    CHECK(bad == 0 && all == kKindsAll && kKindCount == 13,
-          "13 kinds (0.8's five, then snow fast slide speedpath stairs noland wallslide footprints): each word parses, "
-          "prints, maps to its SA1_SURFACE_* bit and its COL word (surface_col)%s%s", bad ? ": wrong" : "", bads.c_str());
+#if defined(SA1_SURFACE_BOARD_SNOW)
+    const unsigned want_count = 15;
+#else
+    const unsigned want_count = 13;
+#endif
+    CHECK(bad == 0 && all == kKindsAll && kKindCount == want_count,
+          "%u kinds (0.8's five, then snow fast slide speedpath stairs noland wallslide footprints%s): each word parses, "
+          "prints, maps to its SA1_SURFACE_* bit and its COL word (surface_col)%s%s", kKindCount,
+          kKindCount > 13 ? ", then 0.9.5's boardsnow boardsand" : "", bad ? ": wrong" : "", bads.c_str());
     uint32_t a1 = 0, a2 = 0;
     bool al = parse_kinds("Speed_Path + no_land|wall_slide boost footprint stair sliding", a1) &&
               parse_kinds("speedpath,noland,wallslide,fast,footprints,stairs,slide", a2) && a1 == a2;
@@ -784,6 +807,208 @@ static void test_noland(const std::string &gdi)
     sa1_shutdown(ctx);
 }
 
+// ---- 6. round 0.9.5: the board-time kinds ----------------------------------------------------------------------------
+#if defined(SA1_SURFACE_BOARD_SNOW)
+// a slope descending along +x (Source space, z up): flat for x in [-512, 0], then 15 degrees down to x = 4096; 256-HU tiles,
+// every triangle tagged with slot 0
+static void board_slope(std::vector<sa1_collision_tri> &w, std::vector<uint32_t> &tags)
+{
+    const float k = std::tan(15.0f * 3.14159265f / 180.0f), tile = 256.0f, half = 512.0f;
+    const float up[3] = {0, 0, 1};
+    for (float x = -512.0f; x < 4096.0f - 1.0f; x += tile) {
+        for (float y = -half; y < half - 1.0f; y += tile) {
+            float z0 = x <= 0.0f ? 0.0f : -k * x, z1 = x + tile <= 0.0f ? 0.0f : -k * (x + tile);
+            const float q[4][3] = {{x, y, z0}, {x + tile, y, z1}, {x + tile, y + tile, z1}, {x, y + tile, z0}};
+            add_quad(w, tags, q, up, SA1_SURFACE_SOLID, surface_tag(0));
+        }
+    }
+}
+#endif
+
+static void test_board_kinds_095(const std::string &gdi)
+{
+    std::printf("the board-time kinds (0.9.5)\n");
+#if !defined(SA1_SURFACE_BOARD_SNOW)
+    uint32_t k = 0;
+    CHECK(!parse_kinds("boardsnow", k) && kKindCount == 13 && kBoardSurfaceBits == 0u,
+          "this libsa1.h has no board-time kinds (the round-start snapshot): \"boardsnow\" is no word yet, 13 kinds");
+    (void)gdi;
+#else
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+    bool words = parse_kinds("Board Snow, dig", a) && a == (kKindDig | kKindBoardSnow) && parse_kinds("Board-Sand", b) &&
+                 b == kKindBoardSand && parse_kinds("board_snow boardsand", c) && c == (kKindBoardSnow | kKindBoardSand) &&
+                 kinds_string(kKindDig | kKindBoardSnow) == "dig,boardsnow" && !parse_kinds("board", d) &&
+                 kinds_string(kKindSnow | kKindBoardSand) == "snow,boardsand";
+    bool bits = kinds_surface(kKindBoardSnow) == SA1_SURFACE_BOARD_SNOW &&
+                kinds_surface(kKindBoardSand) == SA1_SURFACE_BOARD_SAND &&
+                surface_col(SA1_SURFACE_SOLID | SA1_SURFACE_BOARD_SNOW) == 0x1u &&
+                surface_col(SA1_SURFACE_SOLID | SA1_SURFACE_DIG | SA1_SURFACE_BOARD_SAND) == 0x101u &&
+                (kClassSurfaceBits & kBoardSurfaceBits) == kBoardSurfaceBits &&
+                (kMoverNeverSurfaceBits & kBoardSurfaceBits) == 0u && (kMoverNeverKinds & (kKindBoardSnow | kKindBoardSand)) == 0u;
+    SurfaceTable t = SurfaceTable::defaults();
+    bool defaults = t.names["snow"] == (kKindDig | kKindBoardSnow) && t.names["sand"] == (kKindDig | kKindBoardSand) &&
+                    t.letters['J'] == (kKindDig | kKindBoardSnow) && t.letters['N'] == (kKindDig | kKindBoardSand) &&
+                    t.names["grass"] == kKindDig && t.names["quicksand"] == kKindDig && t.letters['D'] == kKindDig;
+    CHECK(words && bits && defaults,
+          "\"Board Snow, dig\" -> dig,boardsnow, \"Board-Sand\", \"board_snow boardsand\" parse, \"board\" alone does not; "
+          "SA1_SURFACE_BOARD_SNOW / _SAND are host-only (surface_col SOLID | board snow = 0x1); class bits, movers may "
+          "carry them; the defaults: snow / J dig,boardsnow, sand / N dig,boardsand, grass / quicksand / D dig");
+    // a tagged world classed by the defaults
+    SurfacePropDb db;
+    std::string err;
+    db.add_script(kScript, sizeof kScript - 1, err);
+    SurfaceType snowT, sandT;
+    snowT.chain = {"snow"};
+    snowT.letter = 'J';
+    sandT.chain = {"sand"};
+    sandT.letter = 'N';
+    std::vector<SurfaceType> types = {snowT, sandT, db.resolve("grass")};
+    std::vector<sa1_collision_tri> w = {tri(0, 0, 0, 100, SA1_SURFACE_SOLID), tri(200, 0, 0, 100, SA1_SURFACE_SOLID),
+                                        tri(400, 0, 0, 100, SA1_SURFACE_SOLID)};
+    std::vector<uint32_t> tags = {surface_tag(0), surface_tag(1), surface_tag(2)};
+    SurfaceSettings s;
+    SurfaceSummary sum;
+    apply_surface_classes(w, tags, types, s, sum);
+    CHECK(w[0].surface == (SA1_SURFACE_SOLID | SA1_SURFACE_DIG | SA1_SURFACE_BOARD_SNOW) &&
+              w[1].surface == (SA1_SURFACE_SOLID | SA1_SURFACE_DIG | SA1_SURFACE_BOARD_SAND) &&
+              w[2].surface == (SA1_SURFACE_SOLID | SA1_SURFACE_DIG) && sum.kind_tris[13] == 1 && sum.kind_tris[14] == 1,
+          "the defaults on a tagged world: snow 0x%X, sand 0x%X, grass 0x%X; the summary counts each board kind",
+          (unsigned)w[0].surface, (unsigned)w[1].surface, (unsigned)w[2].surface);
+    // moving objects: four COL words plus board snow = five (COL word, board bits) words (review R.1)
+    std::vector<sa1_collision_tri> m = {tri(0, 0, 0, 40, SA1_SURFACE_SOLID), tri(0, 0, 10, 40, SA1_SURFACE_SOLID | SA1_SURFACE_SLIPPERY),
+                                        tri(0, 0, 20, 40, SA1_SURFACE_SOLID | SA1_SURFACE_HURT),
+                                        tri(0, 0, 30, 40, SA1_SURFACE_SOLID | SA1_SURFACE_NO_CLIMB),
+                                        tri(0, 0, 40, 40, SA1_SURFACE_SOLID | SA1_SURFACE_BOARD_SNOW)};
+    sa1_host h;
+    sa1_host_defaults(&h);
+    h.log = nullptr;
+    sa1_context *ctx = nullptr;
+    if (SA1_FAILED(sa1_init(&h, &ctx)) || !ctx) {
+        CHECK(false, "sa1_init");
+        return;
+    }
+    const float origin[3] = {0, 0, 0};
+    uint32_t id0 = 0, id1 = 0;
+    sa1_status before = sa1_collision_object_add(ctx, m.data(), (uint32_t)m.size(), origin, nullptr, &id0);
+    std::vector<sa1_collision_tri> mc = m;
+    uint32_t removed = cap_object_words(mc, SA1_SURFACE_SLIPPERY | SA1_SURFACE_HURT | SA1_SURFACE_BOARD_SNOW);
+    std::vector<uint64_t> keys;
+    for (const sa1_collision_tri &x : mc) {
+        uint64_t key = (uint64_t)surface_col(x.surface) | ((uint64_t)(x.surface & kBoardSurfaceBits) << 32);
+        if (std::find(keys.begin(), keys.end(), key) == keys.end()) keys.push_back(key);
+    }
+    sa1_status after = sa1_collision_object_add(ctx, mc.data(), (uint32_t)mc.size(), origin, nullptr, &id1);
+    CHECK(after == SA1_OK && (removed & SA1_SURFACE_BOARD_SNOW) && keys.size() <= 4 && (mc[3].surface & SA1_SURFACE_NO_CLIMB),
+          "a prop of four COL words plus board snow counts five words: cap_object_words drops the droppable class bits "
+          "(board snow among them; 0x%X), %zu words left, libsa1 takes it (%s; before the cap: %s - libsa1 groups a moving "
+          "object by (COL word, board bits) once its board is built)", (unsigned)removed, keys.size(),
+          sa1_status_string(after), sa1_status_string(before));
+    sa1_shutdown(ctx);
+    if (gdi.empty()) {
+        INFO("no --gdi / SA1_TEST_GDI: the ride on a snow slope is not checked");
+        return;
+    }
+    // the game: a 15-degree slope of GMod "snow" (the defaults) vs "dirt"; Sonic on foot on both, then on a board on snow
+    std::vector<sa1_collision_tri> snow, dirt;
+    std::vector<uint32_t> st, dt;
+    board_slope(snow, st);
+    board_slope(dirt, dt);
+    std::vector<SurfaceType> ts = {snowT}, td = {db.resolve("dirt")};
+    apply_surface_classes(snow, st, ts, s, sum);
+    apply_surface_classes(dirt, dt, td, s, sum);
+    bool tagged = (snow[0].surface & SA1_SURFACE_BOARD_SNOW) && !(dirt[0].surface & SA1_SURFACE_BOARD_SNOW) &&
+                  (dirt[0].surface & SA1_SURFACE_DIG);
+    if (SA1_FAILED(sa1_init(&h, &ctx)) || !ctx) {
+        CHECK(false, "sa1_init");
+        return;
+    }
+    sa1_coords co;
+    std::memset(&co, 0, sizeof co);
+    co.struct_size = sizeof co;
+    sa1_coords_preset(SA1_COORDS_PRESET_SOURCE, &co);
+    sa1_set_coords(ctx, &co);
+    sa1_load_options lo;
+    std::memset(&lo, 0, sizeof lo);
+    lo.struct_size = sizeof lo;
+    lo.characters = 1u << SA1_CHAR_SONIC;
+    lo.flags = SA1_LOAD_BOARDS;
+    if (SA1_FAILED(sa1_load_disc(ctx, gdi.c_str(), &lo))) {
+        CHECK(false, "sa1_load_disc: %s", sa1_last_error(ctx));
+        sa1_shutdown(ctx);
+        return;
+    }
+    // pairs 0..n-1: the stick forward from pair `fwd` (camera yaw 0 = host +x, down the slope); board ON before pair 0
+    auto run = [&](const std::vector<sa1_collision_tri> &world, bool board, int n, int fwd, std::vector<sa1_state_ex> &out,
+                   std::string &why) -> bool {
+        out.clear();
+        if (SA1_FAILED(sa1_collision_set_static(ctx, world.data(), (uint32_t)world.size()))) {
+            why = sa1_last_error(ctx);
+            return false;
+        }
+        sa1_character_desc cd;
+        std::memset(&cd, 0, sizeof cd);
+        cd.struct_size = sizeof cd;
+        cd.kind = SA1_CHAR_SONIC;
+        cd.flags = SA1_CREATE_WORLD;
+        cd.position[0] = board ? 64.0f : -400.0f;
+        cd.position[2] = board ? 16.0f : 24.0f;
+        sa1_character_id id = 0;
+        if (SA1_FAILED(sa1_character_create_ex(ctx, &cd, &id))) {
+            why = sa1_last_error(ctx);
+            return false;
+        }
+        for (int i = 0; i < n; i++) {
+            if (board && i == 2) {
+                sa1_status bs = board::call(ctx, (int32_t)id, board::kOn, board::kTerrainMap, 0u, why);
+                if (bs != SA1_OK) {
+                    sa1_character_destroy(ctx, id);
+                    return false;
+                }
+            }
+            sa1_input in;
+            std::memset(&in, 0, sizeof in);
+            in.struct_size = sizeof in;
+            in.stick_y = i >= fwd ? 1.0f : 0.0f;
+            if (SA1_FAILED(sa1_character_tick(ctx, id, &in, 1.0f / 30.0f, nullptr, nullptr))) {
+                why = sa1_last_error(ctx);
+                sa1_character_destroy(ctx, id);
+                return false;
+            }
+            sa1_state_ex x;
+            std::memset(&x, 0, sizeof x);
+            x.struct_size = sizeof x;
+            sa1_character_state_ex(ctx, id, &x);
+            out.push_back(x);
+        }
+        sa1_character_destroy(ctx, id);
+        return true;
+    };
+    std::vector<sa1_state_ex> fs, fd, rb;
+    std::string w1, w2, w3;
+    bool r1 = run(snow, false, 150, 10, fs, w1), r2 = run(dirt, false, 150, 10, fd, w2);
+    int differ = 0;
+    for (size_t i = 0; r1 && r2 && i < fs.size() && i < fd.size(); i++) {
+        differ += std::memcmp(&fs[i], &fd[i], sizeof fs[i]) != 0;
+    }
+    CHECK(tagged && r1 && r2 && fs.size() == 150 && differ == 0,
+          "on foot down a 15-degree slope: GMod snow (dig + board snow) and dirt (dig) give the same sa1_state_ex on %d of "
+          "150 pairs (0 differ: the board-time kind changes nothing on foot)%s%s", 150 - differ, r1 && r2 ? "" : ": ",
+          r1 ? w2.c_str() : w1.c_str());
+    bool r3 = run(snow, true, 106, 62, rb, w3);
+    if (!r3 && w3.find("not built yet") != std::string::npos) {
+        std::printf("SKIP board-time kinds' ride: libsa1's board is not built yet\n");
+    } else {
+        // board pair k = pair k + 2 (ON before pair 2)
+        double sp100 = rb.size() > 102 ? rb[102].player_speed[0] : -1.0;
+        uint32_t attr = rb.size() > 102 ? rb[102].attr : 0u;
+        CHECK(r3 && sp100 >= 4.0 && (attr & 0x8u),
+              "on a board down the snow slope: %.3f u/step at board pair 100 (>= 4.0; plain land 0.987), the land's attr "
+              "0x%X (0x8: Ice Cap's snow while riding)%s%s", sp100, (unsigned)attr, r3 ? "" : ": ", w3.c_str());
+    }
+    sa1_shutdown(ctx);
+#endif
+}
+
 int main(int argc, char **argv)
 {
     std::string gm = gsa1_garrysmod_dir(), gdi;
@@ -808,6 +1033,7 @@ int main(int argc, char **argv)
     test_moving(fs);
     test_kinds_092();
     test_noland(gdi);
+    test_board_kinds_095(gdi);
     std::printf("feat_surfaces_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
 }

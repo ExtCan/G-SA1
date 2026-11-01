@@ -1,4 +1,8 @@
 // feat_preview_binding_test: the game's own rings and item boxes without a character - the feature "preview"
+// (0.9.5, sadc docs/research/gsa1_095_plan.md 6.3 tasks 3 / 7: with libsa1's SA1_PREVIEW_BOARD the feature is version 2 and
+// PreviewTypes lists gsa1.PREVIEW.BOARD (0x100, rotation ROT_OUTER, settle 0); PreviewAdd of Sonic's board (kind 0, variant 0
+// / 1) and Tails' (kind 2): 44 triangles each, PreviewInfo's bounds (minz: the lift the lying board needs); kind 3 ->
+// "unsupported". While libsa1 answers "the board is not built yet" (the contract snapshot) the copies print one SKIP line.)
 // (src/module/bind_preview.cpp, src/core/preview.*; round 0.9.4b, sadc docs/research/objects2_plan.md 6.3 task 2 with its
 // Review R.5 / R.6) - and the objects feature's SetLive (bind_objects.cpp, review R.6). Linked like binding_test (the
 // module's objects, libsa1, the mock Lua stack of tests/mock_lua.hpp) by build.py, run with --gdi GAME.gdi.
@@ -219,7 +223,12 @@ int main(int argc, char **argv)
         fns = fns && g.tab->field(f).type == Type::Function;
     }
     Val ferr = g.type == Type::Table ? g.tab->field("FEATURE_ERRORS") : Val();
-    CHECK(fns && feats.type == Type::Table && feats.tab->field("preview").num == 1 &&
+#if defined(SA1_PREVIEW_BOARD)
+    const double want_preview = 2.0;    // 0.9.5: the board model
+#else
+    const double want_preview = 1.0;
+#endif
+    CHECK(fns && feats.type == Type::Table && feats.tab->field("preview").num == want_preview &&
               feats.tab->field("objects").num == 3 && ferr.type == Type::Table && ferr.tab->n.empty() && L.st.empty(),
           "gsa1.FEATURES.preview = %g, objects = %g; the twelve Preview functions and SetLive registered, no clash",
           feats.type == Type::Table ? feats.tab->field("preview").num : -1.0,
@@ -300,7 +309,43 @@ int main(int argc, char **argv)
               "PreviewTypes: the four types available; rotation RING outer, O_GRING inner, ITEMBOX none, ITEMBOX_AIR "
               "outer; settle %g / %g / %g / %g steps (libsa1's measurement: 0 / 0 / 47 / 23)", f(1, "settle").num,
               f(2, "settle").num, f(3, "settle").num, f(4, "settle").num);
+#if defined(SA1_PREVIEW_BOARD)
+        // 0.9.5: the board model (not a SET type) at [0x100]
+        CHECK(P.tab->field("BOARD").num == SA1_PREVIEW_BOARD && f((int)SA1_PREVIEW_BOARD, "type").num == SA1_PREVIEW_BOARD &&
+                  f((int)SA1_PREVIEW_BOARD, "rotation").num == SA1_PREVIEW_ROT_OUTER &&
+                  f((int)SA1_PREVIEW_BOARD, "settle").num == 0 && ty.tab->at(5).type == Type::Nil,
+              "0.9.5: gsa1.PREVIEW.BOARD = 0x%X; PreviewTypes[0x100]: rotation ROT_OUTER, settle 0, available %s; nothing "
+              "at [5]", (unsigned)SA1_PREVIEW_BOARD, f((int)SA1_PREVIEW_BOARD, "available").b ? "true" : "false");
+#endif
     }
+#if defined(SA1_PREVIEW_BOARD)
+    // ---- 0.9.5: the board model alone (the lying board of a Board On box, the left-behind boards) ------------------------
+    {
+        std::string code;
+        double s0 = add_copy(L, desc(SA1_CHAR_SONIC, SA1_PREVIEW_BOARD, 0, 0, 0), &code);
+        std::string code0 = code;
+        std::vector<Val> probe = s0 > 0 ? std::vector<Val>() : L.call("PreviewAdd", {desc(SA1_CHAR_SONIC, SA1_PREVIEW_BOARD,
+                                                                                            0, 0, 0)});
+        if (s0 <= 0 && str_of(probe, 1).find("not built yet") != std::string::npos) {
+            std::printf("SKIP board preview: libsa1's board is not built yet\n");
+        } else {
+            double s1 = add_copy(L, desc(SA1_CHAR_SONIC, SA1_PREVIEW_BOARD, 1, 0, 0));
+            double t0 = add_copy(L, desc(SA1_CHAR_TAILS, SA1_PREVIEW_BOARD, 0, 0, 0));
+            std::string c3;
+            double k3 = add_copy(L, desc(SA1_CHAR_KNUCKLES, SA1_PREVIEW_BOARD, 0, 0, 0), &c3);
+            tick_pairs(L, 4);
+            Shot a = shot(L, s0, SA1_CHAR_SONIC), b = shot(L, s1, SA1_CHAR_SONIC), t = shot(L, t0, SA1_CHAR_TAILS);
+            CHECK(s0 > 0 && s1 > 0 && t0 > 0 && a.ok && b.ok && t.ok && a.tris == 44 && b.tris == 44 && t.tris == 44 &&
+                      a.textured > 0 && b.textured > 0 && t.textured > 0 && k3 == 0 && c3 == "unsupported",
+                  "the BOARD preview: Sonic's variant 0 / 1 and Tails' board %d / %d / %d triangles, textured (%d / %d / %d "
+                  "batches); Knuckles -> %s; Sonic's board's bounds z %.2f .. %.2f HU (minz: the lift the lying board needs), "
+                  "x %.2f .. %.2f", a.tris, b.tris, t.tris, a.textured, b.textured, t.textured, c3.c_str(), a.b[2], a.b[5],
+                  a.b[0], a.b[3]);
+            L.call("PreviewClear", {});
+        }
+        (void)code0;
+    }
+#endif
 
     // ---- 0.9.4d: the ring's turn in its bounds (feat/cl_objicons.lua I.RingAspect / I.FACE: the spawn-menu pictures of
     // the ring classes wait for a three-quarter moment) - the copy stands upright and turns about z, so its height (z extent)

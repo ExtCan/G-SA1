@@ -29,8 +29,11 @@ if not M.load("gsa1/cl_warm.lua") or not GSA1.Warm then
 end
 -- the characters' texture archives as the disc has them (texture counts per archive; core_test's texture transfer);
 -- 0.8: libsa1 loads OBJ_REGULAR (96 textures, the blob shadow's) before EFF_REGULAR (138)
-local ARCHIVES = { [0] = { 28, 29, 96, 138 }, [2] = { 24, 96, 138 }, [3] = { 22, 21, 96, 138 }, [5] = { 53, 4, 96, 138 },
-                   [6] = { 35, 14, 12, 14, 17, 96, 138 }, [7] = { 36, 65, 8, 96, 138 } }
+-- 0.9.5 (sadc docs/research/gsa1_095_plan.md 6.3 task 5): libsa1 appends the board's texture archives after every other one
+-- (Sonic: CON_REGULAR 56 and SUPERSONIC 73 at 4 / 5, then MIW_B001 and SB_BOARD1 of one texture each at 6 / 7; Tails:
+-- CON_REGULAR at 3, MTX_BOARD0 at 4), and core_test's census ride draws them (its states "0 6 0 4040 ...", "2 4 0 4040 ...")
+local ARCHIVES = { [0] = { 28, 29, 96, 138, 56, 73, 1, 1 }, [2] = { 24, 96, 138, 56, 1 }, [3] = { 22, 21, 96, 138 },
+                   [5] = { 53, 4, 96, 138 }, [6] = { 35, 14, 12, 14, 17, 96, 138 }, [7] = { 36, 65, 8, 96, 138 } }
 local G = M.module({ archives = ARCHIVES })
 function G.TextureArchives(kind)
     local out = {}

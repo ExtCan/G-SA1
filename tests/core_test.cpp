@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "../src/core/board.hpp"
 #include "../src/core/bsp.hpp"
 #include "../src/core/config.hpp"
 #include "../src/core/paths.hpp"
@@ -1525,6 +1526,133 @@ static void test_host_input(const std::string &gdi)
     }
 }
 
+// ---- 0.9.5: the host camera through the session (sadc docs/research/board095_cam.md 6.3 G1 / G2) ---------------------
+// G1: Big casts on an island (review_probe's scene: island 600 x 600 HU at z 0, water at z -20 around it, sea bed -600; the
+// action held pairs 10-49, the stick forward 25-49); with TickExtra's camera at Big's eyes (the root + 60 HU) every tick
+// the line's rod end is within 20 units of the camera while the lure is in the water: its vertex alpha >= 155 (the game's
+// 255 - d^2 / 4, 8C0EC60C; measured 158..193); without a camera (the virtual eye 40 units behind) every vertex 64.
+// G2: the host flags from Lua with 0x4 never set the camera bit; the bit only with a valid camera (host_camera_passed).
+static void ct_rect(std::vector<sa1_collision_tri> &o, float x0, float y0, float x1, float y1, float z, float tile,
+                    uint32_t surface)
+{
+    for (float x = x0; x < x1 - 0.01f; x += tile) {
+        for (float y = y0; y < y1 - 0.01f; y += tile) {
+            float xe = std::min(x + tile, x1), ye = std::min(y + tile, y1);
+            const float a[3] = {x, y, z}, b[3] = {xe, y, z}, c[3] = {xe, ye, z}, d[3] = {x, ye, z};
+            size_t n0 = o.size();
+            ct_quad(o, a, b, c, d);
+            for (size_t i = n0; i < o.size(); i++) {
+                o[i].surface = surface;
+            }
+        }
+    }
+}
+
+static void test_host_camera_095(const std::string &gdi)
+{
+    std::printf("0.9.5: the host camera through the session (G1 / G2):\n");
+    Session s;
+    std::string e;
+    if (!s.init(gdi, e)) {
+        CHECK(false, "init: %s", e.c_str());
+        return;
+    }
+    std::vector<sa1_collision_tri> isl;
+    ct_rect(isl, -300, -300, 300, 300, 0, 300, SA1_SURFACE_SOLID);
+    ct_rect(isl, -6000, -6000, 6000, -300, -20, 1000, SA1_SURFACE_WATER);
+    ct_rect(isl, -6000, 300, 6000, 6000, -20, 1000, SA1_SURFACE_WATER);
+    ct_rect(isl, -6000, -300, -300, 300, -20, 600, SA1_SURFACE_WATER);
+    ct_rect(isl, 300, -300, 6000, 300, -20, 600, SA1_SURFACE_WATER);
+    ct_rect(isl, -6000, -6000, 6000, 6000, -600, 1000, SA1_SURFACE_SOLID);
+    if (!s.set_world(isl, e)) {
+        CHECK(false, "the island: %s", e.c_str());
+        return;
+    }
+    // one cast: the line's largest vertex alpha over the pairs the line is drawn after the cast (pair >= 90)
+    auto cast = [&](bool camera, int &max_alpha, int &line_pairs, bool &passed, uint64_t &passed_ticks) -> bool {
+        const float pos[3] = {0.0f, 0.0f, 8.0f};
+        int32_t id = s.create(SA1_CHAR_BIG, pos, 0.0f, e);
+        if (id <= 0) {
+            return false;
+        }
+        max_alpha = -1;
+        line_pairs = 0;
+        passed = false;
+        for (int p = 0; p < 200; p++) {
+            Character *c = s.get(id);
+            TickExtra x;
+            x.camera = camera;
+            if (c && camera) {
+                x.cam_pos[0] = c->st.position[0];
+                x.cam_pos[1] = c->st.position[1];
+                x.cam_pos[2] = c->st.position[2] + 60.0f;
+                x.cam_target[0] = x.cam_pos[0] + 100.0f;
+                x.cam_target[1] = x.cam_pos[1];
+                x.cam_target[2] = x.cam_pos[2];
+            }
+            float sy = (p >= 25 && p < 50) ? 1.0f : 0.0f;
+            uint32_t b = (p >= 10 && p < 50) ? SA1_BUTTON_ACTION : 0u;
+            // (the raw stick, as review_probe's cast: through exact_stick's inverse dead zone this script's cast does not
+            // reach the water - measured, 0.9.5)
+            if (s.tick(id, 0.0f, sy, 0.0f, b, kTestPair, true, &x) != SA1_OK || s.render(id, 1.0f) != SA1_OK) {
+                s.destroy(id);
+                return false;
+            }
+            c = s.get(id);
+            passed = passed || (c && c->host_camera_passed);
+            if (c && p >= 90 && c->r_lines.size() >= 2) {
+                line_pairs++;
+                for (const sa1_line_vertex &v : c->r_lines) {
+                    max_alpha = std::max(max_alpha, (int)v.color[3]);
+                }
+            }
+        }
+        Character *c = s.get(id);
+        passed_ticks = c ? c->host_camera_ticks : 0;
+        s.destroy(id);
+        return true;
+    };
+    int a_cam = -1, a_none = -1, n_cam = 0, n_none = 0;
+    bool p_cam = false, p_none = true;
+    uint64_t t_cam = 0, t_none = 0;
+    bool r1 = cast(true, a_cam, n_cam, p_cam, t_cam), r2 = cast(false, a_none, n_none, p_none, t_none);
+#if defined(SA1_INPUT_HOST_CAMERA)
+    CHECK(r1 && r2 && n_cam > 0 && n_none > 0 && a_cam >= 155 && a_none <= 71 && p_cam && t_cam == 200 && !p_none &&
+              t_none == 0,
+          "G1: Big casts with the camera at his eyes (passed on %llu of 200 ticks): the line's brightest vertex alpha %d "
+          "(>= 155: the rod end near the camera, the game's own rule) over %d pairs; without a camera %d (64: the virtual "
+          "eye)", (unsigned long long)t_cam, a_cam, n_cam, a_none);
+#else
+    CHECK(r1 && r2 && n_cam > 0 && n_none > 0 && a_cam == a_none && !p_cam && !p_none,
+          "G1 (this libsa1 has no SA1_INPUT_HOST_CAMERA): the camera is only recorded, the line the same with and without it "
+          "(alpha %d / %d over %d pairs)", a_cam, a_none, n_cam);
+#endif
+    // G2: the camera bit never from the host flags
+    const float pos[3] = {0.0f, 0.0f, 8.0f};
+    int32_t id = s.create(SA1_CHAR_SONIC, pos, 0.0f, e);
+    TickExtra x;
+    x.host_flags = 0x4u | 0xF0u;
+    sa1_status st1 = id > 0 ? s.tick(id, 0.0f, 0.0f, 0.0f, 0u, kTestPair, false, &x) : SA1_ERR_NOT_FOUND;
+    Character *c = s.get(id);
+    bool p1 = c && c->host_camera_passed;
+    uint32_t f1 = c ? c->host_flags_last : 99u;
+    x.camera = true;
+    x.cam_pos[2] = 100.0f;
+    x.cam_target[0] = 100.0f;
+    sa1_status st2 = id > 0 ? s.tick(id, 0.0f, 0.0f, 0.0f, 0u, kTestPair, false, &x) : SA1_ERR_NOT_FOUND;
+    bool p2 = c && c->host_camera_passed;
+    uint32_t f2 = c ? c->host_flags_last : 99u;
+    x.cam_pos[0] = std::nanf("");
+    s.tick(id, 0.0f, 0.0f, 0.0f, 0u, kTestPair, false, &x);
+    bool p3 = c && c->host_camera_passed;
+    CHECK(st1 == SA1_OK && st2 == SA1_OK && !p1 && f1 == 0u && p2 == kHostCameraInput && f2 == 0u && !p3,
+          "G2: host flags 0x4 (and 0xF0) without a camera: not passed (flags taken 0x%X); a valid camera: %s (flags 0x%X: the "
+          "water bits only); a NaN in it: not passed", (unsigned)f1, p2 ? "passed" : "not passed", (unsigned)f2);
+    if (id > 0) {
+        s.destroy(id);
+    }
+}
+
 // ---- the frame loop against the camera: vertical movement (round 4c, the owner's 0.5.0 report "the horizontal speed
 // position flickering thing from earlier happens with vertical movement too"; sadc docs/research/gsa1_vertical_flicker.md
 // with its review) -----------------------------------------------------------------------------------------------------
@@ -2629,23 +2757,12 @@ static void test_material_census(const std::string &gdi, const std::string &out_
             face_frames = face_letters ? kCensusFaceIdle + kCensusFaceEach * census_face_count(face_letters) + 30 : 0;
         }
 #endif
-        for (int f = 0; f < script_frames + face_frames; f++) {
-            float sy = 0;
-            uint32_t b = 0;
-            if (f < script_frames) {
-                census_script(f / 60.0, sy, b);
-            }
-#if defined(SA1_API_FACE)
-            else if (!census_face_step(s, id, k, face_letters, f - script_frames, b, e)) {
-                CHECK(false, "%s: a face call of the census's face segment at frame %d: %s", kind_name(k), f, e.c_str());
-                ok = false;
-                break;
-            }
-#endif
+        uint32_t board_new = 0;
+        // one 60 Hz frame: tick, render, the batches' states into the census (the 0.9.5 board ride counts its new ones)
+        auto frame = [&](int f, float sy, uint32_t b, bool riding) -> bool {
             if (s.tick(id, 0.0f, sy, 0.0f, b, 1.0f / 60.0f) != SA1_OK || s.render(id, -1.0f) != SA1_OK) {
                 CHECK(false, "%s: tick / render at frame %d: %s", kind_name(k), f, s.last_error().c_str());
-                ok = false;
-                break;
+                return false;
             }
             s.poll_events(ev);
             const Character *c = s.get(id);
@@ -2659,13 +2776,90 @@ static void test_material_census(const std::string &gdi, const std::string &out_
                     mine++;
                     blended += rb.pass;
                     textured_fx += rb.archive >= 1;
-                    face_new += f >= script_frames;
+                    face_new += f >= script_frames && !riding;
+                    board_new += riding;
                 }
             }
+            return true;
+        };
+        for (int f = 0; f < script_frames + face_frames; f++) {
+            float sy = 0;
+            uint32_t b = 0;
+            if (f < script_frames) {
+                census_script(f / 60.0, sy, b);
+            }
+#if defined(SA1_API_FACE)
+            else if (!census_face_step(s, id, k, face_letters, f - script_frames, b, e)) {
+                CHECK(false, "%s: a face call of the census's face segment at frame %d: %s", kind_name(k), f, e.c_str());
+                ok = false;
+                break;
+            }
+#endif
+            if (!frame(f, sy, b, false)) {
+                ok = false;
+                break;
+            }
         }
+#if defined(SA1_API_BOARD)
+        // 0.9.5 (sadc docs/research/gsa1_095_plan.md 6.3 task 5): Sonic and Tails ride a board (120 pairs on, stick forward
+        // after 30, then off and 30 pairs with the board lying), so the board's render states - its texture archive, the
+        // SA1_DRAW_BOARD batches of both draw paths, the kept board on the ground - are in the census (else the first board
+        // stalls a frame for its material: the 0.6.0 lesson). Sonic rides again until both of his boards (the game's random
+        // pick of MIW_B001 / SB_BOARD1) were seen, at most four rides
+        if (ok && (k == SA1_CHAR_SONIC || k == SA1_CHAR_TAILS)) {
+            uint32_t variants = 0;
+            int rides = 0, fr = script_frames + face_frames;
+            for (int ride = 0; ride < 4 && ok; ride++) {
+                // one pair (two frames of 1/60 s) before each ride: with it a ride takes 151 pairs (an odd number), so the
+                // get-ons alternate between even and odd pairs and the game's pick (095-fix: libsa1 runs it with the pair's
+                // parity) gives Sonic both boards in two rides (the old waits of 1, 3, 5, 7 frames put every get-on on a
+                // pair of the same parity: SB_BOARD1 only, 4 rides)
+                for (int i = 0; i < 2 && ok; i++) {
+                    ok = frame(fr++, 0.0f, 0u, true);
+                }
+                std::string be;
+                sa1_status bs = board::call(s.ctx(), id, board::kOn, board::kTerrainMap, 0u, be);
+                if (bs != SA1_OK) {
+                    if (be.find("not built yet") != std::string::npos) {
+                        INFO("%s: the census's board ride waits for libsa1's board (\"%s\")", kind_name(k), be.c_str());
+                    } else {
+                        CHECK(false, "%s: the census's board ride: %s", kind_name(k), be.c_str());
+                        ok = false;
+                    }
+                    break;
+                }
+                for (int i = 0; i < 240 && ok; i++) {
+                    ok = frame(fr++, i >= 60 ? 1.0f : 0.0f, 0u, true);
+                }
+                const Character *c = s.get(id);
+                if (c && c->board.view.valid && c->board.view.kind == k) {
+                    variants |= 1u << (c->board.view.variant & 1u);
+                }
+                board::call(s.ctx(), id, board::kOff, board::kTerrainMap, 0u, be);
+                for (int i = 0; i < 60 && ok; i++) {
+                    ok = frame(fr++, 0.0f, 0u, true);
+                }
+                rides++;
+                if (k == SA1_CHAR_TAILS || variants == 3u) {
+                    break;
+                }
+            }
+            // (095-fix: libsa1's frame counter moves by 2 a pair, so its board lane runs the game's pick at 8C0B2EE6 with the
+            // counter read as C + (C / 2) % 2 - the pick alternates with the pair the get-on lands in (owner question O12,
+            // "keep the random pick"); the one-pair wait above puts the rides on pairs of both parities, so both boards'
+            // states are in the census. Before the fix every ride picked MIW_B001)
+            if (rides > 0) {
+                CHECK(ok && board_new > 0 && (k == SA1_CHAR_SONIC ? variants == 3u : variants != 0u),
+                      "%s: %d census board ride(s), %u new render states (Sonic's boards seen: %s)", kind_name(k), rides,
+                      board_new, k == SA1_CHAR_SONIC ? (variants == 3u ? "both" : variants == 1u ? "MIW_B001 only" :
+                                                                                  "SB_BOARD1 only") : "-");
+            }
+        }
+#endif
         s.destroy(id);
-        per += format("%s%s %u (%u blended, %u from effect archives%s)", per.empty() ? "" : ", ", kind_name(k), mine,
-                      blended, textured_fx, face_frames ? format(", %u new in the face segment", face_new).c_str() : "");
+        per += format("%s%s %u (%u blended, %u from effect archives%s%s)", per.empty() ? "" : ", ", kind_name(k), mine,
+                      blended, textured_fx, face_frames ? format(", %u new in the face segment", face_new).c_str() : "",
+                      board_new ? format(", %u new on the board", board_new).c_str() : "");
     }
     std::FILE *f = std::fopen(out_path.c_str(), "wb");
     if (f) {
@@ -2772,6 +2966,7 @@ int main(int argc, char **argv)
     if (host_only) {
         if (!gdi.empty()) {
             test_host_input(gdi);
+            test_host_camera_095(gdi);
         }
         std::printf("\n%d checks, %d failed\n", g_checks, g_fail);
         return g_fail ? 1 : 0;
@@ -2823,6 +3018,7 @@ int main(int argc, char **argv)
         test_flicker(gdi);
         test_climb_world(gdi);
         test_host_input(gdi);
+        test_host_camera_095(gdi);
         test_material_census(gdi, census_path);
     }
     std::printf("\n%d checks, %d failed\n", g_checks, g_fail);

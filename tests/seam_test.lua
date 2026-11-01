@@ -159,5 +159,39 @@ check(ok_sv and list(M.included) == "gsa1/sh_config.lua gsa1/sh_net.lua gsa1/sv_
     "server: runs %s; sends %d files (the feature files: sh_alpha sh_zeta cl_alpha cl_broken)%s", list(M.included),
     #M.cslua, ok_sv and "" or (": " .. tostring(err_sv)))
 
+-- 6. round 0.9.5: the board feature's real files load through the seam and its page builds (gsa1_095_plan.md 6.4 task 7)
+do
+    host_list = function(dir, pat)
+        if string.find(dir, "/gsa1/feat$") then return { "cl_board.lua", "sh_board.lua" } end
+        return real_list and real_list(dir, pat) or {}
+    end
+    M.virtual = {}
+    GSA1 = nil
+    M.module({ features = { board = 1 } })
+    M.included, M.reported = {}, {}
+    local okb, errb = pcall(M.load, "autorun/gsa1_autorun.lua")
+    local files = GSA1 and list(GSA1.FeatureFiles) or ""
+    local ferr = GSA1 and GSA1.FeatureFileErrors or {}
+    check(okb and files == "sh_board.lua cl_board.lua" and #ferr == 0 and GSA1.Board ~= nil,
+        "the board's feature files load through the autorun (%s)%s", files, okb and (ferr[1] and (": " .. ferr[1]) or "")
+        or (": " .. tostring(errb)))
+    M.menu = {}
+    M.run_hook("PopulateToolMenu")
+    vgui.Create = vgui.Create or function() return setmetatable({}, { __index = function() return function() end end }) end
+    local page
+    for _, e in ipairs(M.menu) do if e.name == "Board" then page = e end end
+    local P = panel()
+    if page then page.cpanel(P) end
+    local t = text_of(P)
+    check(page ~= nil and string.find(t, "CheckBox(Boards for Sonic and Tails)", 1, true) ~= nil and
+        not string.find(t, "could not be built", 1, true), "the Board page builds (%s)", string.sub(t, 1, 160))
+    -- a module without the feature: the page says what it needs
+    gsa1.FEATURES = {}
+    local P2 = panel()
+    if page then page.cpanel(P2) end
+    check(string.find(text_of(P2), "G-SA1 module 0.9.5 or newer", 1, true) ~= nil, "without the module's feature "
+        .. "\"board\" the page names the module it needs")
+end
+
 print(string.format("\n%d checks, %d failed", M.checks, M.fails))
 return M.fails == 0

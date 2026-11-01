@@ -30,6 +30,9 @@ T.CATEGORIES = T.CATEGORIES or {
         return out
     end },
 }
+-- 0.9.5 (gsa1_095_plan.md 5.5; board095_gsa1.md F4, the load-order trap): categories any feature file may append in any
+-- load order (feat/cl_board.lua loads before this file), listed after T.CATEGORIES; classes is a FUNCTION (T.Items)
+T.LATER = T.LATER or {}
 
 local function spawnable()
     if not list then return {} end
@@ -62,7 +65,10 @@ end
 -- category opens at once
 function T.Populate(pnlContent, tree)
     local first
-    for _, cat in ipairs(T.CATEGORIES) do
+    local cats = {}
+    for _, c in ipairs(T.CATEGORIES) do cats[#cats + 1] = c end
+    for _, c in ipairs(T.LATER or {}) do cats[#cats + 1] = c end
+    for _, cat in ipairs(cats) do
         local items = T.Items(cat)
         if #items > 0 then
             local node = tree:AddNode(cat.name, cat.icon)

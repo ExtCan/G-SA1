@@ -1654,6 +1654,33 @@ big:Remove()
 M.frame(1 / 60)
 end
 
+-- 0.9.5 (gsa1_095_plan.md 5.5 / 6.4 task 5, review R.10): a G-SA1 trigger box (GSA1Object and GSA1Trigger: Board On / Off,
+-- a left board) is no object - O.IsObject false in both realms, the objects feature neither tracks it nor touches its
+-- properties or Physics Gun handling - while every object stays one
+do
+    local trig_s = setmetatable({ cls = "gsa1_board_on", GSA1Object = true, GSA1Trigger = true, idx = 9001, pos = Vector(),
+                                  ang = Angle(0, 0, 0) }, { __index = EMT })
+    local trig_c = setmetatable({ cls = "gsa1_board_on", GSA1Object = true, GSA1Trigger = true, idx = 9001, pos = Vector(),
+                                  ang = Angle(0, 0, 0) }, { __index = EMT })
+    local n_all = 0
+    for _ in pairs(SO.all) do n_all = n_all + 1 end
+    run_s("OnEntityCreated", trig_s)
+    M.run_hook("OnEntityCreated", trig_c)
+    M.run_hook("NetworkEntityCreated", trig_c)
+    local n_after = 0
+    for _ in pairs(SO.all) do n_after = n_after + 1 end
+    local ring = SO.ServerSpawn(P1, { Hit = true, HitPos = Vector(5, 5, 0), HitNormal = Vector(0, 0, 1) }, "gsa1_obj_ring")
+    local prop_c = M.run_hook("CanProperty", M.player, "collision", trig_c)
+    run_s("OnPhysgunPickup", P1, trig_s)
+    check(SO.IsObject(trig_s) == false and O.IsObject(trig_c) == false and n_after == n_all and O.tracked[9001] == nil and
+        prop_c == nil and trig_s.GSA1Held == nil and ring and SO.IsObject(ring) == true and O.IsObject(nil) == false and
+        O.IsObject(NULL) == false and O.IsObject(3) == false,
+        "(0.9.5) a trigger box is no G-SA1 object: O.IsObject false (both realms), not tracked, its properties and Physics "
+        .. "Gun left to its own feature; a Ring still is one; nil / NULL / a number are not (review R.10)")
+    if ring then ring:Remove() end
+    M.frame(1 / 60)
+end
+
 M.player.active = nil
 check(#M.reported == 0, "no Lua error (%s)", M.reported[1] or "none")
 return done()

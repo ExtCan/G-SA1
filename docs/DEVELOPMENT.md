@@ -40,6 +40,139 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.5 changes: the board, the sun shadow, the game sees your camera
+
+* **Ride the board as Sonic or Tails.** Open the emote wheel (TAB, or D-pad down on the controller) and press **B** on the keyboard
+  or **click the right stick**: your character drops onto a sand / snow board and rides it with the game's own board code (Sand
+  Hill's and Ice Cap's). Press it again in the wheel: they get off, and the board stays on the ground where it fell. Knuckles, Amy,
+  E-102, Big and both Super Sonics cannot ride (a short note says so). Both keys can be changed on the new **Board** page.
+* **Board On and Board Off boxes** in the G-SA1 spawn tab (a new "Board" group) and in Entities > G-SA1. A **Board On** box has a
+  real board lying in its middle (the game's board, from your disc). When Sonic or Tails walks into the box, they **walk over to the
+  board by themselves** (the game's own walking; jumping stops it) and get on. Running in, they keep running and get on at speed. The
+  board is then gone from the box and comes back after a few seconds (each box: refill on / off and the time), and each box can be
+  used once or forever. A **Board Off** box takes a rider off the board; the board stays behind there.
+* **Left-behind boards are decoration.** Nobody can get back on one (the wheel or a Board On box gives a new board). They disappear
+  after 2 minutes, you keep at most 5 (the oldest goes first), Undo and Clean-up remove them; both numbers are on the Board page.
+* **The ground feels like the map.** Where your map has snow or sand, the board gathers speed downhill as on Ice Cap's snow or Sand
+  Hill's sand; on concrete or grass it keeps the speed it has (the game's rule) - walking on snow and sand stays as it is. A choice
+  on the Board page makes every surface snow or sand instead. Board On boxes start you with Ice Cap's push (about 960 HU/s), and the
+  camera turns behind the board so that "forward" keeps meaning forward.
+* **The board looks and sounds right:** it has its texture, it shows in first person and with "Effects" off, and you hear the
+  board's ride and lean sounds of Sand Hill and Ice Cap. Sonic sometimes gets his other board: the game picks one of two, and which
+  one depends on the moment you get on. The board lying in a Board On box always shows the first one, so Sonic's can change look as
+  he gets on. Tails has one board.
+* **Your character's sun shadow.** Your character now casts a shadow from the sun in the direction, colour and length that Garry's
+  Mod uses for the props on that map, on the ground and on props. The game's round shadow under the feet stays. **It can be turned
+  off**: Q menu > Options > G-SA1 > Rendering > "Sun shadow".
+* **The game sees your camera.** The few things in the game's code that look at where the camera is now use the camera you see (an
+  option on the Camera page, on). Honest note: Big's fishing line looks the same as before with a normal chase camera - the game only
+  brightens the part of the line that is very close to the camera; the Dreamcast's bright line comes with Big's fishing camera (0.9.7).
+* **Faster Faces page:** its close-up of the face draws only your character now, so the frame rate no longer drops while the page is
+  open (0.9.4f: 34-47 fps instead of 60). The session log now says how much of the Lua garbage is G-SA1's, also with no character,
+  and where in a frame a big burst came from. A refused emote ("moving", "in the air") is no longer written as a libsa1 error.
+* **Game code:** Ice Cap's start push (STG08 `0C90E810`) is decompiled and matches; libsa1 is now 0.3.0.
+* The spawn-menu pictures are made once more after this update (the version is part of their key). A saved Surfaces table whose snow
+  and sand are still 0.9.4f's default moves to the new default once (a log line); your own changes stay.
+
+**Known limits:** on flat concrete or grass a board started by hand barely speeds up (the game's own rule); other players do not see
+your board yet (multiplayer characters are not drawn yet); the boxes need "Let the server move your player entity" (Character page,
+on by default). Not yet seen in the game itself (all tests here run against a mock of Garry's Mod): the real Physics Gun on a box, the
+boxes' see-through drawing and labels, the walk on stairs and slopes, the sun shadow's front-to-back direction (if it looks mirrored,
+say so) and its real cost per frame, and while the context menu (C) is open near a box or a G-SA1 object a patch of the sun shadow
+may land on the object's invisible pick hull (cosmetic).
+
+### The owner checklist
+
+**The board by hand**
+
+* As Sonic, open the emote wheel (TAB / D-pad down) and press **B** (or click the right stick): he drops onto a board and rides; the
+  wheel closes. Again in the wheel: he gets off and the board stays where it fell. Tails the same. Knuckles, Amy, E-102, Big, both
+  Super Sonics: nothing happens (a short note "only Sonic and Tails ride a board"). The controller's B button still only closes the
+  wheel. With the wheel closed, B does nothing new.
+* The board has its texture (Sonic sometimes gets his other board; ride a few times to see both); it shows in first person and with
+  "Effects" off; there is no board flashing at the map's origin when you get on.
+* On a slope of snow or sand on your map the board gathers speed downhill; on concrete it keeps the speed it has; walking on that
+  snow and sand feels as before. "Ground under the board: Ice Cap snow everywhere" makes every slope fast. Riding down a snowy or
+  icy slope for a long time: no crash of the character's world (libsa1 used to die there). Board snow next to dirt: only the snow
+  speeds the board up. The Surfaces page shows "Board snow" / "Board sand".
+* Riding: the camera turns behind the board, so holding W keeps going forward; mouse-look still works (the camera waits a second).
+  "Widen the view at speed" (off by default) widens the view up to 30 degrees at top speed.
+* Sounds: the board's ride sound and the snow / sand lean sounds; "Board sounds" off: silent at once.
+* Tails' jump is normal after the board (with "Keep the game's Tails jump" on it gets higher each ride, as in the game).
+
+**The boxes**
+
+* Q menu > G-SA1 tab > Board (and Entities > G-SA1): Board On and Board Off with their icons; each sits on the surface you aim at;
+  Undo, Utilities > Cleanup > "G-SA1 trigger boxes". Without a character (or with the context menu open) they show as green / red
+  see-through boxes with a label; the Physics Gun moves them; right-click > Edit Properties changes size, uses, refill, refill time,
+  push and ground.
+* A Board On box shows a real board lying in its middle (also while you play). Walk Sonic in: he walks to the board by himself
+  (about 2-3 s from the edge; jump stops it) and gets on with Ice Cap's push. Run in: he gets on at speed. The board is gone from the
+  box and comes back after the refill time; with "1 use" the box works once; with refill off it never comes back until "Reset this
+  box".
+* A Board On box start runs about 960 HU/s on flat concrete. Get off within 2 s: Sonic slows down normally instead of running on.
+* Ride into a Board Off box: he gets off; the board stays behind. A left board disappears after 2 minutes; a sixth one removes your
+  oldest; Undo removes the last; you cannot get back on it (the wheel gives a new board).
+* Get off and on again quickly in the wheel: the first board still stays behind where you got off. Jump while walking to a box's
+  board: he stops and does not start again until you leave the box and come back.
+* Edge cases: a teleporter while riding (still on a board after it); dying on a board (back on foot); changing upgrades while
+  riding (still on a board); a Board On box at your spawn point (you start on the board); two boxes close together crossed at speed.
+* Two instances (if you can): one board per box - the first player to arrive gets it, the other sees it gone; both see the lying
+  and left boards (not each other's riding board yet).
+
+**The rest**
+
+* Camera: Big casts with the chase camera - the line looks as in 0.9.4f; with the camera moved very close above the line (mouse
+  wheel), the part near the camera gets brighter; with the Camera tool's view, as 0.9.4f. "The game uses this camera" is on the
+  Camera page; the log says "the game's camera: yours".
+* Sun shadow (Rendering page, on): Sonic's shadow lies on the ground in the same direction as a prop's shadow, and on a crate when he
+  stands next to it; it moves with him, the board's shadow too while riding; the game's round shadow under the feet is still there
+  and switches on its own; **"Sun shadow" off: gone.** Note the frame rate with it on and off (the perf line's "sun shadow N ms").
+  "Sun shadow in first person too": you see your own shadow. "Darkness" above 0 overrides the map's colour.
+* On gm_construct the map's sun points straight down (its shadow_control "90 0 0", a light colour 187): the shadow lies right under
+  the character, faint, as a prop's does there; gm_bigcity, rp_rockford_v2b or gm_genesis give a slanted one. On gm_highway14800
+  (shadow_control "0 0 0") G-SA1 takes the map's light_environment: compare with a prop's shadow there.
+* Faces page open with a character: the fps in the perf lines the same as with the page closed (within about 1 fps); pointing at a
+  sound shows its mouth at once; "With the world behind it" gives 0.9.4e's picture, slower.
+* Nothing to do for the garbage meter: play as usual with and without a character and send the log (the perf lines, "perf no
+  character" every 30 s, the summary carry the figures).
+* Open the wheel while running and pick an emote: the log shows only the wheel's "refused ... moving" line, no "libsa1 error".
+* Side check (not changed): hold the walk key (Alt) with Sonic standing - does he move at all? (Research says the walk key halves the
+  stick to 0.5, and the game does not move a standing Sonic below about 0.6.)
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Page: control |
+|---|---|---|
+| `gsa1_board` | 1 | Board: "Boards for Sonic and Tails" |
+| `gsa1_board_key` | 12 (B) | Board and Emote wheel: "Board key in the open wheel" |
+| `gsa1_board_pad` | 128 (right stick) | Board and Emote wheel: "Board button in the open wheel" |
+| `gsa1_board_terrain` | 0 | Board: "Ground under the board" (the map's own surfaces / Ice Cap snow everywhere / Sand Hill sand everywhere) |
+| `gsa1_board_walk` | 0 | Board: "Walking to a box's board" (walk / jog) |
+| `gsa1_board_push` | 0 | Board: "Ice Cap's start push when you get on with the wheel" |
+| `gsa1_board_camera` | 1 | Board: "The camera turns behind the board" |
+| `gsa1_board_fov`, `gsa1_board_fov_mode` | 0, 0 | Board: "Widen the view at speed", "Field of view" |
+| `gsa1_board_sounds` | 1 | Board: "Board sounds" |
+| `gsa1_board_respawn` | 0 | Board: "Back on a board after a respawn" |
+| `gsa1_board_tails_jump` | 0 | Board: "Keep the game's Tails jump" |
+| `gsa1_board_super` | 0 | Board: "Super Sonic may ride a board too" |
+| `gsa1_board_box_show` | 0 | Board: "Show the boxes" (while editing / always) |
+| `gsa1_sv_board` | 1 | Board (server): "Board On / Off boxes work on this server" |
+| `sbox_maxgsa1_triggers` | 100 | Board (server): "Most trigger boxes per player" |
+| `gsa1_sv_board_left_time` | 120 | Board (server): "Left-behind boards stay (s, 0 = until removed)" |
+| `gsa1_sv_board_left_max` | 5 | Board (server): "Left-behind boards per player" |
+| `gsa1_cam_real` | 1 | Camera: "The game uses this camera" |
+| `gsa1_sunshadow` | 1 | Rendering: "Sun shadow" |
+| `gsa1_sunshadow_fp` | 0 | Rendering: "Sun shadow in first person too" |
+| `gsa1_sunshadow_dark` | 0 | Rendering: "Sun shadow darkness (0 = the map's own colour)" |
+| `gsa1_mouth_closeup` | 1 | Faces: "Close-up of the face" (off / the character alone / with the world behind it) |
+| `gsa1_mouth_closeup_fps` | 30 | Faces: "Close-up pictures per second" |
+| `gsa1_log_garbage` | 1 | Disc and status: "Measure Lua garbage in the log" |
+
+Each box has its own settings (right-click > Edit Properties): size (256 x 256 x 192 HU), enabled, uses (infinite / one), and for a
+Board On box refill (on), refill time (5 s), push and ground. The Surfaces page has two new kinds, "Board snow" and "Board sand"
+(snow / the letter J, sand / N by default). Buttons on the Board page: "Get on / off now", "Reset every Board box".
+
 ## What 0.9.4f changes: no more lag when changing character
 
 A hot fix for the owner's report on 0.9.4e: "changing character makes the game lag like hell for a minute ... like 1 fps".

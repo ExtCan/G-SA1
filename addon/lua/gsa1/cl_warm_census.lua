@@ -4,11 +4,11 @@
 -- exactly. Numbers only (archive and texture numbers of the character's own texture archives, SA1_DRAW_* flags,
 -- blend factors, address modes, passes, alphas): no game data. Per character kind: { archive, texture, flags, src,
 -- dst, wrap, pass [, alpha] } of every render state it drew in core_test's 13 s of scripted play with all its
--- upgrades (425 states; the primitive kinds left out). alpha (0.9.1): a lit translucent batch's vertex alpha, its
+-- upgrades (431 states; the primitive kinds left out). alpha (0.9.1): a lit translucent batch's vertex alpha, its
 -- material's $alpha (left out: 255).
 GSA1 = GSA1 or {}
 GSA1.WarmCensus = {
-    [0] = { -- Sonic: 59 states
+    [0] = { -- Sonic: 63 states
         { -1, -1, 0x211, 1, 1, 0, 1 }, { 0, 0, 0x20, 1, 0, 3, 0 }, { 0, 1, 0x20, 1, 0, 3, 0 },
         { 0, 2, 0x20, 1, 0, 3, 0 }, { 0, 3, 0x20, 1, 0, 3, 0 }, { 0, 4, 0x20, 1, 0, 3, 0 },
         { 0, 5, 0x20, 1, 0, 3, 0 }, { 0, 5, 0x24, 1, 0, 3, 0 }, { 0, 6, 0x20, 1, 0, 3, 0 },
@@ -28,9 +28,10 @@ GSA1.WarmCensus = {
         { 1, 16, 0x275, 4, 1, 3, 1 }, { 1, 17, 0x275, 4, 1, 3, 1 }, { 1, 18, 0x275, 4, 1, 3, 1 },
         { 1, 19, 0x275, 4, 1, 3, 1 }, { 1, 20, 0x275, 4, 1, 3, 1 }, { 1, 21, 0x275, 4, 1, 3, 1 },
         { 1, 22, 0x275, 4, 1, 3, 1 }, { 1, 23, 0x275, 4, 1, 3, 1 }, { 1, 27, 0x255, 4, 1, 3, 1 },
-        { 1, 28, 0x255, 4, 1, 3, 1 }, { 2, 58, 0x841, 4, 5, 11, 1 },
+        { 1, 28, 0x255, 4, 1, 3, 1 }, { 2, 58, 0x841, 4, 5, 11, 1 }, { 6, 0, 0x4040, 1, 0, 3, 0 },
+        { 6, 0, 0x4060, 1, 0, 3, 0 }, { 7, 0, 0x4040, 1, 0, 3, 0 }, { 7, 0, 0x4060, 1, 0, 3, 0 },
     },
-    [2] = { -- Tails: 56 states
+    [2] = { -- Tails: 58 states
         { -1, -1, 0x255, 1, 1, 0, 1 }, { 0, 0, 0x20, 1, 0, 3, 0 }, { 0, 0, 0x21, 4, 5, 3, 1, 85 },
         { 0, 0, 0x21, 4, 5, 3, 1, 170 }, { 0, 1, 0x20, 1, 0, 3, 0 }, { 0, 1, 0x21, 4, 5, 3, 1, 85 },
         { 0, 1, 0x21, 4, 5, 3, 1, 170 }, { 0, 2, 0x20, 1, 0, 3, 0 }, { 0, 3, 0x20, 1, 0, 3, 0 },
@@ -49,7 +50,8 @@ GSA1.WarmCensus = {
         { 0, 17, 0x21, 4, 5, 3, 1, 170 }, { 0, 18, 0x20, 1, 0, 3, 0 }, { 0, 18, 0x21, 4, 5, 3, 1, 85 },
         { 0, 18, 0x21, 4, 5, 3, 1, 170 }, { 0, 19, 0x30, 1, 0, 3, 0 }, { 0, 20, 0x20, 1, 0, 3, 0 },
         { 0, 20, 0x30, 1, 0, 3, 0 }, { 0, 21, 0x20, 1, 0, 3, 0 }, { 0, 22, 0x20, 1, 0, 3, 0 },
-        { 0, 23, 0x28, 1, 0, 3, 0 }, { 1, 58, 0x841, 4, 5, 11, 1 },
+        { 0, 23, 0x28, 1, 0, 3, 0 }, { 1, 58, 0x841, 4, 5, 11, 1 }, { 4, 0, 0x4040, 1, 0, 3, 0 },
+        { 4, 0, 0x4060, 1, 0, 3, 0 },
     },
     [3] = { -- Knuckles: 30 states
         { -1, -1, 0x20, 1, 0, 0, 0 }, { 0, 0, 0x21, 4, 5, 3, 1 }, { 0, 1, 0x20, 1, 0, 3, 0 },

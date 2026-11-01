@@ -149,10 +149,19 @@ int main(int argc, char **argv)
     gmod13_open(&state);
     Val g = L.globals.tab->field("gsa1");
     Val feats = g.type == Type::Table ? g.tab->field("FEATURES") : Val();
-    CHECK(g.type == Type::Table && feats.type == Type::Table && feats.tab->field("surfaces").num == 2 &&
+    // 0.9.5 (gsa1_095_plan.md 6.3 task 4): version 3 with libsa1's board-time kinds (SA1_SURFACE_BOARD_SNOW / _SAND)
+#if defined(SA1_SURFACE_BOARD_SNOW)
+    const double want_version = 3.0;
+    const char *snow_default = "dig,boardsnow";
+#else
+    const double want_version = 2.0;
+    const char *snow_default = "dig";
+#endif
+    CHECK(g.type == Type::Table && feats.type == Type::Table && feats.tab->field("surfaces").num == want_version &&
               g.tab->field("SetSurfaceTable").type == Type::Function && g.tab->field("SurfaceInfo").type == Type::Function &&
               L.st.empty(),
-          "gsa1.FEATURES.surfaces = %g (2: 0.9.2's kinds); SetSurfaceTable, SurfaceDefaults, SurfaceKind, SurfaceInfo "
+          "gsa1.FEATURES.surfaces = %g (2: 0.9.2's kinds; 3: 0.9.5's board kinds); SetSurfaceTable, SurfaceDefaults, "
+          "SurfaceKind, SurfaceInfo "
           "registered", feats.type == Type::Table ? feats.tab->field("surfaces").num : -1.0);
     if (g.type != Type::Table) return 1;
 
@@ -173,7 +182,7 @@ int main(int argc, char **argv)
     auto k4 = L.call("SurfaceKind", {Val::string("ice")});
     auto k5 = L.call("SurfaceKind", {Val::string("snow"), Val::number('J')});
     CHECK(str_of(k1, 0) == "dig" && str_of(k1, 1) == "listed" && str_of(k2, 0) == "normal" && str_of(k3, 0) == "dig" &&
-              str_of(k3, 1) == "letter D" && str_of(k4, 0) == "sand" && str_of(k5, 0) == "dig",
+              str_of(k3, 1) == "letter D" && str_of(k4, 0) == "sand" && str_of(k5, 0) == snow_default,
           "SurfaceKind: concrete %s (the owner's entry), grass %s, an unknown type with letter D %s (%s), ice %s, snow %s",
           str_of(k1, 0).c_str(), str_of(k2, 0).c_str(), str_of(k3, 0).c_str(), str_of(k3, 1).c_str(), str_of(k4, 0).c_str(),
           str_of(k5, 0).c_str());
@@ -194,10 +203,10 @@ int main(int argc, char **argv)
     auto d = L.call("SurfaceDefaults", {});
     bool defaults_ok = d.size() == 2 && d[0].type == Type::Table && d[0].tab->field("grass").str == "dig" &&
                        d[0].tab->field("ice").str == "slippery" && d[0].tab->field("carpet").str == "normal" &&
-                       d[1].type == Type::Table && d[1].tab->field("J").str == "dig";
+                       d[1].type == Type::Table && d[1].tab->field("J").str == snow_default;
     CHECK(str_of(k6, 0) == "normal" && str_of(k6, 1) == "off" && defaults_ok,
           "ground types off: SurfaceKind says normal (off); SurfaceDefaults: grass dig, ice slippery, carpet normal, letter "
-          "J dig");
+          "J %s", snow_default);
     auto i0 = L.call("SurfaceInfo", {});
     int bad = 0;
     bad += is_nil_msg(L.call("SetSurfaceTable", {Val::string("concrete=dig")}));

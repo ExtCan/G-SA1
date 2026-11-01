@@ -687,7 +687,10 @@ GSA1.BindOverride = GSA1.BindOverride or function() return nil end
 GSA1.ViewOverride = GSA1.ViewOverride or function(view, C, ply) return nil end
 GSA1.TickYaw = GSA1.TickYaw or function(C) return nil end
 GSA1.InputBlocked = GSA1.InputBlocked or function() return false end
+-- (0.9.5, board095_cam.md 5.4 item 4: nil while "The game uses this camera" (gsa1_cam_real) is off - the world keeps its
+-- virtual eye 40 units behind the character, as in 0.9.4f)
 function GSA1.DefaultTickCamera(C)
+    if not (GSA1.cv.cam_real and GSA1.cv.cam_real:GetBool()) then return nil end
     local v = GSA1.view
     if not (v and v.frame and v.origin and v.angles and FrameNumber() - v.frame <= 2) then return nil end
     C.camO, C.camT = C.camO or Vector(), C.camT or Vector()
@@ -760,6 +763,13 @@ end
 
 -- the listener is the view (the chase camera's origin and angles from CalcView, else the player's eyes)
 local audio_fwd, audio_up = Vector(), Vector()
+-- 0.9.5 (sadc docs/research/board095_perf.md G1): with no fresh view (no character) the player's eyes are read at most
+-- every AUDIO_EYE_EVERY s into these reused objects - ply:EyePos() / EyeAngles() make a new Vector and Angle on every call,
+-- and 0.9.4f did that every frame with no character (all of G-SA1's per-frame Lua garbage then). Nothing 3D sounds without
+-- a character (libsa1's sounds come from the character worlds, the jukebox's music has no position), so a listener up to
+-- 0.25 s old there changes nothing you hear
+local audio_eye, audio_ang, audio_eye_at = Vector(), Angle(), nil
+local AUDIO_EYE_EVERY = 0.25
 local function update_audio()
     if not gsa1.AudioUpdate then return end
     local v = GSA1.view
@@ -767,9 +777,16 @@ local function update_audio()
     if v and v.frame and FrameNumber() - v.frame <= 2 then
         origin, ang = v.origin, v.angles
     else
-        local ply = LocalPlayer()
-        if not IsValid(ply) then return end
-        origin, ang = ply:EyePos(), ply:EyeAngles()
+        local now = RealTime()
+        if not audio_eye_at or now - audio_eye_at >= AUDIO_EYE_EVERY or now < audio_eye_at then
+            local ply = LocalPlayer()
+            if not IsValid(ply) then return end
+            audio_eye:Set(ply:EyePos())
+            local a = ply:EyeAngles()
+            audio_ang.p, audio_ang.y, audio_ang.r = a.p, a.y, a.r
+            audio_eye_at = now
+        end
+        origin, ang = audio_eye, audio_ang
     end
     local paused = game_paused() or (cv_mute_focus and cv_mute_focus:GetBool() and not system.HasFocus())
     -- (0.9.4d: the listener's axes into reused Vectors, not two new ones a frame)
@@ -849,7 +866,10 @@ local function tick_character(now)
     local hflags = GSA1.HostWaterFlags(C)
     C.hostFlags = hflags
     local co, ct
-    if gsa1.TICK_HOST_CAMERA and GSA1.TickCamera then co, ct = GSA1.TickCamera(C) end
+    if gsa1.TICK_HOST_CAMERA and GSA1.TickCamera then
+        co, ct = GSA1.TickCamera(C)
+        if GSA1.LogCamera then GSA1.LogCamera(co ~= nil) end      -- (0.9.5: one log line per change)
+    end
     local t0 = SysTime()
     local npairs, err, code = gsa1.Tick(C.id, sx, sy, yaw, buttons, dt, GSA1.cv.stick_raw:GetBool(), hflags, co, ct)
     prof("Tick", t0)

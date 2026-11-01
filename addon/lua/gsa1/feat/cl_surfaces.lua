@@ -15,6 +15,8 @@
 -- each with its kinds (the checklist below the list changes the selected one), and a live line: what the ground under the
 -- character is made of, and what the game makes of it. One line per map goes into the session log.
 -- Nothing here runs per frame outside the page.
+-- 0.9.5 (gsa1_095_plan.md 6.3 task 4): the board-time kinds' boxes (Board snow / Board sand) with a module whose surfaces
+-- part is version 3, and the one-time move of a 0.9.4f file's snow / sand default (S.MigrateBoardKinds; one log line).
 GSA1 = GSA1 or {}
 local S = GSA1.Surfaces
 if not S then return end
@@ -35,6 +37,19 @@ function S.Load()
     local t, bad = S.Parse(text)
     S.overrides = t
     S.badLines = bad
+    -- 0.9.5: a 0.9.4f file's snow / sand entry still equal to 0.9.4f's default takes 0.9.5's default, once
+    local moved = S.MigrateBoardKinds and S.MigrateBoardKinds(t, text) or {}
+    if #moved > 0 then
+        S.Save()
+        S.movedNote = string.format("surfaces: your table's %s %s 0.9.4f's default (diggable); %s now 0.9.5's default "
+            .. "(diggable, and the game's snow / sand under a board)", table.concat(moved, " and "),
+            #moved > 1 and "entries were" or "entry was", #moved > 1 and "they take" or "it takes")
+        S.movedLogged = false
+        if GSA1.Log then
+            GSA1.Log("surfaces", "%s", S.movedNote)
+            S.movedLogged = true
+        end
+    end
     return t
 end
 
@@ -182,6 +197,10 @@ end
 GSA1.WorldAppliedHooks = GSA1.WorldAppliedHooks or {}
 GSA1.WorldAppliedHooks.surfaces = function(map, info)
     if not S.HasModule() then return end
+    if S.movedNote and not S.movedLogged and GSA1.Log then
+        GSA1.Log("surfaces", "%s", S.movedNote)
+        S.movedLogged = true
+    end
     S.info = gsa1.SurfaceInfo()
     local line = S.SummaryLine(S.info)
     if GSA1.Log then GSA1.Log("surfaces", "%s", line) end
@@ -253,7 +272,8 @@ local function page(panel)
         syncing = false
     end
     for _, kd in ipairs(S.KINDS) do
-        if not kd.hidden then
+        -- (0.9.5: the board-time kinds only with a module that has them: surfaces version 3)
+        if not kd.hidden and (not kd.needs or (GSA1.HasFeature and GSA1.HasFeature(S.NEEDS.feature, kd.needs))) then
             local cb = panel:CheckBox(kd.title)
             if cb then
                 if cb.SetTooltip then cb:SetTooltip(kd.tip) end
@@ -270,6 +290,11 @@ local function page(panel)
                 boxes[kd.id] = cb
             end
         end
+    end
+    if GSA1.HasFeature and GSA1.HasFeature(S.NEEDS.feature, 3) then
+        panel:ControlHelp("Board snow / Board sand: Ice Cap's snow / Sand Hill's sand only under Sonic's or Tails' board (the "
+            .. "board gathers speed downhill there); walking on that ground is unchanged. By default Garry's Mod's snow and "
+            .. "sand have them.")
     end
     panel:ControlHelp(S.PRECEDENCE .. " \"Not a floor\" and \"Slide-off wall\" go on the type's walls only (on a floor "
         .. "they would trap the character). Your change is kept in garrysmod/data/gsa1/surfaces.txt; Apply loads the "

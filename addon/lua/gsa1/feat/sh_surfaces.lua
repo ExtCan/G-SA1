@@ -12,6 +12,12 @@
 -- marks through a table: by default grass, dirt, mud, sand, gravel and snow are diggable, ice is slippery, everything
 -- else is normal ground (the new kinds are the owner's choice). The owner can change any type on the Surfaces page; the
 -- changes are kept in garrysmod/data/gsa1/surfaces.txt ("type = kinds" lines; 0.8's files read unchanged).
+-- 0.9.5 (sadc docs/research/gsa1_095_plan.md 4.5, 6.3 task 4 with its review R.1; the owner's 14.1ad 2 "the map's real
+-- surfaces"; the module's surfaces feature version 3): two board-time kinds, "boardsnow" / "boardsand" ("Board snow" /
+-- "Board sand": Ice Cap's snow / Sand Hill's sand ONLY under Sonic's or Tails' board - the board gathers speed downhill there;
+-- walking is unchanged). The module's defaults give them to snow / the letter J and sand / N. A surfaces.txt 0.9.4f wrote
+-- whose snow / sand entry is still 0.9.4f's default ("dig") is moved to 0.9.5's default once (S.MigrateBoardKinds); an
+-- owner's own entry stays. The page shows the two boxes only with a module that has them (needs = 3).
 GSA1 = GSA1 or {}
 local S = GSA1.Surfaces or {}
 GSA1.Surfaces = S
@@ -20,7 +26,7 @@ S.NEEDS = { feature = "surfaces", version = 2, module = "0.9.2" }
 S.FILE = "gsa1/surfaces.txt"            -- in DATA
 -- the module's order (kinds_string: 0.8's five first, then 0.9.2's eight, so 0.8's strings stay the same)
 S.ORDER = { "dig", "slippery", "sand", "hurt", "noclimb", "snow", "fast", "slide", "speedpath", "stairs", "noland",
-            "wallslide", "footprints" }
+            "wallslide", "footprints", "boardsnow", "boardsand" }
 
 -- the page's checklist, in the page's order (gsa1_090_surfaces.md 5.1 with Review C5): the module's word, the label, the
 -- explanation (the tooltip), the SA1_SURFACE_* bit sa1_state.surface reports (the live line), walls = the kind goes on
@@ -52,23 +58,32 @@ S.KINDS = {
       tip = "Touching it hurts (you lose your rings; with none you die)" },
     { id = "footprints", title = "Footprints", bit = 0x20000, hidden = true,
       tip = "Leaves footprints, like Emerald Coast's beach (not yet: G-SA1's worlds have no footprint task)" },
+    -- 0.9.5: the board-time kinds (SA1_SURFACE_BOARD_SNOW / _SAND), shown with surfaces feature version 3
+    { id = "boardsnow", title = "Board snow", bit = 0x100000, needs = 3,
+      tip = "Ice Cap's snow, only under a board: the board gathers speed downhill; walking is unchanged" },
+    { id = "boardsand", title = "Board sand", bit = 0x200000, needs = 3,
+      tip = "Sand Hill's sand, only under a board: the board gathers speed downhill; walking is unchanged" },
 }
 S.PRECEDENCE = "Of snow, ice, slow sand and fast ground only the first counts (the game's own rule)."
 
 local WORDS = { dig = "diggable", slippery = "slippery", sand = "slow sand", hurt = "hurts", noclimb = "no climbing",
                 snow = "snow", fast = "fast ground", slide = "sliding floor", speedpath = "speed track", stairs = "stairs",
-                noland = "not a floor", wallslide = "slide-off wall", footprints = "footprints" }
+                noland = "not a floor", wallslide = "slide-off wall", footprints = "footprints",
+                boardsnow = "board snow", boardsand = "board sand" }
 local KNOWN = {}
 for _, w in ipairs(S.ORDER) do KNOWN[w] = true end
 local ALIAS = { diggable = "dig", ice = "slippery", hurts = "hurt", no_climb = "noclimb", plain = "normal", none = "normal",
                 boost = "fast", sliding = "slide", speed_path = "speedpath", speedtrack = "speedpath", stair = "stairs",
-                no_land = "noland", wall_slide = "wallslide", footprint = "footprints" }
+                no_land = "noland", wall_slide = "wallslide", footprint = "footprints", board_snow = "boardsnow",
+                board_sand = "boardsand" }
 
 -- "Dig, sand" -> "dig,sand" (the module's order); "normal" for none; nil when a word is unknown
 function S.NormalizeKinds(k)
     if type(k) ~= "string" then return nil end
     local have = {}
-    for w in string.gmatch(string.lower(k), "[^,%s+|]+") do
+    -- 0.9.5: "board snow" / "board-snow" (and sand) are one word each
+    local lk = string.gsub(string.gsub(string.lower(k), "board[%s%-]+snow", "boardsnow"), "board[%s%-]+sand", "boardsand")
+    for w in string.gmatch(lk, "[^,%s+|]+") do
         w = ALIAS[w] or w
         if KNOWN[w] then
             have[w] = true
@@ -162,9 +177,27 @@ end
 function S.Serialize(t)
     local lines = { "# G-SA1 ground types: your changes to the Surfaces page's table (Options > G-SA1 > Surfaces).",
                     "# One \"surface type = kinds\" per line; kinds: normal, dig, slippery, sand, hurt, noclimb, snow, "
-                    .. "fast, slide, speedpath, stairs, noland, wallslide (several: dig,sand)." }
+                    .. "fast, slide, speedpath, stairs, noland, wallslide, boardsnow, boardsand (several: dig,sand)." }
     for _, name in ipairs(sorted_names(t or {})) do lines[#lines + 1] = name .. " = " .. t[name] end
     return table.concat(lines, "\n") .. "\n"
+end
+
+-- 0.9.5: the entries 0.9.4f's default gave snow and sand ("dig"); 0.9.5's default is "dig,boardsnow" / "dig,boardsand"
+S.BOARD_MOVE = { snow = "dig", sand = "dig" }
+-- a table read from a file 0.9.4f wrote (text without the word "boardsnow": 0.9.5 writes it in its header): its snow / sand
+-- entries still equal to 0.9.4f's default are dropped (the module's 0.9.5 default applies); anything else - an owner's own
+-- entry, a file 0.9.5 wrote - stays. Returns the names moved (sorted; {} for none)
+function S.MigrateBoardKinds(t, text)
+    if type(t) ~= "table" or type(text) ~= "string" or string.find(text, "boardsnow", 1, true) then return {} end
+    local moved = {}
+    for name, old in pairs(S.BOARD_MOVE) do
+        if t[name] == old then
+            t[name] = nil
+            moved[#moved + 1] = name
+        end
+    end
+    table.sort(moved)
+    return moved
 end
 
 -- { [type] = kinds } -> { "type=kinds", ... } (gsa1.SetSurfaceTable's argument; sorted)

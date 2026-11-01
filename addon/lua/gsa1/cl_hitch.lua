@@ -43,7 +43,7 @@ end)
 -- the order the sections are printed in
 local ORDER = { "Init", "Sound", "LoadWorld", "Apply", "Create", "Textures", "Tick", "Movers", "Render", "Batches",
                 "PrepareView", "EmitBatch", "Warm", "Materials", "AudioUpdate", "PadUpdate", "Events", "Texture info",
-                "Texture target", "Texture paint", "Texture check", "Shapes" }
+                "Texture target", "Texture paint", "Texture check", "Shapes", "Closeup", "SunShadow" }
 local IN_ORDER = {}
 for _, name in ipairs(ORDER) do IN_ORDER[name] = true end
 
@@ -102,6 +102,8 @@ function GSA1.HitchFrame(now)
     local counted = focused and was and not paused
     if paused and dt >= 1 and GSA1.LogPause then GSA1.LogPause(dt, drawn, ui, unfocused or not focused or not was) end
     if GSA1.LogFrame then GSA1.LogFrame(dt, cur, counted, gc) end
+    -- 0.9.5 (sadc docs/research/board095_perf.md P2): the garbage meter's frame (cl_gcmeter.lua)
+    if GSA1.GcMeter and GSA1.GcMeter.Frame then GSA1.GcMeter.Frame(now, gc, counted) end
     if not counted then return end
     local logms = GSA1.cv.log_hitch_ms and GSA1.cv.log_hitch_ms:GetFloat() or 50
     local console = GSA1.cv.hitch:GetBool() and dt * 1000 >= GSA1.cv.hitch_ms:GetFloat()
