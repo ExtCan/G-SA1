@@ -516,7 +516,7 @@ do
     table.sort(sorted)
     local v = dvKinds[1] or {}
     local cs = M.camStarts[#M.camStarts]
-    check(refreshes >= 28 and refreshes <= 31 and dvCalls == refreshes and v.kind == "sunshadow" and v.ortho ~= nil and
+    check(refreshes >= 59 and refreshes <= 61 and dvCalls == refreshes and v.kind == "sunshadow" and v.ortho ~= nil and
         v.opaque == true and v.material ~= nil and v.material.shader == "UnlitGeneric" and cs and cs.ortho ~= nil and
         cs.type == "3D", "one orthographic DrawCharacterView per refresh: %d refreshes in 1 s at 60 fps, %d views "
         .. "(kind %s, the ortho box, opaque only, the flat white UnlitGeneric)", refreshes, dvCalls, tostring(v.kind))
@@ -629,11 +629,25 @@ do
     local grids = ((M.calls.TraceLine or 0) - tr0) / 81
     check(grids >= 3 and grids <= 5 and S.stats.refreshes - rf0 >= 28, "standing: %d grids of traces in 1 s (every 0.25 s, so a "
         .. "prop that moves under the shadow is seen), %d silhouettes", grids, S.stats.refreshes - rf0)
-    -- 144 fps: at most 30 refreshes a second
+    -- gsa1_sunshadow_rate: 0, the default, a picture in every frame at any frame rate (the owner on 0.9.5a: "it runs at a lower
+    -- frame rate to the rest of the game"); above 0 at most that many a second
+    rf0 = S.stats.refreshes
+    frames(144, 1 / 144)
+    local r144all = S.stats.refreshes - rf0
+    RunConsoleCommand("gsa1_sunshadow_rate", "30")
+    rf0 = S.stats.refreshes
+    frames(60)
+    local r60at30 = S.stats.refreshes - rf0
     rf0 = S.stats.refreshes
     frames(144, 1 / 144)
     local r144 = S.stats.refreshes - rf0
-    check(r144 <= 30 and r144 >= 24, "at most 30 refreshes a second at 144 fps (%d)", r144)
+    RunConsoleCommand("gsa1_sunshadow_rate", "0")
+    rf0 = S.stats.refreshes
+    frames(30)
+    local rBack = S.stats.refreshes - rf0
+    check(r144all >= 143 and r144all <= 145 and rBack >= 29 and r60at30 >= 28 and r60at30 <= 31 and r144 <= 30 and r144 >= 24,
+        "the picture: every frame by default (%d in 144 frames at 144 fps, %d in 30 frames after the slider's way back); "
+        .. "gsa1_sunshadow_rate 30: %d a second at 60 fps, %d at 144 fps", r144all, rBack, r60at30, r144)
     -- first person without gsa1_sunshadow_fp: nothing; with it: the silhouette, with the body
     local dist = GSA1.cv.cam_dist:GetString()
     GSA1.cv.cam_dist:SetString("0")
@@ -1191,7 +1205,10 @@ do
     local d = GSA1.CONVARS
     local okDefaults = d.gsa1_sunshadow and d.gsa1_sunshadow.default == "1" and d.gsa1_sunshadow_fp.default == "0" and
         d.gsa1_sunshadow_dark.default == "0" and d.gsa1_sunshadow_dark.min == 0 and d.gsa1_sunshadow_dark.max == 100 and
+        d.gsa1_sunshadow_rate and d.gsa1_sunshadow_rate.default == "0" and d.gsa1_sunshadow_rate.max == 60 and
         M.convars.gsa1_sunshadow.client and M.convars.gsa1_sunshadow.save
+    check(rows.gsa1_sunshadow_rate and rows.gsa1_sunshadow_rate[1] == "NumSlider", "Options > G-SA1 > Rendering: \"%s\" "
+        .. "(0 .. 60, 0)", rows.gsa1_sunshadow_rate and rows.gsa1_sunshadow_rate[2] or "-")
     check(built and rows.gsa1_sunshadow and rows.gsa1_sunshadow[1] == "CheckBox" and rows.gsa1_sunshadow_fp and
         rows.gsa1_sunshadow_dark and rows.gsa1_sunshadow_dark[1] == "NumSlider" and okDefaults, "Options > G-SA1 > "
         .. "Rendering: \"%s\" (gsa1_sunshadow, on), \"%s\" (off), \"%s\" (0 .. 100, 0)", rows.gsa1_sunshadow and

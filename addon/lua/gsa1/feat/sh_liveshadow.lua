@@ -7,6 +7,7 @@
 --   gsa1_sunshadow       1  the sun shadow on / off (off: no hook, nothing drawn, nothing computed, nothing read)
 --   gsa1_sunshadow_fp    0  also in first person (you see your own shadow on the ground)
 --   gsa1_sunshadow_dark  0  its darkness in percent (0 = the map's own shadow colour: shadow_control's "color")
+--   gsa1_sunshadow_rate  0  its picture's rate a second; 0 = every frame, so it moves as smoothly as the character (0.9.5b)
 GSA1 = GSA1 or {}
 GSA1.SunShadow = GSA1.SunShadow or {}
 local S = GSA1.SunShadow
@@ -19,3 +20,5 @@ S.cv.fp = GSA1.ConVar("gsa1_sunshadow_fp", 0, "The sun shadow in first person to
     .. "ground)", 0, 1)
 S.cv.dark = GSA1.ConVar("gsa1_sunshadow_dark", 0, "The sun shadow's darkness in percent: 0 = the map's own shadow colour, "
     .. "1-100 = this darkness instead", 0, 100)
+S.cv.rate = GSA1.ConVar("gsa1_sunshadow_rate", 0, "How many times a second the sun shadow's picture is made: 0 = every "
+    .. "frame, so it moves as smoothly as the character; 10-60 = fewer, a little cheaper", 0, 60)

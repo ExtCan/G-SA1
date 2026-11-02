@@ -40,6 +40,24 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.5b changes: the sun shadow moves as smoothly as the character
+
+The owner's note on 0.9.5a: "the shadow is visible but it runs at a lower frame rate to the rest of the game." The shadow's picture was made at most 30 times a second, and in practice 20 to 30. It's now made in every frame, so its shape moves with the character. A new slider, Q menu > Options > G-SA1 > Rendering > "Sun shadow pictures per second (0 = every frame)", brings the old rate back if you want it a little cheaper.
+
+Only the addon's Lua changes in this update, so the module still says 0.9.5a.
+
+**Good news from that test:** the shadow shows on gm_snowrider_day_v3, the map where it was missing.
+
+**The lag in that test wasn't the shadow.** It came from G-SA1's builds running at the same time: the frame rate went back to a steady 60 within seconds of the heaviest build ending, with the shadow still on, and the shadow's own time stayed at 0.3 to 0.6 ms a frame.
+
+**Not tested in the game yet:** how the shadow looks at the new rate and what it costs. The tests run against a stand-in for Garry's Mod.
+
+### The owner checklist
+
+* Run around in third person on gm_snowrider_day_v3: the shadow's arms and legs move as smoothly as Sonic's.
+* gm_highway14800, standing and at full speed: the shadow, G-SA1's effects and distant models don't flash. This one hasn't been tried since the fix.
+* Send the session log. The perf line's "SunShadow" figure was about 0.4 ms a frame; say so if it goes far above about 1 ms.
+
 ## What 0.9.5a changes: the sun shadow's two bugs
 
 A hot fix of the sun shadow only, from the owner's notes on 0.9.5: "I'm not seeing any sun shadows" (gm_snowrider_day_v3), and "the sun shadow is flashing", "makes all G-SA1 effects flash", "the sun shadows cause distant models to flash rapidly" (gm_highway14800).
@@ -191,6 +209,7 @@ may land on the object's invisible pick hull (cosmetic).
 | `gsa1_sunshadow` | 1 | Rendering: "Sun shadow" |
 | `gsa1_sunshadow_fp` | 0 | Rendering: "Sun shadow in first person too" |
 | `gsa1_sunshadow_dark` | 0 | Rendering: "Sun shadow darkness (0 = the map's own colour)" |
+| `gsa1_sunshadow_rate` | 0 | Rendering: "Sun shadow pictures per second (0 = every frame)" |
 | `gsa1_mouth_closeup` | 1 | Faces: "Close-up of the face" (off / the character alone / with the world behind it) |
 | `gsa1_mouth_closeup_fps` | 30 | Faces: "Close-up pictures per second" |
 | `gsa1_log_garbage` | 1 | Disc and status: "Measure Lua garbage in the log" |

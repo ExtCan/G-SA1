@@ -17,15 +17,16 @@
 --     color "128 128 128", distance 75, disableallshadows 0); with no shadow_control the colour and distance are those
 --     defaults too. One log line per map (it also says when the map has no sky_camera: a 2D sky). A map whose shadow_control
 --     changes at run time keeps its first values.
---   * THE SILHOUETTE, at most once per game pair (S.REFRESH), in a frame whose main view took the character (see THE MAIN
+--   * THE SILHOUETTE, in every frame (0.9.5b; the owner: "it runs at a lower frame rate to the rest of the game"), or at
+--     most gsa1_sunshadow_rate times a second when that is above 0, in a frame whose main view took the character (see THE MAIN
 --     VIEW; third person; first person only with gsa1_sunshadow_fp) and the map does not disable shadows: made in the
 --     PostRender hook, OUTSIDE EVERY VIEW (0.9.5a, see below): cl_render.lua's GSA1.DrawCharacterView with an
 --     orthographic box along the light around the drawn root (the eye S.box x 2 back along the light, the box S.box from
 --     the character's height) into a 256 x 256 render target (its own depth, cl_textures.lua's probed format), white on
 --     black: one flat white UnlitGeneric for every batch drawn (colour modulation 1, fog off, the tone-mapping scale 1, all
 --     restored), only the opaque body and board batches (no effects, no game objects, no blob shadow); then
---     render.BlurRenderTarget once. The first picture shows from the frame after it; at 60 fps the picture on screen is 1
---     to 3 frames old (made every 2 or 3 frames, at the end of a frame). Only its pose lags, not its place: see below.
+--     render.BlurRenderTarget once. The first picture shows from the frame after it, so the picture on screen is 1 frame
+--     old (older with gsa1_sunshadow_rate above 0). Only its pose lags, not its place: see below.
 --   * THE RECEIVERS: a 9 x 9 grid over the silhouette's footprint, each point traced along the light (util.TraceLine,
 --     MASK_SOLID: props count; the local player filtered) at most the light's distance past the character's feet; the hit
 --     points (in the world: they stay on the ground between two grids, also on slopes and stairs) as a grid of quads drawn
@@ -82,7 +83,6 @@ local band = bit.band
 
 S.RT_SIZE, S.GRID, S.BLUR = 256, 9, 2
 S.SLICE, S.LUMP_MAX, S.PARSE_BLOCKS = 256 * 1024, 8 * 1024 * 1024, 400
-S.REFRESH = 1 / 30                  -- at most once per game pair
 S.RETRACE_MOVE, S.RETRACE_EVERY = 8, 0.25    -- the grid again: HU the root moved (x + y + z) / s passed
 S.MIN_DOWN = math.sin(math.rad(10)) -- a direction within 10 degrees of horizontal (or up) is not used
 S.STEP_DEPTH = 24                   -- HU along the light: a cell spanning more is a ledge, left out (so is a cell on ground
@@ -300,7 +300,7 @@ local function step_light()
         return
     end
     S.light, S.lightMap, S.job = L, map, nil
-    log("sun shadow: %s", L.text)
+    log("sun shadow: %s; pictures: %s", L.text, cv.rate:GetFloat() > 0 and cv.rate:GetString() .. " a second" or "every frame")
 end
 S.StepLight = step_light
 
@@ -616,8 +616,9 @@ local function post_render()
     local C, L = GSA1.Char, S.light
     local t0 = SysTime()
     S.postAt = t0
-    if S.drawnFrame == fn and C and L and C.viewFrame == fn and (S.refreshC ~= C or not S.refreshAt or
-       t0 - S.refreshAt >= S.REFRESH - 1e-6 or t0 < S.refreshAt) then
+    local rate = cv.rate:GetFloat()
+    if S.drawnFrame == fn and C and L and C.viewFrame == fn and (rate <= 0 or S.refreshC ~= C or not S.refreshAt or
+       t0 - S.refreshAt >= 1 / rate - 1e-6 or t0 < S.refreshAt) then
         local ok, err = pcall(refresh, C, L, t0)
         local dt = SysTime() - t0
         local st = S.stats

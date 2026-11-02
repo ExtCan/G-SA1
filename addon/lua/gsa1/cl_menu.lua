@@ -300,6 +300,7 @@ local function rendering_panel(panel)
         .. "round shadow above stays on its own switch.")
     panel:CheckBox("Sun shadow in first person too", "gsa1_sunshadow_fp")
     panel:NumSlider("Sun shadow darkness (0 = the map's own colour)", "gsa1_sunshadow_dark", 0, 100, 0)
+    panel:NumSlider("Sun shadow pictures per second (0 = every frame)", "gsa1_sunshadow_rate", 0, 60, 0)
     live_label(panel, 1, function()
         return { GSA1.SunShadowLine and GSA1.SunShadowLine() or "sun shadow: not loaded" }
     end)
