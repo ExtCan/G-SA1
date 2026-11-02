@@ -40,6 +40,32 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.5a changes: the sun shadow's two bugs
+
+A hot fix of the sun shadow only, from the owner's notes on 0.9.5: "I'm not seeing any sun shadows" (gm_snowrider_day_v3), and "the sun shadow is flashing", "makes all G-SA1 effects flash", "the sun shadows cause distant models to flash rapidly" (gm_highway14800).
+
+* **No shadow on a map with a plain 2D sky.** On a map without a 3D skybox (no `sky_camera`) Garry's Mod can report the main view as a skybox view, and 0.9.5 skipped it, so nothing was ever drawn. Such a view is now accepted; on a map with a 3D skybox the view's id decides. The log's sun line says "a 2D sky (no sky_camera)".
+* **The flashing.** 0.9.5 made the shadow's picture in the middle of drawing the world, about every other frame, so everything drawn after it, such as G-SA1's effects and fading models, came after a render target, a clear, another camera and a blur in some frames and not in others. The picture is now made at the end of the frame, outside every view, the way the Faces close-up and the spawn-menu pictures are made. It shows from the next frame and is 1 to 3 frames old at 60 fps; only its pose lags, not its place, because its position and its darkness are worked out in every frame from where the character is drawn.
+* **The shadow at speed.** The ground under the shadow is measured right before the shadow is drawn, whenever the character has moved 8 units, or every 0.25 s when it stands. At every speed tested up to 2300 units a second it lies under the character in every frame. Riding or running fast costs more than 0.9.5 because the 81 ground traces then run every frame: about 0.5-0.65 ms a frame by an estimate from the owner's log. Standing and walking trace less often than before.
+* **A reason when it is not drawn.** If the shadow is not drawn for 5 s, the session log says why, once per reason per map: "sun shadow: not drawn for 5 s: ...". The Rendering page's status line shows the reason after 1 s ("; not drawn now: ...").
+* The switches are as they were: Q menu > Options > G-SA1 > Rendering > "Sun shadow". Off still removes all of its hooks: nothing drawn, computed or read.
+
+**Not yet seen in the game itself** (all tests here run against a mock of Garry's Mod): that the flashing is gone, that the picture can be made at the end of the frame, and that the shadow shows on displacement terrain.
+
+**Known, not changed here:** on ground falling steeply away from the sun the shadow's cells count as ledges and it can vanish (the log's reason says so), and on stairs going down the light's way it can blink: both for 0.9.8, and a "still flashing on stairs" would be this, not the old fault. A hitch of about 180-200 ms about once a minute, even if the log names SunShadow, is almost certainly Lua's garbage collector at a heap peak. The small stutter about every 5 s is older than the sun shadow and happens without it (it is in the logs back to 0.6.0); its cause is not known yet.
+
+### The owner checklist
+
+* **Most important, gm_snowrider_day_v3, third person:** stand on the snow, then walk and ride. A sun shadow should now lie on the snow, beside the game's round shadow. Nearly all of this map's ground is displacement terrain, and whether the shadow shows on it can only be seen in the game. If you see no shadow: open Q menu > Options > G-SA1 > Rendering and copy the "Sun shadow:" line. If it says "not drawn now: ...", note that reason. If it gives no reason, note "no shadow on the snow, no reason on the page", then spawn a flat prop, stand on it and say whether the shadow shows on the prop. That answer decides the next fix.
+* If the page says "Garry's Mod did not call G-SA1's hook" on **every** map, say so: that points at a different cause than another addon.
+* gm_highway14800, standing, third person: the sun shadow, G-SA1's effects (charge a spin dash) and distant models must not flash. Then with "Sun shadow in first person too" on: the same.
+* gm_highway14800, at full speed, on the board and running, in a straight line in several directions: the shadow stays under Sonic and does not strobe, and nothing else flashes.
+* Walking slowly on flat ground: the shadow's darkness stays steady, with no shimmer.
+* Q menu > Options > G-SA1 > Rendering > "Sun shadow": off, the shadow is gone; on, it is back at once. The game's round shadow stays either way.
+* Change character (Sonic to Tails): no Sonic-shaped shadow under Tails. It may be missing for one frame, then Tails' own shadow.
+* Compare with a prop on a map with HDR (gm_construct, or a map with a slanted sun): same direction as the prop's shadow (if mirrored, say so) and not visibly greyer than on 0.9.5.
+* Send the session log. The perf line's "sun shadow N ms per frame" should be about 0.3 standing and at most about 0.7 at full speed (an estimate): say so if it is far above that.
+
 ## What 0.9.5 changes: the board, the sun shadow, the game sees your camera
 
 * **Ride the board as Sonic or Tails.** Open the emote wheel (TAB, or D-pad down on the controller) and press **B** on the keyboard

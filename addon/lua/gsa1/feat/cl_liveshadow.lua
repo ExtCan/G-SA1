@@ -15,29 +15,64 @@
 --     light_environment pitch 0 of gm_goldencity_v2) is not used: the next source, logged. Several entities of a class: the
 --     first one (the count logged). A key the entity leaves out: bin/base.fgd's default of shadow_control (angles "80 30 0",
 --     color "128 128 128", distance 75, disableallshadows 0); with no shadow_control the colour and distance are those
---     defaults too. One log line per map. A map whose shadow_control changes at run time keeps its first values.
---   * THE SILHOUETTE, at most once per game pair (S.REFRESH) while the character is drawn (third person; first person only
---     with gsa1_sunshadow_fp) and the map does not disable shadows: cl_render.lua's GSA1.DrawCharacterView with an
+--     defaults too. One log line per map (it also says when the map has no sky_camera: a 2D sky). A map whose shadow_control
+--     changes at run time keeps its first values.
+--   * THE SILHOUETTE, at most once per game pair (S.REFRESH), in a frame whose main view took the character (see THE MAIN
+--     VIEW; third person; first person only with gsa1_sunshadow_fp) and the map does not disable shadows: made in the
+--     PostRender hook, OUTSIDE EVERY VIEW (0.9.5a, see below): cl_render.lua's GSA1.DrawCharacterView with an
 --     orthographic box along the light around the drawn root (the eye S.box x 2 back along the light, the box S.box from
 --     the character's height) into a 256 x 256 render target (its own depth, cl_textures.lua's probed format), white on
---     black: one flat white UnlitGeneric for every batch drawn (colour modulation 1, fog off, both restored), only the
---     opaque body and board batches (no effects, no game objects, no blob shadow); then render.BlurRenderTarget once.
+--     black: one flat white UnlitGeneric for every batch drawn (colour modulation 1, fog off, the tone-mapping scale 1, all
+--     restored), only the opaque body and board batches (no effects, no game objects, no blob shadow); then
+--     render.BlurRenderTarget once. The first picture shows from the frame after it; at 60 fps the picture on screen is 1
+--     to 3 frames old (made every 2 or 3 frames, at the end of a frame). Only its pose lags, not its place: see below.
 --   * THE RECEIVERS: a 9 x 9 grid over the silhouette's footprint, each point traced along the light (util.TraceLine,
 --     MASK_SOLID: props count; the local player filtered) at most the light's distance past the character's feet; the hit
---     points (in the world: they stay on the ground between two grids, also on slopes and stairs; the picture's texture
---     coordinates come from the drawn root of each frame, so the shadow follows the character every frame) as a grid of
---     quads drawn right after the main view's opaque renderables (PostDrawOpaqueRenderables, the screen only) with a
---     decal material sampling
---     the render target, blended ZERO / ONE_MINUS_SRC_COLOR - dst x (1 - mask x (1 - colour / 255) x fade), the blob's
---     mask path - with gsa1_sunshadow_dark > 0 the darkness instead of the colour, fading from 1 at the feet to 0 at the
---     light's distance; the tone-mapping scale 1 and restored (cl_render.lua's mask path). A cell with a corner not hit, or
---     whose corners lie more than S.STEP_DEPTH apart along the light (a ledge), is left out. The grid is traced again when
---     the character moved S.RETRACE_MOVE or S.RETRACE_EVERY passed (a standing character makes no traces every pair).
---     Reused tables and Vectors: no Lua garbage per frame of its own.
+--     points (in the world: they stay on the ground between two grids, also on slopes and stairs) as a grid of quads drawn
+--     right after the main view's opaque renderables (PostDrawOpaqueRenderables, the screen only; no render target, clear,
+--     blur or cam.Start there) with a decal material sampling the render target, blended ZERO / ONE_MINUS_SRC_COLOR - dst x
+--     (1 - mask x (1 - colour / 255) x fade), the blob's mask path - with gsa1_sunshadow_dark > 0 the darkness instead of
+--     the colour, fading from 1 at the feet to 0 at the light's distance; the tone-mapping scale 1 and restored
+--     (cl_render.lua's mask path). A cell with a corner not hit, or whose corners lie more than S.STEP_DEPTH apart along the
+--     light (a ledge), is left out. Every frame the picture's texture coordinates and the fade come from the drawn root of
+--     THAT frame, so the shadow stays with the character whatever the age of the picture and the grid. The grid is traced
+--     in the same hook, right before the quads (util.TraceLine changes no render state; 0.9.5 traced in this hook too), when
+--     the root moved S.RETRACE_MOVE or S.RETRACE_EVERY passed: the quads never lie more than S.RETRACE_MOVE behind the
+--     character, the grid's half size is 48 HU. A grid of an earlier frame's end would lie 1 to 3 frames behind: at 1000
+--     HU/s and more the picture left the quads in some frames, a flash at 20 to 30 Hz. So a standing character traces 4
+--     grids a second, one faster than S.RETRACE_MOVE a frame (about 480 HU/s at 60 fps) 81 traces every frame. Reused
+--     tables and Vectors: no Lua garbage per frame of its own (what the engine's calls return aside - the owner's 0.9.5 log
+--     had up to 6.8 KB a frame in this feature's hook at up to 30 grids a second, so about twice that now at speed:
+--     UNVERIFIED that it is util.TraceLine's).
+--     The quads are tested against the depth buffer like any world surface, no depth bias: on displacements a quad between
+--     four hit points lies more than S.LIFT under the surface for 0.34 % (gm_snowrider_day_v3) / 0.36 % (gm_highway14800)
+--     of the sampled points (0.21 % at his logged ground positions on gm_snowrider_day_v3, nearly all of them on a
+--     displacement; only at creases; measured from the maps' displacement lumps), and a bias would show the shadow through
+--     near walls (SADC/build/research/fix095a/diagnosis.md section 4). That measures the collision surface the traces hit
+--     against itself: that the drawn surface is the same mesh is an assumption, UNVERIFIED on this machine; if it fails, no
+--     shadow shows on such ground with no reason in the log.
+--   * THE MAIN VIEW (0.9.5a; the owner's session on gm_snowrider_day_v3: "not seeing any sun shadows"): a call of
+--     PostDrawOpaqueRenderables(isDrawingDepth, isDrawSkybox, isDraw3DSkybox) without depth, not the 3D skybox, with the
+--     screen bound. isDrawSkybox alone does not exclude a view: on a map with a 2D sky it can be true in every call, the
+--     main view's too (Garry's Mod wiki, the hook's page), and 0.9.5 returned on it - nothing was ever drawn on a map with
+--     no sky_camera. Only on a map with a sky_camera (or whose entities could not be read), where the main view comes with
+--     it false, a call with isDrawSkybox but not isDraw3DSkybox also asks render.GetViewSetup(true).viewid: VIEW_3DSKY or
+--     no answer is not the main view.
+--   * WHY THE RENDER TARGET WORK LEFT THE VIEW (0.9.5a; the owner's session on gm_highway14800: "the sun shadow is
+--     flashing", "makes all G-SA1 effects flash", "distant models flash rapidly"): 0.9.5 made the silhouette inside the
+--     main view, right after the opaque renderables, so everything drawn later in a frame with a refresh - the translucent
+--     pass - came after a render target, a clear, an orthographic cam.Start and a blur, and in a frame without one it did
+--     not: about 30 times a second. cam.Start3D takes what it leaves out from the last render operation (wiki), and
+--     cl_render.lua's camera-relative draw of the blended batches passes only an eye and angles.
+--   * NOT DRAWN, WHY: PostRender looks at every frame (no garbage: constant strings); a frame without quads has a reason
+--     (S.WHY) and one that lasts S.WHY_AFTER (5 s) goes into the session log, "sun shadow: not drawn for 5 s: <reason>", at
+--     most once per reason per map ("no character" only on the page); GSA1.SunShadowLine shows it from S.WHY_SHOW (1 s).
 --   * OFF (gsa1_sunshadow 0): its hooks are removed - nothing drawn, computed or read; the game's blob untouched. Skipped
 --     also with no character, in first person without gsa1_sunshadow_fp, with disableallshadows 1, when the character is
---     not drawn this frame. An error: one log line, the sun shadow stops for this session (the page says so).
---   * Cost: the hitch section "SunShadow" and the perf line's "sun shadow N ms per frame" (cl_log.lua); S.stats.
+--     not drawn this frame; nothing of a character is drawn with a picture of another one (a new character: from the frame
+--     after its first picture). An error: one log line, the sun shadow stops for this session (the page says so).
+--   * Cost: the hitch section "SunShadow" and the perf line's "sun shadow N ms per frame" (cl_log.lua), both hooks' time;
+--     S.stats.
 -- Q menu > Options > G-SA1 > Rendering: the three switches and a status line (GSA1.SunShadowLine).
 GSA1 = GSA1 or {}
 local S = GSA1.SunShadow
@@ -48,13 +83,36 @@ local band = bit.band
 S.RT_SIZE, S.GRID, S.BLUR = 256, 9, 2
 S.SLICE, S.LUMP_MAX, S.PARSE_BLOCKS = 256 * 1024, 8 * 1024 * 1024, 400
 S.REFRESH = 1 / 30                  -- at most once per game pair
-S.RETRACE_MOVE, S.RETRACE_EVERY = 0.5, 0.25
+S.RETRACE_MOVE, S.RETRACE_EVERY = 8, 0.25    -- the grid again: HU the root moved (x + y + z) / s passed
 S.MIN_DOWN = math.sin(math.rad(10)) -- a direction within 10 degrees of horizontal (or up) is not used
-S.STEP_DEPTH = 24                   -- HU along the light: a cell spanning more is a ledge, left out
+S.STEP_DEPTH = 24                   -- HU along the light: a cell spanning more is a ledge, left out (so is a cell on ground
+                                    -- falling away from the sun steeper than its height minus 26.6 degrees, or under a sun
+                                    -- below 26.6 degrees: 12 / tan(the difference) HU. For 0.9.8: diagnosis.md section 8)
 S.LIFT = 0.5                        -- HU: the receiver quads lie this much towards the light
 S.BOX_MIN = 48                      -- HU: the silhouette box's half size, at least
 S.DEFAULT = { angles = { 80, 30, 0 }, color = { 128, 128, 128 }, distance = 75, disable = 0 }  -- bin/base.fgd shadow_control
+S.WHY_AFTER, S.WHY_SHOW = 5, 1      -- s: a reason not to draw goes into the session log / onto the page after this long
+-- why a frame has no quads (constant strings: nothing made per frame)
+S.WHY = {
+    reading = "the map's sun is still being read",
+    disabled = "this map turns shadows off (disableallshadows 1)",
+    nochar = "no character",
+    firstperson = "first person (\"Sun shadow in first person too\" is off)",
+    nohook = "Garry's Mod did not call G-SA1's hook after the opaque renderables (another addon's hook may have answered "
+        .. "first)",
+    depth = "only depth views reached the hook, no main view",
+    sky = "only the 3D skybox's view reached the hook, no main view",
+    target = "only views into a render target reached the hook, not the screen",
+    notdrawn = "the character was not drawn this frame",
+    nopicture = "no silhouette yet",
+    nopost = "G-SA1's hook at the frame's end was not called, so no silhouette is made (another addon's PostRender hook may "
+        .. "have answered first)",
+    noground = "no ground under the character that the shadow can lie on, within the light's distance (or ground falling "
+        .. "away from the sun too steeply: its cells count as ledges)",
+}
+local WHY = S.WHY
 local HOOK = "gsa1_sunshadow"
+local VIEW_3DSKY = 1                -- Source's view id of the 3D skybox
 local DRAW_EFFECT, DRAW_SHADOW, DRAW_OBJECT, DRAW_BOARD = 0x40, 0x800, 0x1000, 0x4000
 local B_ZERO, B_ONE_MINUS_SRC_COLOR, B_FUNC_ADD = 0, 10, 0
 local MASK = MASK_SOLID or 33570827
@@ -102,15 +160,17 @@ local function keyvalues(block)
 end
 S.KeyValues = keyvalues
 
--- the sun's entities in an entity lump's text: { shadow_control = { n, kv (the first) }, light_environment = { n, kv } };
--- step() is called every S.PARSE_BLOCKS blocks (the coroutine's yield)
+-- the sun's entities in an entity lump's text: { shadow_control = { n, kv (the first) }, light_environment = { n, kv } },
+-- and sky_camera = { n, kv } (a 3D skybox: THE MAIN VIEW at the top); step() is called every S.PARSE_BLOCKS blocks (the
+-- coroutine's yield)
 function S.ParseEntities(text, step)
-    local found = { shadow_control = { n = 0 }, light_environment = { n = 0 } }
+    local found = { shadow_control = { n = 0 }, light_environment = { n = 0 }, sky_camera = { n = 0 } }
     local i = 0
     for block in string.gmatch(text, "{([^{}]*)}") do
         i = i + 1
         if step and i % S.PARSE_BLOCKS == 0 then step() end
-        if string.find(block, "shadow_control", 1, true) or string.find(block, "light_environment", 1, true) then
+        if string.find(block, "shadow_control", 1, true) or string.find(block, "light_environment", 1, true) or
+           string.find(block, "sky_camera", 1, true) then
             local kv = keyvalues(block)
             local f = found[string.lower(kv.classname or "")]
             if f then
@@ -134,13 +194,16 @@ local function fmt3(t)
 end
 
 -- the light of the found entities: { source = "shadow_control" | "light_environment" | "down", dx, dy, dz (unit, the
--- direction the light travels), color = { r, g, b }, distance, disabled, text }
+-- direction the light travels), color = { r, g, b }, distance, disabled, sky3d (false: the map has no sky_camera; true also
+-- when its entities could not be read), text }
 function S.LightOf(found, why)
     local D = S.DEFAULT
     local L = { source = "down", dx = 0, dy = 0, dz = -1, color = { D.color[1], D.color[2], D.color[3] },
                 distance = D.distance, disabled = false }
     local sc = found and found.shadow_control
     local le = found and found.light_environment
+    local sky = found and found.sky_camera
+    L.sky3d = not sky or sky.n > 0
     local notes = {}
     local sckv = sc and sc.n > 0 and sc.kv or nil
     if sckv then
@@ -181,6 +244,7 @@ function S.LightOf(found, why)
         dirText = "straight down: " .. (why or ((sckv or lekv) and "the map's sun is not usable" or
             "the map has neither shadow_control nor light_environment"))
     end
+    if not L.sky3d then notes[#notes + 1] = "a 2D sky (no sky_camera)" end
     L.text = string.format("%s, colour (%s, %s, %s), distance %s%s%s", dirText, tostring(L.color[1]),
         tostring(L.color[2]), tostring(L.color[3]), tostring(L.distance), L.disabled and
         "; the map disables shadows (disableallshadows 1): none drawn" or "", #notes > 0 and ("; " ..
@@ -258,7 +322,8 @@ S.view = VIEW
 local FWD, RIGHT, UP = Vector(), Vector(), Vector()
 local N = S.GRID
 local NN = N * N
--- wx, wy, wz: the hit points in the world (lifted towards the light); u, v: their texture coordinates of this frame
+-- wx, wy, wz: the hit points in the world (lifted towards the light); u, v, fade: their texture coordinates and fade of this
+-- frame; depth: along the light below the root at the grid's time (only the ledge rule's differences use it)
 local G = { hit = {}, wx = {}, wy = {}, wz = {}, fade = {}, depth = {}, u = {}, v = {}, cells = {}, ncells = 0, box = 48 }
 S.grid = G
 for k = 1, NN do
@@ -299,7 +364,7 @@ local function trace_grid(C, L, cx, cy, cz, box)
     local dist = L.distance
     TR.filter = LocalPlayer()
     local st, en = TR.start, TR.endpos
-    local hit, wx, wy, wz, fade, dep = G.hit, G.wx, G.wy, G.wz, G.fade, G.depth
+    local hit, wx, wy, wz, dep = G.hit, G.wx, G.wy, G.wz, G.depth
     local lift = S.LIFT
     local any = false
     for k = 1, NN do
@@ -324,7 +389,6 @@ local function trace_grid(C, L, cx, cy, cz, box)
                 hit[k] = true
                 any = true
                 wx[k], wy[k], wz[k] = hp.x - dx * lift, hp.y - dy * lift, hp.z - dz * lift
-                fade[k] = 1 - math.min(math.max(depth / math.max(dist, 1), 0), 1)
                 dep[k] = depth
             end
         end
@@ -349,17 +413,22 @@ local function trace_grid(C, L, cx, cy, cz, box)
     G.px, G.py, G.pz, G.at, G.C, G.box = px, py, pz, SysTime(), C, box
 end
 
--- one silhouette (and, when the character moved, the grid): true when it was made
+-- the silhouette box of a character this frame: its half size, its centre (the drawn root, up by the character's centre)
+local function box_of(C)
+    local info = C.info or {}
+    local p = C.drawPos
+    return math.max(S.BOX_MIN, 0.75 * (tonumber(info.height) or 40) + 16), p.x, p.y, p.z + (tonumber(info.center) or 20)
+end
+
+-- one silhouette, in PostRender - never inside a view (the top of this file): true when it was made. Also the light's axes
+-- that the grid and the texture coordinates use
 local function refresh(C, L, now)
     S.refreshAt, S.refreshC = now, C
     local dx, dy, dz = L.dx, L.dy, L.dz
     local ang = VIEW.ang
     ang.p, ang.y, ang.r = math.deg(math.atan2(-dz, math.sqrt(dx * dx + dy * dy))), math.deg(math.atan2(dy, dx)), 0
     GSA1.AngleAxes(ang, FWD, RIGHT, UP)
-    local info = C.info or {}
-    local box = math.max(S.BOX_MIN, 0.75 * (tonumber(info.height) or 40) + 16)
-    local p = C.drawPos
-    local cx, cy, cz = p.x, p.y, p.z + (tonumber(info.center) or 20)
+    local box, cx, cy, cz = box_of(C)
     ORTHO.left, ORTHO.right, ORTHO.top, ORTHO.bottom = -box, box, -box, box
     VIEW.eye:SetUnpacked(cx - dx * 2 * box, cy - dy * 2 * box, cz - dz * 2 * box)
     VIEW.znear, VIEW.zfar = 1, 4 * box
@@ -373,18 +442,19 @@ local function refresh(C, L, now)
         mr, mg, mb = render.GetColorModulation()
         render.SetColorModulation(1, 1, 1)
     end
+    -- (white stays white whatever the scale at the frame's end is: an HDR map's exposure would make the picture grey)
+    local tone = render.GetToneMappingScaleLinear and render.GetToneMappingScaleLinear()
+    if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(TONE_ONE) end
     local ok, drawn, why = pcall(GSA1.DrawCharacterView, C, VIEW)
     if mr then render.SetColorModulation(mr, mg, mb) end
     if fog and render.FogMode then render.FogMode(fog) end
     render.PopRenderTarget()
+    if ok and drawn and render.BlurRenderTarget then render.BlurRenderTarget(rt, S.BLUR, S.BLUR, 1) end
+    if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(tone) end
     if not ok then error(drawn, 0) end
     if not drawn then return false, why end
-    if render.BlurRenderTarget then render.BlurRenderTarget(rt, S.BLUR, S.BLUR, 1) end
-    S.picture = true
+    S.picture, S.pictureC = true, C
     S.stats.refreshes = S.stats.refreshes + 1
-    local moved = G.C ~= C or not G.at or now - G.at >= S.RETRACE_EVERY - 1e-6 or
-        math.abs(p.x - G.px) + math.abs(p.y - G.py) + math.abs(p.z - G.pz) >= S.RETRACE_MOVE
-    if moved then trace_grid(C, L, cx, cy, cz, box) end
     return true
 end
 
@@ -411,23 +481,33 @@ local function emit_cells(nc, cr, cg, cb)
     end
 end
 
--- the receiver quads, the picture placed at the drawn root of THIS frame: each hit point's texture coordinates are its
--- place in the light's view around the character's centre now (the picture's orientation: u along the view's right, v
--- down its up, as in a perspective view)
-local function draw_receivers(C, L)
-    local nc = G.ncells
-    if not S.picture or nc == 0 or G.C ~= C then return end
+-- the receiver quads, the picture placed at the drawn root of THIS frame: first the grid again when due (the top of this file),
+-- then each hit point's texture coordinates, its place in the light's view around the character's centre now (the picture's
+-- orientation: u along the view's right, v down its up, as in a perspective view), and its fade, its depth along the light
+-- below the feet now (from the hit point: the lift taken off). The picture itself was finished in an earlier frame's PostRender
+local function draw_receivers(C, L, fn, now)
+    if not S.picture or S.pictureC ~= C then return end
+    local box, cx, cy, cz = box_of(C)
     local p = C.drawPos
-    local info = C.info or {}
-    local cx, cy, cz = p.x, p.y, p.z + (tonumber(info.center) or 20)
+    local px, py, pz = p.x, p.y, p.z
+    if G.C ~= C or not G.at or now - G.at >= S.RETRACE_EVERY - 1e-6 or
+       math.abs(px - G.px) + math.abs(py - G.py) + math.abs(pz - G.pz) >= S.RETRACE_MOVE then
+        trace_grid(C, L, cx, cy, cz, box)
+    end
+    local nc = G.ncells
+    if nc == 0 then return end
     local rx, ry, rz, ux, uy, uz = RIGHT.x, RIGHT.y, RIGHT.z, UP.x, UP.y, UP.z
-    local k2 = 0.5 / G.box
-    local hit, wx, wy, wz, U, V = G.hit, G.wx, G.wy, G.wz, G.u, G.v
+    local dx, dy, dz = L.dx, L.dy, L.dz
+    local k2 = 0.5 / box
+    local over, lift = 1 / math.max(L.distance, 1), S.LIFT
+    local hit, wx, wy, wz, U, V, fade = G.hit, G.wx, G.wy, G.wz, G.u, G.v, G.fade
     for k = 1, NN do
         if hit[k] then
-            local ex, ey, ez = wx[k] - cx, wy[k] - cy, wz[k] - cz
+            local x, y, z = wx[k], wy[k], wz[k]
+            local ex, ey, ez = x - cx, y - cy, z - cz
             U[k] = 0.5 + (ex * rx + ey * ry + ez * rz) * k2
             V[k] = 0.5 - (ex * ux + ey * uy + ez * uz) * k2
+            fade[k] = 1 - math.min(math.max(((x - px) * dx + (y - py) * dy + (z - pz) * dz + lift) * over, 0), 1)
         end
     end
     local dark = cv.dark and cv.dark:GetFloat() or 0
@@ -449,34 +529,106 @@ local function draw_receivers(C, L)
     render.OverrideBlend(false)
     if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(tone) end
     if not ok then error(err, 0) end
+    S.quadsFrame = fn
 end
 
--- the main view, right after its opaque renderables (the character's ENT:Draw has run: its batches of this frame)
+local function stop(err)
+    S.broken = tostring(err)
+    log("sun shadow: stopped for this session: %s", S.broken)
+end
+
+-- a call with isDrawSkybox and not isDraw3DSkybox: the 3D skybox's own view? Never on a map with no sky_camera (there it is
+-- the main view under a 2D sky); else Source's view id says (no answer: yes, 0.9.5's way on such a map)
+local function sky_view()
+    local L = S.light
+    if L and L.sky3d == false then return false end
+    local vs = render.GetViewSetup and render.GetViewSetup(true)
+    local id = type(vs) == "table" and vs.viewid or nil
+    return id == nil or id == VIEW_3DSKY
+end
+
+-- the reason of this frame: a new one starts its time; one that lasted S.WHY_AFTER: a log line, at most one per reason per
+-- map
+local function note_why(why, now)
+    if why ~= S.why then
+        S.why, S.whySince, S.whyDone = why, now, false
+    elseif why and not S.whyDone and now - S.whySince >= S.WHY_AFTER then
+        S.whyDone = true
+        if why ~= WHY.nochar then
+            local map = game.GetMap()
+            if S.whyMap ~= map then S.whyMap, S.whyLogged = map, {} end
+            if not S.whyLogged[why] then
+                S.whyLogged[why] = true
+                log("sun shadow: not drawn for %d s: %s", S.WHY_AFTER, why)
+            end
+        end
+    end
+end
+
+-- the hook after a view's opaque renderables: only in the main view (the top of this file; the character's ENT:Draw has run:
+-- its batches of this frame), only the grid when due and the quads
 local function main_view(isDrawingDepth, isDrawSkybox, isDraw3DSkybox)
-    if isDrawingDepth or isDrawSkybox or isDraw3DSkybox or S.broken then return end
-    if render.GetRenderTarget and render.GetRenderTarget() then return end      -- the screen's main view only
+    if S.broken then return end
+    local fn = FrameNumber()
+    S.hookFrame = fn
+    if isDrawingDepth then S.skipWhy = WHY.depth return end
+    -- (a map with no sky_camera has no 3D skybox's view: whatever the third argument says, this is its main view)
+    if isDraw3DSkybox and not (S.light and S.light.sky3d == false) then S.skipWhy = WHY.sky return end
+    if render.GetRenderTarget and render.GetRenderTarget() then S.skipWhy = WHY.target return end
+    if isDrawSkybox and sky_view() then S.skipWhy = WHY.sky return end
+    S.mainFrame = fn
+    -- post_render gives the reasons; with no PostRender reaching us (another addon's hook answered first) this hook says so
+    local now = SysTime()
+    if not S.postAt then S.postAt = now
+    elseif now - S.postAt >= S.WHY_AFTER then note_why(WHY.nopost, now) end
     local C = GSA1.Char
     local L = S.light
     if not (C and C.batches and C.drawPos and L) or L.disabled then return end
-    local fn = FrameNumber()
     if C.viewFrame ~= fn or S.drawnFrame == fn then return end
     if GSA1.FirstPerson and GSA1.FirstPerson() and not cv.fp:GetBool() then return end
     S.drawnFrame = fn
     local t0 = SysTime()
-    local ok, err = true, nil
-    if S.refreshC ~= C or not S.refreshAt or t0 - S.refreshAt >= S.REFRESH - 1e-6 or t0 < S.refreshAt then
-        local t1 = SysTime()
-        ok, err = pcall(refresh, C, L, t0)
-        S.stats.refreshMs = S.stats.refreshMs + (SysTime() - t1) * 1000
-    end
-    if ok then ok, err = pcall(draw_receivers, C, L) end
+    local ok, err = pcall(draw_receivers, C, L, fn, t0)
     local dt = SysTime() - t0
     S.stats.frames, S.stats.frameMs = S.stats.frames + 1, S.stats.frameMs + dt * 1000
     if GSA1.HitchAdd then GSA1.HitchAdd("SunShadow", dt) end
-    if not ok then
-        S.broken = tostring(err)
-        log("sun shadow: stopped for this session: %s", S.broken)
+    if not ok then stop(err) end
+end
+
+-- why this frame has no quads (nil: it has), in the order that names the real cause first
+local function why_not(C, L, fn)
+    if S.quadsFrame == fn then return nil end
+    if not L then return WHY.reading end
+    if L.disabled then return WHY.disabled end
+    if not (C and C.batches and C.drawPos) then return WHY.nochar end
+    if GSA1.FirstPerson and GSA1.FirstPerson() and not cv.fp:GetBool() then return WHY.firstperson end
+    if S.hookFrame ~= fn then return WHY.nohook end
+    if S.mainFrame ~= fn then return S.skipWhy or WHY.nohook end
+    if S.drawnFrame ~= fn then return WHY.notdrawn end
+    if not S.picture or S.pictureC ~= C then return WHY.nopicture end
+    return WHY.noground
+end
+
+-- the frame's end, outside every view: the silhouette when due, then this frame's reason
+local function post_render()
+    if S.broken then return end
+    local fn = FrameNumber()
+    local C, L = GSA1.Char, S.light
+    local t0 = SysTime()
+    S.postAt = t0
+    if S.drawnFrame == fn and C and L and C.viewFrame == fn and (S.refreshC ~= C or not S.refreshAt or
+       t0 - S.refreshAt >= S.REFRESH - 1e-6 or t0 < S.refreshAt) then
+        local ok, err = pcall(refresh, C, L, t0)
+        local dt = SysTime() - t0
+        local st = S.stats
+        st.refreshMs, st.frameMs = st.refreshMs + dt * 1000, st.frameMs + dt * 1000
+        if GSA1.HitchAdd then GSA1.HitchAdd("SunShadow", dt) end
+        if not ok then
+            stop(err)
+            return
+        end
     end
+    note_why(why_not(C, L, fn), t0)
 end
 
 -- first person with gsa1_sunshadow_fp: cl_render.lua's DrawCharacter prepares the frame's batches without drawing them
@@ -492,13 +644,15 @@ function GSA1.SunShadowLine()
     local L = S.light
     if not L then return "Sun shadow: reading the map's sun ..." end
     local st = S.stats
-    return string.format("Sun shadow: %s%s", L.text, st.frames > 0 and string.format(" (%.2f ms per frame)",
-        st.frameMs / st.frames) or "")
+    local why = S.why and SysTime() - (S.whySince or 0) >= S.WHY_SHOW and S.why or nil
+    return string.format("Sun shadow: %s%s%s", L.text, st.frames > 0 and string.format(" (%.2f ms per frame)",
+        st.frameMs / st.frames) or "", why and ("; not drawn now: " .. why) or "")
 end
 
 -- on / off: the hooks exist only while it is on (off costs nothing)
 local guard = GSA1.Guard or function(_, fn) return fn end
-local think_g, pre_g, view_g = guard("SunShadow", step_light), guard("SunShadow", pre_render), main_view
+local think_g, pre_g, view_g, post_g = guard("SunShadow", step_light), guard("SunShadow", pre_render), main_view,
+    guard("SunShadow", post_render)
 function S.Apply()
     local on = cv.on and cv.on:GetBool() or false
     if on == S.hooked then return end
@@ -507,12 +661,15 @@ function S.Apply()
         hook.Add("Think", HOOK, think_g)
         hook.Add("PreRender", HOOK, pre_g)
         hook.Add("PostDrawOpaqueRenderables", HOOK, view_g)
+        hook.Add("PostRender", HOOK, post_g)
     else
         hook.Remove("Think", HOOK)
         hook.Remove("PreRender", HOOK)
         hook.Remove("PostDrawOpaqueRenderables", HOOK)
+        hook.Remove("PostRender", HOOK)
         if GSA1.Char then GSA1.Char.viewWanted = nil end
-        G.ncells, S.picture = 0, false
+        G.ncells, G.at, S.picture = 0, nil, false       -- (on again: the first quads trace a grid at once)
+        S.why, S.whySince, S.whyDone, S.postAt = nil, nil, false, nil
     end
 end
 if cvars and cvars.AddChangeCallback then
