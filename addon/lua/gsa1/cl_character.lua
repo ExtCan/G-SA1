@@ -74,6 +74,10 @@
 -- entry (C.def: "Super Sonic (General Gameplay)" is kind 0 with a form), and a spawn, a respawn and a re-creation keep it;
 -- the seam GSA1.FilterButtons may hold back a press of the player's own buttons (the Super gesture); Super Sonic (Vs.
 -- Perfect Chaos, kind 8) has Sonic's upgrades (GSA1.UpgradeKind).
+-- 0.9.8 (sadc docs/research/gsa1_098_plan.md 5.6; gsa1_096_plan.md 5.6, feat/cl_follower.lua): GSA1.FollowersThink(now) right
+-- after your tick; events by their character (GSA1.DispatchEvent: a follower's never reach your on_event; every other event
+-- as before), GSA1.PollAllEvents when you have no character; GSA1.EV, GSA1.GamePaused; first person is about YOUR character
+-- (GSA1.FirstPersonFor). A follower runs none of the GSA1Character* hooks and GSA1PreTick / GSA1PostTick.
 GSA1 = GSA1 or {}
 
 local BTN_JUMP, BTN_ACTION, BTN_ACTION2 = 1, 2, 4
@@ -81,6 +85,7 @@ local EV = { SOUND = 1, SOUND_STOP = 2, VOICE = 3, JINGLE = 4, RUMBLE = 5, DEATH
              MISSING_ACTION = 9, UNIMPLEMENTED = 10, CAPACITY = 11, TIME_UP = 12, FAULT = 13 }
 local EV_NAME = {}
 for k, v in pairs(EV) do EV_NAME[v] = k end
+GSA1.EV = EV
 -- SA1_EVENT_DEATH's cause (arg; libsa1.h SA1_DEATH_*): the chat line and the respawn's reason
 local DEATH_TEXT = { [0] = "died", [1] = "was hit with no rings", [2] = "was killed", [3] = "drowned",
                      [4] = "fell into a death zone" }
@@ -141,6 +146,12 @@ local cv_fwd, cv_side, cv_timescale = GetConVar("cl_forwardspeed"), GetConVar("c
 
 function GSA1.FirstPerson()
     return GSA1.Char ~= nil and GSA1.cv.cam_dist:GetFloat() <= 0
+end
+
+-- 0.9.8: first person is about YOUR character only (a follower is drawn whole); GSA1.FirstPerson through the table, so a
+-- feature's wrap of it reaches the drawing (the fishing camera, feat/cl_gamecam.lua)
+function GSA1.FirstPersonFor(C)
+    return C ~= nil and C == GSA1.Char and GSA1.FirstPerson()
 end
 
 -- the server runs this addon too (it pooled the network strings); otherwise nothing is sent
@@ -760,6 +771,7 @@ local cv_volume, cv_mute_focus = GetConVar("volume"), GetConVar("snd_mute_losefo
 local function game_paused()
     return FrameTime() == 0 or (game.SinglePlayer() and gui.IsGameUIVisible())
 end
+GSA1.GamePaused = game_paused       -- (0.9.8: the followers' dt, feat/cl_follower.lua)
 
 -- the listener is the view (the chase camera's origin and angles from CalcView, else the player's eyes)
 local audio_fwd, audio_up = Vector(), Vector()
@@ -802,6 +814,24 @@ end
 
 local net_state = {}            -- the state packet's table (reused)
 local events = {}               -- gsa1.PollEvents' table (reused, with its event tables: no garbage per frame)
+
+-- 0.9.8 (gsa1_096_plan.md 4.21, 5.6): an event goes by its character: your character's to on_event; a follower's (or a removed
+-- follower's late one) to feat/cl_follower.lua, never to on_event; anything else (a context-wide event, the event of an
+-- earlier character of yours) to on_event as before
+function GSA1.DispatchEvent(C, e, now)
+    if C and e.character == C.id then return on_event(C, e, now) end
+    if GSA1.FollowerEvent and GSA1.FollowerEvent(e, now) then return end
+    if C then return on_event(C, e, now) end
+end
+
+-- the followers' events when you have no character (with one, tick_character polls them)
+function GSA1.PollAllEvents(now)
+    if not gsa1.PollEvents then return end
+    local ev = gsa1.PollEvents(events)
+    for i = 1, ev.count or #ev do
+        GSA1.DispatchEvent(GSA1.Char, ev[i], now)
+    end
+end
 
 local function tick_character(now)
     local C = GSA1.Char
@@ -892,7 +922,7 @@ local function tick_character(now)
     local te = SysTime()
     local ev = gsa1.PollEvents(events)
     for i = 1, ev.count or #ev do
-        on_event(C, ev[i], now)
+        GSA1.DispatchEvent(C, ev[i], now)
     end
     prof("Events", te)
     -- the features after the tick (seam: the player follow, 0.9.3)
@@ -949,6 +979,18 @@ hook.Add("Think", "gsa1_tick", GSA1.Guard("Think", function()
         prof("PadUpdate", tp)
     end
     tick_character(now)
+    -- 0.9.8: the followers, after their leaders (feat/cl_follower.lua; profiled there as "Followers"); an error in the
+    -- followers' part is logged and leaves the sound below running
+    if GSA1.FollowersThink then
+        local fok, ferr = pcall(GSA1.FollowersThink, now)
+        if not fok then
+            if GSA1.Log then GSA1.Log("error", "GSA1.FollowersThink: %s", tostring(ferr)) end
+            if not GSA1.followersError then
+                GSA1.followersError = true
+                ErrorNoHalt("[G-SA1] followers: " .. tostring(ferr) .. "\n")
+            end
+        end
+    end
     -- after the tick: this frame's sound events are mixed right away
     if GSA1.mod then
         local ta = SysTime()

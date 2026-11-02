@@ -15,8 +15,9 @@
 // Threads (0.5.1): the disc loads on a worker (init_async: sa1_init + sa1_load_disc with SA1_LOAD_WORLD_IMAGES, so
 // the first world of every kind is cheap too) and poll_init() installs the context on the game's thread; the sound
 // banks open on a worker of their own (Audio, a private libsa1 context); the map's collision is prepared by the map
-// job (prepare.hpp) and installed with set_world_prepared (O(1)). Everything else runs on the game's thread. The log
-// callback is the one thing libsa1 may call from a worker: log_line is thread-safe.
+// job (prepare.hpp) and installed with set_world_prepared (O(1)). Everything else runs on the game's thread, but for the
+// followers' jobs (0.9.8: tick_followers, follower_job, pool.hpp), which write only their own Character while the game's thread
+// waits for them. The log callback is what libsa1 may call from a worker: log_line is thread-safe.
 #pragma once
 
 #include <cstdint>
@@ -29,8 +30,10 @@
 
 #include "audio.hpp"
 #include "board.hpp"
+#include "follower.hpp"
 #include "libsa1_internal_api.hpp"
 #include "movers.hpp"
+#include "pool.hpp"
 #include "prepare.hpp"
 #include "util.hpp"
 
@@ -186,14 +189,25 @@ const bool kHostCameraInput = true;
 #else
 const bool kHostCameraInput = false;
 #endif
-// the sa1_input.host_flags bits this build passes on (0 with a libsa1.h before round 0.9.2)
+// the sa1_input.host_flags bits this build passes on (0 with a libsa1.h before round 0.9.2). 0.9.8 (seam M1, sadc
+// docs/research/gsa1_098_plan.md 5.5): the game's camera request too, which the Lua side asks for (gsa1.INPUT_GAME_CAMERA);
+// the host camera's bit stays out (only Session::tick sets it, for a valid camera). A follower takes the water bits only
 #if defined(SA1_API_092)
-const uint32_t kHostFlagsKnown = SA1_INPUT_HOST_WATER_KNOWN | SA1_INPUT_HOST_IN_WATER;
+const uint32_t kHostWaterFlags = SA1_INPUT_HOST_WATER_KNOWN | SA1_INPUT_HOST_IN_WATER;
 #else
-const uint32_t kHostFlagsKnown = 0u;
+const uint32_t kHostWaterFlags = 0u;
+#endif
+#if defined(SA1_INPUT_GAME_CAMERA)
+const uint32_t kHostFlagsKnown = kHostWaterFlags | SA1_INPUT_GAME_CAMERA;
+#else
+const uint32_t kHostFlagsKnown = kHostWaterFlags;
 #endif
 // the game's ring count a start may give (SA1_CREATE_START_RINGS: libsa1 clamps to 0..99, so a start never gives a 1-up)
 const int32_t kStartRingsMax = 99;
+// 0.9.8 (sadc docs/research/gsa1_096_plan.md 4.14): the session's characters (the player, up to kMaxFollowers followers, puppets;
+// 0.9.5: 16) and followers (99 of the egg + 8 + slack; libsa1 allows SA1_FOLLOWER_MAX 128 and 256 instances)
+const size_t kMaxCharacters = 128;
+const size_t kMaxFollowers = 112;
 
 // 0.9.3 (round 6a, 093-gsa1-super: sadc docs/research/gsa1_rounds_plan.md 11.3 / 14.1a, gsa1_090_plan.md 7.5; libsa1 API
 // 0.4 "Super Sonic"): what a create adds for Super Sonic (kind 8, SA1_CHAR_SUPER_SONIC) and for a Sonic who can turn Super
@@ -282,6 +296,26 @@ struct Character {
     // and the tests); false without kHostCameraInput or a valid camera
     bool host_camera_passed = false;
     uint64_t host_camera_ticks = 0;    // ticks that passed it
+    // 0.9.8 (sadc docs/research/gsa1_098_plan.md 2.4, 6.6; gsa1_096_plan.md 6.4 task 2): a follower world (sa1_follower_create):
+    // batches, state and destroy work as for any character, the pool renders it (gsa1.FollowerDraw). Its sounds are non-local,
+    // its music, jingles and rumble never play; with follower_sounds false it never registers with the mixer (D5)
+    bool follower = false;
+    bool follower_sounds = true;       // FollowerOpts::sounds (true on every other character)
+    uint32_t follower_objects = 1;     // FollowerOpts::objects
+    uint32_t draw_level = kFollowerDrawFull;   // gsa1.FollowerDraw
+    uint32_t draw_rate = kFollowerRateDefault;
+    uint32_t host_flags_next = 0;      // gsa1.FollowerHostFlags: the water bits of its next tick
+    // the last pool job (written only by the job that runs this follower: review R.1; read after the join)
+    bool job_running = false;
+    sa1_status job_status = SA1_OK;
+    std::string job_error;             // per character (a job never writes Session::last_error_)
+    uint32_t job_pairs = 0;
+    bool job_rendered = false;         // a new render this frame
+    bool job_restructured = false;     // the batches changed this frame (Lua: gsa1.Batches)
+    double job_render_ms = 0.0;
+    uint64_t job_thread = 0;           // a hash of the thread that ran it (tests/feat_follower_pool_test.cpp)
+    // the WRAP_MASK answers a job did not find (a job never inserts into the session's map): filled after the join
+    std::vector<std::pair<int32_t, int32_t>> black_misses;
     // 0.9.5 (the feature "board", board.hpp): the character's board - libsa1's state after the last tick, the one-shot
     // refusal / frees of SA1_EVENT_BOARD, the board's stage rules. A re-created character starts with a fresh one
     board::Track board;
@@ -353,6 +387,36 @@ struct Character {
     uint64_t split_draws_total = 0;
 };
 
+// 0.9.8: a character's SA1_EVENT_RUMBLE moves the controller (gsa1_module.cpp, gsa1.PollEvents): not a puppet's, not a follower's
+inline bool rumble_allowed(const Character *c)
+{
+    return c && !c->puppet && !c->follower;
+}
+
+// 0.9.8: one follower's answer of Session::tick_followers (gsa1.FollowersTick's out[i]; plan 5.5 with D8)
+struct FollowerTickResult {
+    int32_t id = 0;
+    uint32_t pairs = 0;
+    sa1_status status = SA1_OK;        // SA1_ERR_GAME_FAULT / SA1_ERR_NOT_IMPLEMENTED: the world faulted (Character::faulted)
+    const std::string *msg = nullptr;  // Character::job_error (valid until the next tick of it or its destroy); nullptr: none
+    bool rendered = false;
+    bool restructured = false;
+    float pos[3] = {0, 0, 0};          // the drawn root (Character::r_pos); not rendered at level 3: the state's position
+    float yaw = 0.0f;                  // radians (Character::r_yaw; at level 3 the state's yaw)
+    bool interpolated = false;
+    float alpha = 0.0f;
+    uint32_t tris = 0;                 // Character::out_triangles
+};
+
+// 0.9.8: gsa1.FollowersStats: means per frame over the last whole second
+struct FollowerStats {
+    uint32_t followers = 0, workers = 0, frames = 0;
+    double ms_tick = 0.0;              // the followers' sa1_character_tick, summed over the followers (thread time)
+    double ms_render = 0.0;            // ... their render, copy and batches
+    double ms_join = 0.0;              // the game thread's wait for the workers
+    double ms_wall = 0.0;              // gsa1.FollowersTick, wall time
+};
+
 struct TextureRuns {
     uint32_t width = 0, height = 0;
     uint32_t pixel_format = 0, data_format = 0;
@@ -409,7 +473,7 @@ public:
     double world_set_ms() const { return world_ms_; }
     // moving collision (brush entities, physics props): the shapes and the libsa1 objects near the character
     Movers &movers() { return movers_; }
-    // Movers::commit around the first ticking character (none: everything parked); the module calls it each frame
+    // Movers::commit around every ticking character (none: everything parked); the module calls it each frame
     void commit_movers(double now);
 
     // upgrades: the character's upgrades to give it (UpgradeDef of this kind; none = the game's start)
@@ -499,6 +563,45 @@ public:
     // the batches of c's draws again (render() does this; tests that fill Character::r_* themselves)
     void rebatch(Character &c) { build_batches(c); }
 
+    // ---- 0.9.8: followers (follower.hpp, pool.hpp; sadc docs/research/gsa1_098_plan.md 2.4 B, 5.5, 6.6; gsa1_096_plan.md 4.11 d,
+    // 6.4 tasks 2-3 with its Review R.1). The player's world ticks on the game thread as before (Session::tick); followers are
+    // jobs (follower_job): one phase per chain level, joined before tick_followers returns; events, sounds, board rules and Lua
+    // come after the join, in world order.
+    FollowerSet &followers() { return followers_; }
+    const FollowerSet &followers() const { return followers_; }
+    // a follower world of `kind` behind `leader` (a character of this session; 0 = host-fed: pos / yaw are its first snapshot).
+    // 0 + err and *code ("unsupported" with libsa1's plain reason, "limit", "not_ready", "fault", "bad_argument", "not_found")
+    int32_t create_follower(int32_t kind, const float pos[3], float yaw, int32_t leader, const FollowerOpts &o, std::string &err,
+                            const char **code = nullptr, double *ms = nullptr);
+    // a new leader between ticks (0: host-fed from the last snapshot); false + err, *code ("bad_argument" for a cycle)
+    bool set_follower_leader(int32_t id, int32_t leader, std::string &err, const char **code = nullptr);
+    // every follower, chain level by chain level; view_yaw radians (the host viewer's); camera: only for followers whose chain
+    // root is a local character (a character of this session that is no puppet), and only a valid one (0.9.5's rule).
+    // interpolate: the player's alpha rule for level 1 (gsa1_interpolate: true -1, false 1). out: one row per follower, in job order
+    void tick_followers(float dt, float view_yaw, const TickExtra *camera, bool interpolate,
+                        std::vector<FollowerTickResult> &out);
+    // gsa1.FollowerThreads: 0 = automatic (pool_automatic_workers), else that many workers; the pool is rebuilt between frames.
+    // Returns the workers the followers' jobs use now (0 while kPoolLibParallel is false)
+    uint32_t set_follower_threads(uint32_t n);
+    uint32_t follower_threads() const { return follower_threads_; }
+    uint32_t follower_workers() const;
+    const FollowerStats &follower_stats() const { return fstats_last_; }
+    double follower_ms_last() const { return fms_last_; }
+    double follower_join_ms_last() const { return fjoin_last_; }
+    const Pool &pool() const { return pool_; }
+    // one event as take_events handles it: the board's core, the mixer's guards, the queue for Lua
+    void take_event(const sa1_event &e);
+    // tests: sees every event of the pump, and whether it went to the mixer (nullptr: none)
+    using EventTap = void (*)(void *user, const sa1_event &e, bool mixed);
+    void set_event_tap(EventTap fn, void *user)
+    {
+        event_tap_ = fn;
+        event_tap_user_ = user;
+    }
+    // tests (no disc, no world): a Character the session then knows by id; a follower joins followers() with the leader
+    Character *test_add_character(int32_t id, int32_t kind, bool follower = false, bool follower_sounds = true,
+                                  int32_t leader = 0);
+
     bool texture_count(int32_t kind, uint32_t archive, uint32_t &count, std::string &err, std::string *name = nullptr);
     uint32_t texture_archives(int32_t kind);
     // variant (0.9.4a, review R.6): 0 = the texture (sa1_texture_get); > 0 = libsa1's variant of it
@@ -531,6 +634,27 @@ public:
     bool texture_black(int32_t kind, int32_t archive, int32_t index);
 
 private:
+    // 0.9.8: one pool job (Session::tick_followers)
+    struct FollowerJob {
+        Character *c = nullptr;
+        const LeaderFeed *feed = nullptr;   // a host-fed follower's state (read-only during the phase)
+        bool camera = false;                // the host camera reaches it
+    };
+    struct FollowerFrame {
+        float dt = 0.0f, view_yaw = 0.0f;
+        bool camera = false;
+        float cam_pos[3] = {0, 0, 0}, cam_target[3] = {0, 0, 0};
+        bool interpolate = true;
+        uint64_t frame = 0;
+    };
+    void follower_job(const FollowerJob &j);
+    static void follower_job_run(void *user, uint32_t index);
+    static void follower_job_threw(void *user, uint32_t index, const char *what);
+    void fill_black(int32_t kind);
+    bool batch_black(Character &c, int32_t archive, int32_t index);
+    void follower_stats_add(double wall_ms, double join_ms);
+    sa1_status render_copy(Character &c, float alpha, std::string &err);
+    void tick_tail(Character &c, float dt, uint32_t step0, const float before[3]);
     void refresh_state(Character &c);
     // 0.9.5: after refresh_state - the board's state (board::refresh) and the rider's stage rules (board_rules)
     void board_after_tick(Character &c);
@@ -576,6 +700,22 @@ private:
     uint64_t board_tones_dropped_ = 0;
     void whoosh_rule(const Character &c); // 0.9.4a: the character's rule as whoosh_ says (a super-capable one)
     uint64_t stale_events_dropped_ = 0;   // 0.9.2a, E2
+    // 0.9.8: followers
+    FollowerSet followers_;
+    Pool pool_;
+    uint32_t follower_threads_ = 0;       // gsa1.FollowerThreads (0: automatic)
+    uint32_t black_kinds_filled_ = 0;     // bit n: texture_black's answers of kind n are all in black_ (cleared with the context)
+    FollowerFrame ff_;
+    uint64_t follower_frame_ = 0;
+    std::vector<FollowerJob> fjobs_;      // this frame's jobs by phase (reused: no allocation per frame)
+    std::vector<std::pair<uint32_t, uint32_t>> fphases_;   // first, count
+    uint32_t fphase_base_ = 0;            // the running phase's first job
+    std::vector<const float *> mover_foci_;
+    FollowerStats fstats_acc_, fstats_last_;
+    double fstats_t0_ = 0.0;
+    double fms_last_ = 0.0, fjoin_last_ = 0.0;
+    EventTap event_tap_ = nullptr;
+    void *event_tap_user_ = nullptr;
 };
 
 }  // namespace gsa1

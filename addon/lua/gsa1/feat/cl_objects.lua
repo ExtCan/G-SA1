@@ -790,8 +790,8 @@ hook.Add("HUDPaint", "gsa1_objects_debug", function()
     if not cv.debug:GetBool() or not GSA1.Char then return end
     draw.SimpleText(O.StatusLine(), "DermaDefault", 16, ScrH() - 60, color_white, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP)
 end)
-hook.Add("PostDrawTranslucentRenderables", "gsa1_objects_debug", function(depth, sky)
-    if depth or sky or not cv.debug:GetBool() then return end
+hook.Add("PostDrawTranslucentRenderables", "gsa1_objects_debug", function(depth, sky, sky3d)
+    if depth or not cv.debug:GetBool() or GSA1.SkyView(sky, sky3d) then return end
     local C = GSA1.Char
     if not C or not C.drawPos then return end
     render.DrawWireframeSphere(C.drawPos, O.RANGE, 24, 16, Color(80, 255, 120), true)

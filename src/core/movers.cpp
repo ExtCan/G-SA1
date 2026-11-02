@@ -132,6 +132,11 @@ bool Movers::entity_of(uint32_t object_id, int32_t &ent, uint32_t *chunk) const
 
 void Movers::commit(sa1_context *ctx, const float *focus, double now)
 {
+    commit(ctx, &focus, focus ? 1u : 0u, now);
+}
+
+void Movers::commit(sa1_context *ctx, const float *const *foci, size_t nfoci, double now)
+{
     if (!ctx) {
         return;
     }
@@ -184,13 +189,21 @@ void Movers::commit(sa1_context *ctx, const float *focus, double now)
                 k.pos[r] = e.pos[r] + e.rot[3 * r] * ch.center[0] + e.rot[3 * r + 1] * ch.center[1] +
                            e.rot[3 * r + 2] * ch.center[2];
             }
-            if (focus) {
+            if (nfoci == 0) {
+                continue;
+            }
+            // 0.9.8: the nearest focus (squared, the root once per chunk: the egg has 100 foci)
+            float best = -1.0f;
+            for (size_t f = 0; f < nfoci; f++) {
+                const float *focus = foci[f];
                 float dx = k.pos[0] - focus[0], dy = k.pos[1] - focus[1], dz = k.pos[2] - focus[2];
-                k.d = std::sqrt(dx * dx + dy * dy + dz * dz) - ch.radius;
-                if (k.d > opt.range) {
-                    continue;
+                float d2 = dx * dx + dy * dy + dz * dz;
+                if (best < 0.0f || d2 < best) {
+                    best = d2;
                 }
-            } else {
+            }
+            k.d = std::sqrt(best) - ch.radius;
+            if (k.d > opt.range) {
                 continue;
             }
             k.ent = kv.first;

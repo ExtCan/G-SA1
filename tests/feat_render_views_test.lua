@@ -187,7 +187,7 @@ local function world(variant)
             if vw.before then vw.before(V) end
             E.ent:Draw(fl)
             if vw.probe then vw.probe(V, fl) end
-            if hooks then M.run_hook("PostDrawOpaqueRenderables", vw.depth or false, false, false) end
+            if hooks then M.run_hook("PostDrawOpaqueRenderables", vw.depth or false, vw.sky or false, vw.sky3d or false) end
             if not vw.depth then E.ent:DrawTranslucent(fl) end
             out[vw.name] = V
             V = nil
@@ -415,7 +415,46 @@ else
     M.run_hook("PostDrawOpaqueRenderables", false, false, false)
     M.render_target = nil
     check(#E.pushes == 0, "inside a depth view or another render target: no late draw (%d)", #E.pushes)
+    -- (d2) 0.9.8 N8: the sky arguments. A 2D-sky map's main view comes as (false, true, false): the late draw runs there (it
+    -- returned on the second argument until 0.9.5a); a 3D-sky map's sky view gets none, and the main view after it still has its one
+    local SSAO = { name = "ssao", viewid = V_SSAO, rt = "_rt_ResolvedFullFrameDepth", flags = F_RENDER + F_SSAO, depth = true }
+    E.pushes = {}
+    E.frame({ SSAO, { name = "main", viewid = V_MAIN, sky = true } }, true)
+    local two_d = #E.pushes
+    E.pushes = {}
+    E.frame({ SSAO, { name = "sky", viewid = 1, sky = true }, { name = "sky3", viewid = 1, sky = true, sky3d = true },
+              { name = "main", viewid = V_MAIN } }, true)
+    local three_d, where3 = #E.pushes, E.pushes[1] and E.pushes[1].view or "none"
+    check(two_d == 1 and three_d == 1 and where3 == "main", "gsa1_depthfix 2: on a 2D-sky map the main view's (false, true, "
+        .. "false) has its late draw (%d); on a 3D-sky map the sky's views have none, the main view its one (%d, %s)", two_d,
+        three_d, where3)
     GSA1.cv.depthfix:SetString("1")
+    -- (d3) the helper itself (GSA1.SkyView; the two debug overlays' checks are in feat_interact_test and feat_objects_test)
+    local SS = GSA1.SunShadow
+    local keep_light, keep_vs = SS and SS.light, M.view_setup
+    local function sky_answers()
+        local out = {}
+        for _, id in ipairs({ 0, 1, -1 }) do
+            M.view_setup = id >= 0 and { viewid = id } or nil
+            out[#out + 1] = (GSA1.SkyView(false, false) and "Y" or "n") .. (GSA1.SkyView(true, false) and "Y" or "n") ..
+                (GSA1.SkyView(false, true) and "Y" or "n") .. (GSA1.SkyView(true, true) and "Y" or "n")
+        end
+        return table.concat(out, " ")
+    end
+    if SS then SS.light = nil end
+    local unknown = sky_answers()
+    local on_3d, on_2d = "?", "?"
+    if SS then
+        SS.light = { sky3d = true }
+        on_3d = sky_answers()
+        SS.light = { sky3d = false }
+        on_2d = sky_answers()
+        SS.light = keep_light
+    end
+    M.view_setup = keep_vs
+    -- (each group: view id 0, 1, no answer; each letter: the arguments ff, tf, ft, tt)
+    check(unknown == "nnYY nYYY nYYY" and on_3d == unknown and on_2d == "nnnn nnnn nnnn", "GSA1.SkyView: the map not known "
+        .. "\"%s\", with a sky_camera \"%s\", with none \"%s\"", unknown, on_3d, on_2d)
 
     -- (e) D1: GSA1.ViewInfo - the last draw's view, and the view being drawn now
     local seen = {}

@@ -920,8 +920,8 @@ end)
 local CAT_COLOR = { hostile = Color(255, 60, 60), neutral = Color(255, 200, 60), friendly = Color(60, 255, 60),
                     vehicle = Color(60, 160, 255), player = Color(255, 60, 255), breakable = Color(200, 140, 80),
                     holdable = Color(255, 255, 255), balloon = Color(255, 128, 200), hazard = Color(255, 120, 0) }
-hook.Add("PostDrawTranslucentRenderables", "gsa1_interact_debug", function(depth, sky)
-    if sky or not GSA1.Char or not cv.debug:GetBool() then return end
+hook.Add("PostDrawTranslucentRenderables", "gsa1_interact_debug", function(depth, sky, sky3d)
+    if not GSA1.Char or not cv.debug:GetBool() or GSA1.SkyView(sky, sky3d) then return end
     for _, o in pairs(I.objects) do
         local e = o.ent
         if IsValid(e) then

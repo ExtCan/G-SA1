@@ -34,6 +34,19 @@
 --     local character's, else Sonic's - one copy per kind and variant); without the module or the disc a G-SA1-drawn
 --     stand-in while editing.
 --   * Q menu > Options > G-SA1 > Board (order 275): every client and server row of gsa1_095_plan.md 5.8.
+--   * 0.9.8, FOLLOWERS (gsa1_098_plan.md 2.4 row 16, D7, D11, 6.7 task 6; gsa1_096_plan.md 4.12, 6.5 task 6, reviews R.4, R.5,
+--     R.6; the owner's binding 14.1ad 6): a Sonic or Tails follower F rides per ITS OWN WORLD (the game's pick of the board by
+--     that world's pair parity: nothing here copies your variant). B.State / B.On / B.Off / B.Poll take F as they take a C. THE
+--     MIRROR: GSA1BoardChanged(C, on, why) puts every Sonic / Tails follower whose leader is C on or off, with C's last options
+--     (terrain, push), and chains mirror because each follower's own edge runs the same hook. BACK ON: after the AI's respawn
+--     ended a ride, while its leader rides and it stands on the ground. THE BOXES: B.FollowerBoxes runs B.Edge on F's own
+--     samples once per pair; gsa1_follower_board_boxes 1 = it WALKS to the box's board (host-fed at the board's place, the AI's
+--     own walking), on when within 48 HU, or at B.WalkDeadline, its leader link back; the walk ends when it leaves the box by
+--     B.LEAVE_OUT, is hurt, or its leader boards; 2 = on at once; no claim, no use counted, no net message; the box's board
+--     stays for players. A Board Off box takes it off. NET: never a gsa1_board_st for a follower (both send lines, B.lastEdge);
+--     its left board carries F.slot, paced: your own first, then at most one follower board a second, one waiting over 5 s is
+--     removed (a log line); no slot (a 16th): removed at the exit. Its refusals are silent (one log line, no toast). D11: its
+--     kept board and the decoration may both draw for up to 1 s (B.FreeKept): accepted.
 GSA1 = GSA1 or {}
 local B = GSA1.Board
 if not B then return end
@@ -143,7 +156,7 @@ function B.Refuse(C, why, how, code)
     why = tostring(why or "can't get on a board now")
     if b then b.refusal = { why = why, at = now_s() } end
     local title = C and C.title or "the character"
-    toast("%s can't ride a board now: %s", title, why)
+    if not (C and C.follower) then toast("%s can't ride a board now: %s", title, why) end
     log("%s: no board (%s): %s%s", title, tostring(how or "?"), why, code and (" [" .. tostring(code) .. "]") or "")
     return false, why
 end
@@ -187,7 +200,7 @@ function B.LeftMax()
 end
 function B.Off(C, how, why, idx)
     local b = B.State(C)
-    local remove = B.LeftMax() <= 0
+    local remove = B.LeftMax() <= 0 or (C.follower == true and not C.slot)
     local ok, err, code = gsa1.Board(C.id, false, remove and { remove = true } or nil)
     if not ok then return B.Refuse(C, err, how, code) end
     b.why, b.offBox, b.removeOnExit = why or WHY.WHEEL, idx, remove
@@ -299,12 +312,13 @@ local function cvi(name)
     local c = GetConVar(name)
     return c and c:GetInt() or 0
 end
-function B.KeyRefused(code)
+-- (0.9.8: skip: a ConVar not to ask, the followers' call key asking about itself)
+function B.KeyRefused(code, skip)
     code = tonumber(code) or 0
     if code <= 0 then return nil end
     local others = {}
     local function add(name, why)
-        local k = cvi(name)
+        local k = name ~= skip and cvi(name) or 0
         if k > 0 then others[k] = others[k] or why end
     end
     add("gsa1_wheel_key", "the wheel key")
@@ -312,6 +326,7 @@ function B.KeyRefused(code)
     add("gsa1_wheel_hide_key", "the hide key")
     add("gsa1_interact_key", "the interact key")
     add("gsa1_lift_key", "the lift key")
+    add("gsa1_follower_call_key", "the key that calls your followers")
     if others[code] then return others[code] end
     if W and W.KeyRefusal then
         local lookup = input and input.LookupBinding
@@ -324,12 +339,15 @@ end
 B.PAD_RESERVED = { [0x0100] = "the wheel's page button (LB)", [0x0200] = "the wheel's page button (RB)",
                    [0x2000] = "the wheel's cancel button (B)", [0x1000] = "jump (A)",
                    [0x0010] = "Start (kept for the Character Select)" }
-function B.PadRefused(bits)
+function B.PadRefused(bits, skip)
     bits = tonumber(bits) or 0
     if bits <= 0 then return nil end
     if bits == cvi("gsa1_wheel_pad") then return "the wheel button" end
     if bits == cvi("gsa1_wheel_face_pad") then return "the face trigger" end
     if bits == cvi("gsa1_super_pad") then return "the Super transformation button" end
+    if skip ~= "gsa1_follower_call_pad" and bits == cvi("gsa1_follower_call_pad") then
+        return "the button that calls your followers"
+    end
     return B.PAD_RESERVED[bits]
 end
 cvars.AddChangeCallback("gsa1_board_key", function(name, old, new)
@@ -363,7 +381,8 @@ B.PAD_FREE_ORDER = { { 0x0040, "LS", "ls" }, { 0x0080, "RS", "rs" }, { 0x0001, "
                      { 0x8000, "Y", "y" }, { 0x4000, "X", "x" } }
 function B.FreeButtons()
     local used = { [0x1000] = true, [0x2000] = true, [0x0100] = true, [0x0200] = true, [0x0010] = true }
-    for _, bt in ipairs({ cvi("gsa1_wheel_pad"), cvi("gsa1_wheel_face_pad"), cvi("gsa1_super_pad"), cv.pad:GetInt() }) do
+    for _, bt in ipairs({ cvi("gsa1_wheel_pad"), cvi("gsa1_wheel_face_pad"), cvi("gsa1_super_pad"), cv.pad:GetInt(),
+                          cvi("gsa1_follower_call_pad") }) do
         if bt > 0 then used[bt] = true end
     end
     local dpad = GSA1.cv and GSA1.cv.pad_dpad and GSA1.cv.pad_dpad:GetBool()
@@ -617,7 +636,8 @@ function B.StartLeaving(C)
         b.removeOnExit = nil
         return
     end
-    local s = C.state or {}
+    -- (0.9.8: a follower held by now stands far above its leader: where it was last drawn)
+    local s = (C.follower and C.held and C.drawPos) or C.state or {}
     b.leaving = { at = now_s(), kind = C.kind, variant = tonumber(b.st.variant) or 0,
                   exit = { x = s.x or 0, y = s.y or 0, z = s.z or 0 }, yaw = C.drawYaw or s.yaw or 0 }
 end
@@ -632,6 +652,43 @@ function B.SendLeft(C, pose, why)
         return false
     end
     if B.LeftMax() <= 0 then return false end
+    -- 0.9.8 (096 review R.6): a follower's waits its turn (B.LeftPump)
+    if C.follower then
+        local q = B.leftQueue
+        q[#q + 1] = { C = C, L = L, pose = pose, why = why, at = now_s() }
+        B.LeftPump()
+        return true
+    end
+    return B.WriteLeft(C, L, pose, why)
+end
+
+-- 0.9.8 (096 review R.6): the left boards of followers, paced: the server's bucket is 3, refilled at 1 a second
+-- (sh_board.lua:75), and your own board comes first; one waiting over B.LEFT_WAIT_MAX s is removed
+B.leftQueue = B.leftQueue or {}
+B.LEFT_FOLLOWER_EVERY, B.LEFT_WAIT_MAX = 1, 5
+function B.LeftPump()
+    local q = B.leftQueue
+    if #q == 0 then return end
+    local tn = now_s()
+    for i = #q, 1, -1 do
+        local e = q[i]
+        if tn - e.at > B.LEFT_WAIT_MAX then
+            table.remove(q, i)
+            log("%s: the board got off waited too long for its turn and is removed", e.C.title or "?")
+            if not e.C.removed and gsa1 and gsa1.BoardFree then gsa1.BoardFree(e.C.id) end
+        end
+    end
+    if #q == 0 then return end
+    local me = GSA1.Char
+    if me and me.board and me.board.leaving then return end      -- your own goes first
+    if B.leftNext and tn < B.leftNext then return end
+    local e = table.remove(q, 1)
+    B.leftNext = tn + B.LEFT_FOLLOWER_EVERY
+    return B.WriteLeft(e.C, e.L, e.pose, e.why)
+end
+
+function B.WriteLeft(C, L, pose, why)
+    local b = C.board
     -- the world's own board goes when the decoration arrives, at the latest FREE_AFTER later (not when it fell or a new
     -- board replaced it: libsa1 freed it already); set before sending (the entity may arrive at once)
     if why ~= "it fell" and why ~= "a new board" and why ~= "the world goes" then
@@ -642,7 +699,7 @@ function B.SendLeft(C, pose, why)
     net.WriteAngle(Angle(pose.p or 0, pose.yaw or 0, pose.r or 0))
     net.WriteUInt(math.Clamp(L.kind or 0, 0, 15), 4)
     net.WriteUInt(math.Clamp(L.variant or 0, 0, 15), 4)
-    net.WriteUInt(0, 4)
+    net.WriteUInt(C.follower and math.Clamp(tonumber(C.slot) or 0, 0, 15) or 0, 4)
     net.SendToServer()
     log("%s: the board got off is handed over at (%.0f %.0f %.0f) (%s)", C.title or "?", pose.x, pose.y, pose.z, why)
     return true
@@ -702,12 +759,15 @@ function B.Poll(C, st, dt)
         elseif not C.death then
             B.StartLeaving(C)              -- (a death on the board leaves no board behind: the respawn is a new world)
         end
-        B.SendState(on, why, (not on and why == WHY.OFF_BOX) and b.offBox or nil)
-        B.lastEdge = { on = on, why = why, at = tn }
+        -- (0.9.8, D7: B.sent[0] and B.lastEdge are the player's; a follower sends nothing)
+        if not C.follower then
+            B.SendState(on, why, (not on and why == WHY.OFF_BOX) and b.offBox or nil)
+            B.lastEdge = { on = on, why = why, at = tn }
+        end
         if GSA1.RunHook then GSA1.RunHook("GSA1BoardChanged", C, on, B.WHY_WORD[why] or tostring(why)) end
         log("%s %s (%s)", C.title or "?", on and "rides a board" or "got off the board", B.WHY_NAME[why] or "?")
         b.why, b.offBox = WHY.WHEEL, nil
-    elseif (B.sent[0] == true) ~= on then
+    elseif not C.follower and (B.sent[0] == true) ~= on then
         B.SendState(on, WHY.WHEEL, nil)
     end
     if s.refused then
@@ -779,6 +839,208 @@ end)
 hook.Add("GSA1CharacterRemoved", "gsa1_board", function(C, switching)
     if B.sent[0] then B.SendState(false, WHY.WHEEL, nil) end
     if C and C.board and C.board.on and GSA1.RunHook then GSA1.RunHook("GSA1BoardChanged", C, false, "removed") end
+end)
+
+-- 0.9.8: FOLLOWERS (the top of the file) --------------------------------------------------------------------------------------
+local function fo_cv(name)
+    local Fo = GSA1.Followers
+    return Fo and Fo.cv and Fo.cv[name] or nil
+end
+
+-- the Board On / Off boxes as B.Edge wants them, on the client: made again once a second while followers look at them (the
+-- "inside" of a track goes by the entity: it survives that)
+B.fboxes = B.fboxes or {}
+function B.ClientBoxes(tn)
+    if tn < (B.fboxesAt or 0) then return B.fboxes end
+    B.fboxesAt = tn + 1
+    local list = B.fboxes
+    for i = #list, 1, -1 do list[i] = nil end
+    for _, ent in pairs(B.boxes) do
+        if IsValid(ent) then list[#list + 1] = B.ClientBoxData(ent) end
+    end
+    return list
+end
+
+-- the walk to a box's board ends; its leader link comes back
+function B.FollowerWalkEnd(F, text)
+    local b = F.board
+    local w = b and b.fwalk
+    if not w then return end
+    b.fwalk = nil
+    local Fo = GSA1.Followers
+    if Fo and Fo.WalkEnd then Fo.WalkEnd(F) end
+    if text then log("%s: the walk to the board of Board On box %d ended: %s", F.title or "?", w.idx or 0, tostring(text)) end
+end
+
+-- F on foot enters a Board On box: on at once (2), or a walk to its board (1)
+function B.FollowerOnBox(F, ent, box, mode)
+    local b = B.State(F)
+    if not ent:GetPresent() or b.fwalk or F.held then return end
+    if not B.CanBoard(F, B.Have()) then return end
+    local opts = B.BoxOpts(ent.GetPush and ent:GetPush() or 1, ent.GetGround and ent:GetGround() or 0)
+    if mode == 2 then return B.On(F, "a Board On box", WHY.BOX, opts) end
+    local Fo = GSA1.Followers
+    if not (Fo and Fo.WalkTo) then return end
+    local place = ent:GetBoardPos()
+    local s = F.state
+    local dx, dy = place.x - s.x, place.y - s.y
+    local dist = sqrt(dx * dx + dy * dy)
+    local tn = now_s()
+    b.fwalk = { idx = ent:EntIndex(), ent = ent, box = box, target = Vector(place), opts = opts, at = tn,
+                deadline = tn + B.WalkDeadline(dist), step0 = tonumber(s.step) or 0 }
+    Fo.WalkTo(F, b.fwalk.target, tonumber(s.yaw) or 0)
+    log("%s: walking to the board of Board On box %d (%.0f HU away; at most %.1f s)", F.title or "?", b.fwalk.idx, dist,
+        b.fwalk.deadline - tn)
+end
+
+function B.FollowerEnter(F, ent, box, mode)
+    if not (IsValid(ent) and B.IsBox(ent)) then return end
+    if cv.sv_on and not cv.sv_on:GetBool() then return end
+    if ent.GetEnabled and not ent:GetEnabled() then return end
+    if B.Spent(ent) then return end
+    local b = B.State(F)
+    if B.BoxKind(ent) == "off" then
+        if b.on then
+            b.stayOff = true        -- (until its leader's next edge)
+            B.Off(F, "a Board Off box", WHY.OFF_BOX, ent:EntIndex())
+        end
+    elseif b.on then
+        -- riding: the box's ground from now on, as for you
+        if (tonumber(ent.GetGround and ent:GetGround()) or 0) ~= 0 then
+            local opts = B.BoxOpts(ent.GetPush and ent:GetPush() or 1, ent:GetGround())
+            gsa1.Board(F.id, true, { terrain = opts.terrain })
+        end
+    else
+        B.FollowerOnBox(F, ent, box, mode)
+    end
+end
+
+-- B.Edge on F's own samples, once per pair (its state changes with a pair); no claim, no use, no net message
+function B.FollowerBoxes(F)
+    local c = fo_cv("board_boxes")
+    local mode = c and c:GetInt() or 0
+    local st = F.state
+    if mode <= 0 or F.held or not (st and st.x) then return end
+    if st.step == F.boxStep then return end
+    F.boxStep = st.step
+    if next(B.boxes) == nil then return end
+    local tn = now_s()
+    local track = F.boxTrack
+    if not track then
+        track = B.NewTrack()
+        F.boxTrack = track
+    end
+    local ev = B.Edge(track, B.ClientBoxes(tn), st.x, st.y, st.z, tn)
+    for i = 1, #ev do
+        local box = ev[i].box
+        B.FollowerEnter(F, box.key, box, mode)
+    end
+end
+
+-- after each tick of a walking follower: at the board, the deadline (then on at once), out of the box, hurt
+function B.FollowerWalkThink(F, st, tn)
+    local b = F.board
+    local w = b.fwalk
+    if not w then return end
+    if F.held then return B.FollowerWalkEnd(F, "it is held") end
+    local dx, dy, dz = w.target.x - st.x, w.target.y - st.y, w.target.z - st.z
+    if dx * dx + dy * dy <= B.FOLLOWER_REACH * B.FOLLOWER_REACH and abs(dz) <= B.REACH_V then
+        B.FollowerWalkEnd(F, nil)
+        return B.On(F, "a Board On box", WHY.BOX, w.opts)
+    end
+    if tn > w.deadline then
+        B.FollowerWalkEnd(F, nil)
+        return B.On(F, "a Board On box, past its deadline", WHY.BOX, w.opts)
+    end
+    if w.box and B.Outside(w.box, st.x, st.y, st.z + B.LIFT) > B.LEAVE_OUT then
+        return B.FollowerWalkEnd(F, "left the box")
+    end
+    local ex = state_ex(F)
+    local hs = ex and tonumber(ex.hurt_steps)
+    if hs and hs >= 0 and hs < (tonumber(st.step) or 0) - w.step0 then
+        return B.FollowerWalkEnd(F, "was hurt")
+    end
+end
+
+-- back on a board: the AI's respawn ended the ride (its own order 24) while its leader still rides, and it stands
+function B.FollowerBackOn(F, st, tn)
+    local c = fo_cv("board")
+    if not (c and c:GetBool()) then return end
+    local b = F.board
+    if b.on or b.fwalk or b.stayOff or F.held or not st.ground then return end
+    if b.entering and tn - b.entering.at < 2 then return end
+    local Fo = GSA1.Followers
+    local L = Fo and Fo.LeaderEntry and Fo.LeaderEntry(F)
+    local lb = L and L.board
+    if not (lb and lb.on) or tn < (b.retryAt or 0) then return end
+    b.retryAt = tn + 1
+    if B.CanBoard(F, B.Have()) then B.On(F, "its leader rides", WHY.WHEEL, lb.lastOpts or B.WheelOpts()) end
+end
+
+-- one follower's board, after its tick (GSA1FollowerPostTick)
+function B.FollowerTick(F, st, dt)
+    B.Poll(F, st, dt)
+    if st and st.x then
+        local tn = now_s()
+        B.FollowerBoxes(F)
+        B.FollowerWalkThink(F, st, tn)
+        B.FollowerBackOn(F, st, tn)
+    end
+end
+B.FOLLOWER_REACH = 48       -- HU: the AI stops 34-41 HU from what it follows (follow096_lib.md 3.1)
+
+-- the mirror: C's edge (your character's, or a follower's: chains) to the Sonic / Tails followers whose leader is C
+function B.Mirror(C, on, why)
+    local Fo = GSA1.Followers
+    if not (C and C.id and Fo and Fo.list and Fo.list[1]) then return end
+    local c = fo_cv("board")
+    if not (c and c:GetBool()) then return end
+    for _, F in ipairs(Fo.list) do
+        -- (a walk to a box's board has its leader link off: the one it follows still counts)
+        local follows = F.leaderId == C.id or (F.walkFeed ~= nil and Fo.TargetLeader(F.target) == C)
+        if follows and (F.kind == B.KIND_SONIC or F.kind == B.KIND_TAILS) and not F.held then
+            local b = B.State(F)
+            b.stayOff = nil
+            if on then
+                B.FollowerWalkEnd(F, "its leader boards")
+                if not b.on and B.CanBoard(F, B.Have()) then
+                    B.On(F, "its leader", WHY.WHEEL, (C.board and C.board.lastOpts) or B.WheelOpts())
+                end
+            elseif b.on then
+                B.Off(F, "its leader", WHY.WHEEL, nil)
+            end
+        end
+    end
+end
+hook.Add("GSA1BoardChanged", "gsa1_follower_board", function(C, on, why) B.Mirror(C, on, why) end)
+
+hook.Add("GSA1FollowerPostTick", "gsa1_follower_board", function(F, st, dt)
+    if F.kind ~= B.KIND_SONIC and F.kind ~= B.KIND_TAILS then return end
+    local ok, err = pcall(B.FollowerTick, F, st, dt)
+    if not ok and not B.fpollError then
+        B.fpollError = true
+        log("error: %s", tostring(err))
+        ErrorNoHalt("[G-SA1] board (follower): " .. tostring(err) .. "\n")
+    end
+end)
+
+-- a follower goes (its world still there): a riding one's board is left where it rides, a kept one's goes as for you; the
+-- followers behind it mirror
+hook.Add("GSA1FollowerRemoved", "gsa1_follower_board", function(F, why)
+    local b = F and F.board
+    if not b then return end
+    b.fwalk = nil
+    if b.leaving then
+        local L = b.leaving
+        B.SendLeft(F, L.pose or L.rest or B.ExitPose(L), "the world goes")
+    elseif b.on and F.slot and B.LeftMax() > 0 then
+        local s = F.state or {}
+        b.leaving = { at = now_s(), kind = F.kind, variant = tonumber(b.st and b.st.variant) or 0,
+                      exit = { x = s.x or 0, y = s.y or 0, z = s.z or 0 }, yaw = F.drawYaw or s.yaw or 0 }
+        B.SendLeft(F, B.ExitPose(b.leaving), "the world goes")
+    end
+    b.pendingFree = nil
+    if b.on and GSA1.RunHook then GSA1.RunHook("GSA1BoardChanged", F, false, "removed") end
 end)
 
 -- the left boards' arrival: the rider's world frees its own board (review R.5) --------------------------------------------------
@@ -973,6 +1235,7 @@ end
 
 -- once per frame: the extras of the lying boards (made while their board lies there), the boxes' bounds after a size change
 function B.Think()
+    if B.leftQueue[1] then B.LeftPump() end
     for ent in pairs(B.boundsDirty) do
         B.boundsDirty[ent] = nil
         if IsValid(ent) then B.ApplyBounds(ent) end

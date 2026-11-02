@@ -1279,6 +1279,27 @@ do
     check(radius == O.RANGE and radius == 4800, "the debug sphere (\"Show the objects' range and records\") has the "
         .. "range's radius: %s HU (gsa1_set_range)", tostring(radius))
 end
+-- 0.9.8 N8: the debug sphere's sky arguments (GSA1.SkyView): a 2D-sky map's main view (false, true, false) draws it ---------------
+do
+    local keepChar, keepSphere, keepVs = GSA1.Char, render.DrawWireframeSphere, M.view_setup
+    GSA1.Char = { drawPos = Vector(0, 0, 0) }
+    local drawn = 0
+    render.DrawWireframeSphere = function() drawn = drawn + 1 end
+    RunConsoleCommand("gsa1_set_debug", "1")
+    local fn = M.hooks.PostDrawTranslucentRenderables and M.hooks.PostDrawTranslucentRenderables.gsa1_objects_debug
+    local function count(id, a, b, c)
+        drawn, M.view_setup = 0, id and { viewid = id } or nil
+        if fn then fn(a, b, c) end
+        return drawn
+    end
+    local main2d, sky1, sky3d, depth = count(0, false, true, false), count(1, false, true, false), count(1, false, true, true),
+        count(0, true, true, false)
+    RunConsoleCommand("gsa1_set_debug", "0")
+    render.DrawWireframeSphere, M.view_setup = keepSphere, keepVs
+    GSA1.Char = keepChar
+    check(main2d == 1 and sky1 == 0 and sky3d == 0 and depth == 0, "the debug sphere on a 2D-sky map's main view (false, true, "
+        .. "false): %d draw; the 3D sky's view %d and %d, a depth view %d", main2d, sky1, sky3d, depth)
+end
 -- 13. 0.9.4.1 ---------------------------------------------------------------------------------------------------------------
 -- 13a. 128 rings: the circle split, records, masks, the evenly spaced places, golden places (the same in feat_objects_test.cpp)
 do

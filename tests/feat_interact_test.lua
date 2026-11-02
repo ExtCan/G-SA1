@@ -1163,6 +1163,29 @@ check(#drawn == 0 and M.run_hook("HUDShouldDraw", "CHudHealth") == nil and M.run
     .. "has no hud part): no Garry's Mod text counter, Garry's Mod's health stays; the Interaction page keeps the HUD "
     .. "switch")
 
+-- 7b. 0.9.8 N8: the debug shapes' sky arguments (GSA1.SkyView): a 2D-sky map's main view (false, true, false) draws them ----------
+do (function()     -- (a function: this file's main chunk is at Lua's limit of 200 locals)
+    local fn = M.hooks.PostDrawTranslucentRenderables and M.hooks.PostDrawTranslucentRenderables.gsa1_interact_debug
+    local keepChar, keepBox, keepObjects, keepVs = GSA1.Char, render.DrawWireframeBox, I.objects, M.view_setup
+    local fake = { GetPos = function() return Vector(0, 0, 0) end, GetAngles = function() return Angle(0, 0, 0) end,
+                   OBBMins = function() return Vector(-1, -1, -1) end, OBBMaxs = function() return Vector(1, 1, 1) end,
+                   IsValid = function() return true end }
+    local drawn = 0
+    render.DrawWireframeBox = function() drawn = drawn + 1 end
+    GSA1.Char, I.objects = GSA1.Char or {}, { [1] = { ent = fake, kind = -1, cat = "neutral" } }
+    GSA1.Interact.cv.debug:SetString("1")
+    local function count(id, a, b, c)
+        drawn, M.view_setup = 0, id and { viewid = id } or nil
+        if fn then fn(a, b, c) end
+        return drawn
+    end
+    local main2d, sky1, sky3d = count(0, false, true, false), count(1, false, true, false), count(1, false, true, true)
+    GSA1.Interact.cv.debug:SetString("0")
+    GSA1.Char, render.DrawWireframeBox, I.objects, M.view_setup = keepChar, keepBox, keepObjects, keepVs
+    check(main2d == 1 and sky1 == 0 and sky3d == 0, "the debug shapes on a 2D-sky map's main view (false, true, false): %d "
+        .. "draw; the 3D sky's view %d and %d", main2d, sky1, sky3d)
+end)() end
+
 -- 8. without the module's part ------------------------------------------------------------------------------------------------------
 G.FEATURES = {}
 M.menu = {}

@@ -165,6 +165,26 @@ if not GSA1.Char then
     print(string.format("\n%d checks, %d failed", M.checks, M.fails))
     return false
 end
+-- 0.9.8 (gsa1_098_plan.md A22, 096 review R.12): with no follower the follower code adds at most 64 B per frame: its hook slots
+-- ("gsa1_follower*", the per-hook meter's rule) and GSA1.FollowersThink itself, measured in the charged frames below
+local fo_kb, fo_nested, fo_measure = 0, 0, false
+local function fo_meter(fn)
+    return function(...)
+        if not fo_measure or fo_nested > 0 then return fn(...) end
+        fo_nested = fo_nested + 1
+        local k0, m0 = collectgarbage("count"), mock_kb
+        local a, b = fn(...)
+        fo_kb = fo_kb + (collectgarbage("count") - k0) - (mock_kb - m0)
+        fo_nested = fo_nested - 1
+        return a, b
+    end
+end
+for _, t in pairs(M.hooks) do
+    for id, fn in pairs(t) do
+        if string.sub(id, 1, 13) == "gsa1_follower" then t[id] = fo_meter(fn) end
+    end
+end
+if GSA1.FollowersThink then GSA1.FollowersThink = fo_meter(GSA1.FollowersThink) end
 -- 10 s at 60 fps; action held from 2 s (the charge: the mock's batches follow the pairs)
 local draws_missing, lua_ms, lua_n = 0, 0, 0
 local kb_frames, kb = 0, 0
@@ -176,6 +196,7 @@ for f = 1, 600 do
     if measure then
         collectgarbage("collect")
         collectgarbage("stop")
+        fo_measure = true
     end
     local k0 = collectgarbage("count") - mock_kb
     local t0 = host_clock()
@@ -189,7 +210,11 @@ for f = 1, 600 do
     end
     if (M.calls["mesh.End"] or 0) == ends0 then draws_missing = draws_missing + 1 end
 end
+fo_measure = false
 local per_frame = kb * 1024 / math.max(kb_frames, 1)
+local fo_per = fo_kb * 1024 / math.max(kb_frames, 1)
+info("the follower code with no follower (hook slots gsa1_follower*, GSA1.FollowersThink): %.1f bytes of Lua garbage per frame", fo_per)
+check(fo_per <= 64, "no follower: the follower code adds at most 64 bytes per frame (%.1f; budget A22)", fo_per)
 info("Lua garbage per frame while charged (frames 361-600; the mock module's own left out, the mock's Vector and Angle "
     .. "are tables, larger than GMod's userdata): %.0f bytes; Lua time per frame (with the mock module): %.3f ms", per_frame,
     lua_ms / math.max(lua_n, 1))

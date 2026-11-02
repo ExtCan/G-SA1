@@ -86,6 +86,19 @@
 --     whose main view prepared the character (C.viewFrame), camera-relative like the main view, counted as its own view
 --     kind ("closeup" / "sunshadow", never "main"), timed as the hitch section "Closeup" (or the caller's).
 --   * The garbage meter (cl_gcmeter.lua): ENT:Draw / DrawTranslucent are its slot "Draw / the character".
+--
+-- 0.9.8 (sadc docs/research/gsa1_098_plan.md 2.4 D4, D9, A13; gsa1_096_plan.md 4.10): a follower (C.follower, its own render
+-- entity, feat/cl_follower.lua) is drawn by the same paths, with C.lod:
+--   * every level: never its OBJECT batches (your world draws the game's objects);
+--   * first person is about YOUR character (GSA1.FirstPersonFor, both sites: GSA1.DrawCharacter and draw_depth_late);
+--   * level 1 (full): as your character, but in another addon's render target (kind main, a target that is not the screen:
+--     the owner's prism_fx draws 7 "main" views into _rt_prism_dynscratch_1024x1024) only with gsa1_follower_other_views 1;
+--   * level 2 (far): only when render.GetRenderTarget() is nil (the screen), not when the view kind says main; no EFFECT and no
+--     SHADOW batches (a board batch, which is EFFECT too, stays; its shadow does not); the static-mesh path of the pair the
+--     module rendered (C.interp false); the lighting cube every 4th frame; no depth, water or shadow-depth views;
+--   * level 3: not drawn (the entity is SetNoDraw too);
+--   * never counted as your character's view (GSA1.ViewInfo, GSA1.ViewsLine, cl_log.lua's views); its time is the hitch
+--     section "FollowerDraw"; one EyePos / EyeAngles per frame for all followers on the screen, not one per follower (D10).
 GSA1 = GSA1 or {}
 
 local band = bit.band
@@ -113,8 +126,12 @@ ENT.PrintName = "G-SA1 character"
 ENT.Spawnable = false
 ENT.RenderGroup = RENDERGROUP_BOTH
 
+-- 0.9.8 (seam L1, gsa1_098_plan.md 5.6): the character entity's render bounds; feat/cl_gamecam.lua widens one entity's while
+-- the fishing camera shows, from these
+GSA1.RENDER_BOUNDS_MIN, GSA1.RENDER_BOUNDS_MAX = Vector(-640, -640, -320), Vector(640, 640, 640)
+
 function ENT:Initialize()
-    self:SetRenderBounds(Vector(-640, -640, -320), Vector(640, 640, 640))
+    self:SetRenderBounds(GSA1.RENDER_BOUNDS_MIN, GSA1.RENDER_BOUNDS_MAX)
     self:DrawShadow(false)          -- Source's own shadow: the game's blob is drawn instead (gsa1_shadow)
 end
 
@@ -139,6 +156,8 @@ local BOX_DIRS = {
 -- sampled once per rendered frame
 local function update_lighting(C)
     if C.lightFrame == FrameNumber() then return end
+    -- (0.9.8: a far follower's cube every 4th frame)
+    if C.lod == 2 and C.light and C.lightFrame and FrameNumber() - C.lightFrame < 4 then return end
     C.lightFrame = FrameNumber()
     C.lightOrigin = C.lightOrigin or Vector()
     C.lightOrigin:Set(C.drawPos)
@@ -249,6 +268,24 @@ local function main_eye()
 end
 GSA1.MainEye = main_eye
 
+-- 0.9.8 (D10): the followers ask for the eye once per frame together, not once per follower: EyePos and EyeAngles make a new
+-- Vector and Angle in the game
+local foEye = { frame = -1 }
+local function follower_main_eye()
+    local v = GSA1.view
+    local fn = FrameNumber()
+    if v and v.frame == fn and v.origin and v.angles then return v.origin, v.angles end
+    if foEye.frame ~= fn then foEye.frame, foEye.o, foEye.a = fn, EyePos(), EyeAngles() end
+    return foEye.o, foEye.a
+end
+-- the screen's own eye (asked inside the screen's view, so never a mirror's)
+local foScreen = { frame = -1 }
+local function follower_screen_eye()
+    local fn = FrameNumber()
+    if foScreen.frame ~= fn then foScreen.frame, foScreen.o, foScreen.a = fn, EyePos(), EyeAngles() end
+    return foScreen.o, foScreen.a
+end
+
 -- 0.9.4d: an angle's axes written into the Vectors given (Source's AngleVectors: what Angle:Forward / Right / Up return,
 -- without a new Vector each - Lua garbage every frame, tests/frame_test.lua); fwd, right or up may be nil
 function GSA1.AngleAxes(ang, fwd, right, up)
@@ -286,6 +323,18 @@ local function batch_on(f, effects, shadows, objects, first_person)
 end
 GSA1.BatchOn = batch_on
 
+-- 0.9.8 (gsa1_096_plan.md 4.10): which of a follower's batches batch_on may draw at all: never its OBJECT batches; at level 2
+-- no shadow and no effects, but its board (the board's draws are EFFECT too)
+local function follower_batch(C, f)
+    if band(f, DRAW_OBJECT) ~= 0 then return false end
+    if (C.lod or 1) >= 2 then
+        if band(f, DRAW_SHADOW) ~= 0 then return false end
+        if band(f, DRAW_EFFECT) ~= 0 and band(f, DRAW_BOARD) == 0 then return false end
+    end
+    return true
+end
+GSA1.FollowerBatch = follower_batch
+
 -- the Objects page's switch (feat/cl_objects.lua; on without that feature)
 local function objects_on()
     local c = GSA1.cv and GSA1.cv.set_draw
@@ -311,6 +360,16 @@ local depthRan, lateDone = -1, -1       -- the frame of the last depth pass that
 -- the batches of one pass (inside the relative view when there is one); main: the main view (the pre-warm steps there);
 -- 0.9.5 (GSA1.DrawCharacterView): filter(b) -> bool also has to pass; override: one material for every batch drawn (the
 -- sun silhouette's flat white: unlit, a static mesh of this pair and origin is drawn again under it, never rebuilt)
+-- 0.9.8 (sadc docs/research/gsa1_098_plan.md 6.13): one dynamic batch: through the module's own mesh path when it is on and checked
+-- (feat/cl_nativemesh.lua), else, or when it fails right now, through Lua. Returns whether the path stays in use for this draw
+local function stream_batch(C, i, tris, native)
+    if native and GSA1.NativeMesh.Draw(C, i) then return true end
+    mesh.Begin(MATERIAL_TRIANGLES, tris)
+    emit(C, i)
+    mesh.End()
+    return false
+end
+
 local function draw_batches(C, pass, first_person, te, main, filter, override)
     local B = C.batches
     local cv = GSA1.cv
@@ -333,7 +392,7 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
     local static = not C.interp
     local tex = GSA1.Tex
     -- the material pre-warm: a few of the character's materials drawn once in this pass (invisible), in the main view
-    if GSA1.Warm and main then
+    if GSA1.Warm and main and not C.follower then
         local tw = SysTime()
         GSA1.Warm.Step(C, pass)
         te = te + (SysTime() - tw)      -- (timed as "Warm", not as "EmitBatch")
@@ -341,15 +400,17 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
     local O = C.relOrigin
     local ox, oy, oz = 0, 0, 0
     if O then ox, oy, oz = O.x, O.y, O.z end
+    local native = GSA1.NativeMesh ~= nil and GSA1.NativeMesh.Ready()
     local hidden = C.hidden or NONE
     -- (0.9.4, review R.1: in first person only the game's objects; 0.9.3a drew nothing there; 0.9.5: and the board)
     for i = 1, ((first_person and (C.objectBatches or 0) == 0 and (C.boardBatches or 0) == 0) and 0 or B.count) do
         local b = B[i]
         if b and b.pass == pass and b.tris > 0 and not hidden[i] then
-            if batch_on(b.flags, effects, shadows, objects, first_person) and (not filter or filter(b)) then
+            if batch_on(b.flags, effects, shadows, objects, first_person) and (not filter or filter(b)) and
+               (not C.follower or follower_batch(C, b.flags)) then
                 local mat = override or C.mats[i]
                 render.SetMaterial(mat)
-                if not VI.mat then VI.mat = mat end
+                if not VI.mat and not C.follower then VI.mat = mat end
                 local tone = nil
                 if pass == 1 then
                     local s, d = tex.BlendOf(b)
@@ -366,9 +427,7 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
                        sm.oz == oz then
                         sm.imesh:Draw()
                     else
-                        mesh.Begin(MATERIAL_TRIANGLES, b.tris)
-                        emit(C, i)
-                        mesh.End()
+                        native = stream_batch(C, i, b.tris, native)
                     end
                 elseif static then
                     local sm = C.static[i]
@@ -384,9 +443,7 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
                     end
                     sm.imesh:Draw()
                 else
-                    mesh.Begin(MATERIAL_TRIANGLES, b.tris)
-                    emit(C, i)
-                    mesh.End()
+                    native = stream_batch(C, i, b.tris, native)
                 end
                 if tone then render.SetToneMappingScaleLinear(tone) end
                 if pass == 1 then
@@ -422,10 +479,11 @@ local function draw_depth(C, color, first_person, te)
     local hidden = C.hidden or NONE
     for i = 1, B.count do
         local b = B[i]
-        if b and b.pass == 0 and b.tris > 0 and not hidden[i] and batch_on(b.flags, effects, shadows, objects, first_person) then
+        if b and b.pass == 0 and b.tris > 0 and not hidden[i] and batch_on(b.flags, effects, shadows, objects, first_person) and
+           (not C.follower or follower_batch(C, b.flags)) then
             local mat = depthMaterial(C.kind, b, color)
             render.SetMaterial(mat)
-            if not VI.mat then VI.mat = mat end
+            if not VI.mat and not C.follower then VI.mat = mat end
             local sm = static and C.static and C.static[i]
             if sm and sm.imesh and sm.gen == C.renderGen and sm.tris == b.tris and sm.ox == ox and sm.oy == oy and
                sm.oz == oz then
@@ -443,11 +501,19 @@ end
 local prepare_frame
 -- the frame's origin of camera-relative drawing: the drawn root (constant within a game pair with gsa1_interpolate 0, so
 -- the static meshes stay valid); decided with the main view's eye (R2b)
+local rwFrame, rwWanted = -1, false       -- (0.9.8: the followers' answer, once per frame together)
 local function rel_origin(C, fn)
     if C.relFrame ~= fn then
         C.relFrame = fn
         C.relOrigin = nil
-        if relative_wanted() then
+        local wanted
+        if C.follower then
+            if rwFrame ~= fn then rwFrame, rwWanted = fn, relative_wanted() end
+            wanted = rwWanted
+        else
+            wanted = relative_wanted()
+        end
+        if wanted then
             C.relO = C.relO or Vector()
             C.relO:Set(C.drawPos)
             C.relOrigin = C.relO
@@ -464,7 +530,8 @@ function prepare_frame(C, fn)
     C.drawMs, C.drawMsFrame = C.drawMsNext or 0, nil
     C.drawMsNext = 0
     -- R2b: the main view's eye, whichever view comes first (the water reflection's is mirrored under the water)
-    local eye, ang = main_eye()
+    local eye, ang
+    if C.follower then eye, ang = follower_main_eye() else eye, ang = main_eye() end
     local tv = SysTime()
     -- the screen for the coverage figure: CalcView's field of view (cl_character.lua) of this frame, else the player's
     -- setting
@@ -483,7 +550,8 @@ end
 function GSA1.DrawCharacter(C, pass, flags)
     local B = C and C.batches
     if not B or (B.count or 0) == 0 or not C.drawPos then return end
-    local first_person = GSA1.FirstPerson and GSA1.FirstPerson()
+    if C.follower and (C.lod or 1) >= 3 then return end
+    local first_person = GSA1.FirstPersonFor and GSA1.FirstPersonFor(C)
     -- first person: the game's objects only (0.9.4, review R.1) and the board (0.9.5, review R.10: whatever the Objects
     -- page says), or the pre-warm while it runs (the OBJECT and BOARD batches counted once per batch structure;
     -- ResolveMaterials counts them too)
@@ -511,9 +579,21 @@ function GSA1.DrawCharacter(C, pass, flags)
     local kind, rtname, viewid = view_kind(flags)
     local depthKind = DEPTH_KINDS[kind] or false
     local depth = depthKind and (not cv.depthfix or cv.depthfix:GetInt() >= 1)
-    VI.frame, VI.pass, VI.flags, VI.kind, VI.rt, VI.viewid, VI.depth, VI.mat = fn, pass, flags, kind, rtname, viewid,
-        depth, nil
-    if pass == 0 then tally(kind) end
+    if C.follower then
+        -- 0.9.8 (D4): level 2 only on the screen itself; level 1 not in another addon's render target unless the option says
+        -- so; none of this counts as your character's view (VI, tally)
+        local screen = kind == "main" and rtname == nil
+        if (C.lod or 1) == 2 then
+            if not screen then return end
+        elseif kind == "main" and not screen then
+            local ov = cv.follower_other_views
+            if not (ov and ov:GetBool()) then return end
+        end
+    else
+        VI.frame, VI.pass, VI.flags, VI.kind, VI.rt, VI.viewid, VI.depth, VI.mat = fn, pass, flags, kind, rtname, viewid,
+            depth, nil
+        if pass == 0 then tally(kind) end
+    end
     if depth and kind == "ssao" then depthRan = fn end
     if depth and pass ~= 0 then return end
     rel_origin(C, fn)
@@ -526,9 +606,16 @@ function GSA1.DrawCharacter(C, pass, flags)
     if O then
         if kind == "main" or not depth and depthKind or not (cam.PushModelMatrix and Matrix) then
             C.relEye = C.relEye or Vector()
-            C.relEye:Set(EyePos())
-            C.relEye:Sub(O)
-            cam.Start3D(C.relEye, EyeAngles())
+            if C.follower and kind == "main" and rtname == nil then
+                local fe, fa = follower_screen_eye()
+                C.relEye:Set(fe)
+                C.relEye:Sub(O)
+                cam.Start3D(C.relEye, fa)
+            else
+                C.relEye:Set(EyePos())
+                C.relEye:Sub(O)
+                cam.Start3D(C.relEye, EyeAngles())
+            end
             push = "3d"
         else
             C.relM = C.relM or Matrix()
@@ -547,7 +634,7 @@ function GSA1.DrawCharacter(C, pass, flags)
     if push == "3d" then cam.End3D() elseif push == "model" then cam.PopModelMatrix() end
     if not ok then error(res, 0) end
     te = res
-    if GSA1.HitchAdd then GSA1.HitchAdd("EmitBatch", SysTime() - te) end
+    if GSA1.HitchAdd then GSA1.HitchAdd(C.follower and "FollowerDraw" or "EmitBatch", SysTime() - te) end
     C.drawMsNext = (C.drawMsNext or 0) + (SysTime() - t0) * 1000
 end
 
@@ -560,7 +647,7 @@ end
 local function draw_depth_late(C)
     local tex = render.GetResolvedFullFrameDepth and render.GetResolvedFullFrameDepth()
     if not tex then return end
-    local first_person = GSA1.FirstPerson and GSA1.FirstPerson() or false
+    local first_person = GSA1.FirstPersonFor and GSA1.FirstPersonFor(C) or false
     if first_person and (C.objectBatches or 0) == 0 and (C.boardBatches or 0) == 0 then return end
     local t0 = SysTime()
     render.PushRenderTarget(tex)
@@ -629,6 +716,23 @@ function GSA1.DrawCharacterView(C, v)
     return true
 end
 
+-- GSA1.SkyView(isDrawSkybox, isDraw3DSkybox): is this the 3D skybox's own view, for a hook that draws only in the map's
+-- view? The rule of 0.9.5a's sun shadow (feat/cl_liveshadow.lua, the top of the file): isDrawSkybox alone excludes nothing,
+-- since on a map with a 2D sky it can be true in every call, the main view's too (Garry's Mod wiki). A map known to have no
+-- sky_camera (the sun shadow's reader of the entity lump; not known while that is off or still reading) has no such view;
+-- else isDraw3DSkybox says yes, and isDrawSkybox alone asks Source's view id: VIEW_3DSKY or no answer is yes. The arguments
+-- themselves are UNVERIFIED in game, those of PostDrawTranslucentRenderables most of all (assumed the same).
+local VIEW_3DSKY = 1
+function GSA1.SkyView(isDrawSkybox, isDraw3DSkybox)
+    if not (isDrawSkybox or isDraw3DSkybox) then return false end
+    local S = GSA1.SunShadow
+    if S and S.light and S.light.sky3d == false then return false end
+    if isDraw3DSkybox then return true end
+    local vs = render.GetViewSetup and render.GetViewSetup(true)        -- (a new table: callers ask last)
+    local id = type(vs) == "table" and vs.viewid or nil
+    return id == nil or id == VIEW_3DSKY
+end
+
 -- the depth pass bracket (view_kind): GMod calls PreDrawOpaqueRenderables(isDrawingDepth, isDrawSkybox, isDraw3DSkybox)
 -- before a view's opaque renderables and PostDrawOpaqueRenderables after them; nested views keep their own entry, and
 -- the stack starts empty every frame (PreRender) in case another addon's hook stopped one of ours
@@ -654,9 +758,9 @@ hook.Add("PostDrawOpaqueRenderables", "gsa1_views", function(isDrawingDepth, isD
         depthStack[depthTop] = nil
         depthTop = depthTop - 1
     end
-    if isDrawingDepth or isDrawSkybox or isDraw3DSkybox then return end
+    if isDrawingDepth then return end
     local cv = GSA1.cv and GSA1.cv.depthfix
-    if not cv or cv:GetInt() < 2 then return end
+    if not cv or cv:GetInt() < 2 or GSA1.SkyView(isDrawSkybox, isDraw3DSkybox) then return end
     local C = GSA1.Char
     local fn = FrameNumber()
     if not C or not C.batches or depthRan ~= fn or lateDone == fn or C.relFrame ~= fn then return end

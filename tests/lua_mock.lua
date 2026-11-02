@@ -23,6 +23,8 @@
 -- render.OverrideDepthEnable (counted), surface.SetMaterial / DrawTexturedRectUV (counted), util.TraceLine (M.traceLine(t)
 -- -> a result; none: no hit; M.traces records each trace's start / end), file.Open on an in-memory file of the "GAME" path
 -- (M.gamefiles[path] = its bytes as a string; Read / Seek / Tell / Size / Close; M.fileReads = { bytes of each Read }).
+-- 0.9.8 (098-gsa1-followlua, this file's only editor): an entity's SetNoDraw (e.nodraw), the local player's GetVelocity
+-- (M.player.vel) and OnGround (M.player.on_ground: false = in the air).
 -- No GMod code or data is used; the mock only follows the documented function signatures.
 local M = {
     T = 1000.0, frameNo = 0, dt = 1 / 60, paused = false, ui = false, focus = true,
@@ -380,6 +382,7 @@ NULL = setmetatable({ removed = true }, { __tostring = function() return "[NULL 
 local function new_entity(cls)
     local e = setmetatable({ cls = cls, pos = Vector() }, { __index = M.classes[cls] or {} })
     e.Spawn, e.DrawShadow, e.SetRenderBounds = noop, noop, noop
+    e.SetNoDraw = function(self, b) self.nodraw = b end
     e.SetPos = function(self, p) self.pos:Set(p) end
     e.GetPos = function(self) return Vector(self.pos) end
     e.Remove = function(self)
@@ -406,6 +409,8 @@ M.player.pos = Vector(704, 132, -143)
 M.player.EyeAngles = function() return Angle(M.pitch, M.yaw, 0) end
 M.player.EyePos = function(self) return self.pos + Vector(0, 0, 64) end
 M.player.IsPlayer = function() return true end
+M.player.GetVelocity = function(self) return self.vel or Vector() end
+M.player.OnGround = function(self) return self.on_ground ~= false end
 M.player.Alive = function(self) return self.alive ~= false end     -- 0.9.2 (CreateMove while dead)
 M.player.nw2 = {}
 M.player.GetActiveWeapon = function(self) return self.active or NULL end

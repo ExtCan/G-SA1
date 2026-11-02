@@ -40,6 +40,143 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.8 changes: followers, the fishing camera, the game's own Character Select
+
+The old 0.9.6 and 0.9.7 are one update now. **All of this is new and none of it has been tried in the real game yet**: every test so far runs against a stand-in for Garry's Mod and against Dreamcast references. Nothing planned was dropped.
+
+* **Followers.** Q menu > Options > G-SA1 > **Followers**: pick a character (Sonic, Tails, Knuckles, Amy, Big or E-102), press **Spawn a follower**, and they appear behind you and follow with the Dreamcast's own "Tails follows Sonic" code: they run after you and jump when you're higher, Tails flies and Knuckles glides. When one falls too far behind, or has been off the game's camera for 5 seconds, it drops in from above the camera. Up to 3 at once, and a slider allows 8. There's Remove the last, Remove all, Call them back, and a list of who follows whom and what each is doing. The G-SA1 spawn tab has a **Followers** group, and Undo (Z) removes one.
+* **Whom they follow:** you (the default), the nearest player, a player or NPC you aim at, your last follower (a chain), or "stay here". When you switch character, respawn or teleport, they wait a moment and appear right behind you.
+* **Boards.** When you get on a board as Sonic or Tails, your Sonic and Tails followers get on boards of their own, and off when you get off; their boards stay behind like yours. A follower that enters a Board On box walks to the box's board like you do, and a Board Off box takes it off. A Sonic follower rides whichever of the game's two boards its own world picks, so it may differ from yours. Knuckles, Amy, E-102 and Big followers stay on foot.
+* **Sounds.** A following Tails' own sound effects are silent, as in the game. Other followers sound from where they are, and their music never plays for you. A switch silences them all.
+* **Heads turn.** Your character and your followers turn their heads to friendly and neutral NPCs and players nearby, to items lying close, and for 5 seconds to what you defeated, with the game's own head code. A key (unbound until you pick one) makes them look at your camera, the Dreamcast's Z button. It's on the **Head look** page. As in the game: E-102 never turns his head, Big moves only his eyes, and Sonic standing still moves only his eyes.
+* **The "& Knuckles" secret** does its third part: 99 Knuckles followers, silent so the theme carries, with their game code on several CPU cores and far ones drawn more cheaply. Without any drawing, their game code took 7.85 ms per game step on 8 threads against 26.7 ms on one. How smooth it really is on your PC is only known from your test.
+* **Big's fishing camera.** Hold the action key as Big: the view swings behind him with the game's own slow turn, and WASD moves the cursor relative to the screen. When the lure lands in water, the view flies to it in about a third of a second and stays about 60 HU from it, **and the line glows near the lure as on the Dreamcast**. Hold jump to reel in, or press R at once (the game's L + R): the view cuts behind Big and blends back to your camera. On dry ground it's only the aim. Options > **Camera**: As the game (the default), Lure only, or Off (exactly 0.9.5). The mouse does nothing while it shows, as in the game, and a check box lets it turn around the lure. **There are no fish in Garry's Mod yet**: cast, watch and reel in. In deep water the lure sinks and the game's camera sinks with it. The view stops at walls by G-SA1's own trace, not the game's camera collision.
+* **Character Select.** The C menu has a **Character Select** icon, and so do the menubar's G-SA1 menu, a key you can set, and Start on the controller. It opens the Dreamcast's own screen, run by the game's own code from your disc: the sky, the ring of spheres, the names, the character in the circle with its idle motion, "Choose Your Buddy!" playing. Left / Right turn the ring, and A plays the pose and voice. After the game's 5 seconds (or a second A) you're that character where you stood, with your ticked upgrades and your followers behind you. B goes back and Escape closes. The game's "Game / Instruction / Cancel" box is skipped unless you tick it. Your character gets no input and can be hurt while it's open. Q menu > Character still works. If the screen faults, a simple chooser with the same buttons takes over and the log says why.
+* **Faster drawing, off by default.** A new way to draw characters directly through the game's material system, for the 99 Knuckles. It's on the Rendering page. **It has not run in the real game, and the first time you turn it on it can end the game**; a guard then keeps it off and says why. Only nearby followers and your own character use it; far followers keep their cheap drawing.
+* **A small fix:** the "depth fix 2" option and two debug overlays had the same wrong sky test as the sun shadow, so they never ran on a map with no 3D sky. They do now.
+* **Game code:** Big's fishing camera (26 functions plus 2 new ones, 8C01B436 matching, 8C019F4A functionally checked but not byte-matching) and Character Select (170 functions, 140 matching) are landed; libsa1 is now 0.4.0. The build is faster too: tests run 4 at a time.
+
+**How it was checked:** all 74 strict replays stay bit-exact; the fishing camera matched the Dreamcast on 1,862 of 1,862 steps; Character Select's drawing matched on 300,559 of 300,559 draws. 80 test programs pass.
+
+**Known limits:** other players don't see your followers yet. Followers don't attack, and your attacks don't hit them. Saves, the duplicator and map changes don't keep them. Followers don't take emotes or faces. An Amy follower has no bird. Followers cast the game's round shadow, not the sun shadow. A following Tails can trail far behind while you hold top speed, which is the game's own behaviour. Your `prism_fx` windows cost a follower about 4 times more, so followers are drawn only in the screen unless you tick "Followers in other addons' views". No fish means no catch shot and no WEIGHT counter. The sun shadow can still vanish on ground falling steeply away from the sun and blink on stairs. The small stutter about every 5 seconds still has no known cause. Linux keeps its followers' game code on one thread at a time.
+
+### The owner checklist
+
+**Followers**
+
+* Q menu > Options > G-SA1 > Followers: spawn Tails. He appears behind you and follows; stop, and he stops about 40 HU from you; jump onto something high: he flies up after you.
+* Run far away or fall into a pit: he drops in from above the camera (Tails flies in, Knuckles glides in, the others fall in).
+* On a long straight run he stays on the ground even far behind you. A Knuckles follower that dropped in does not bounce back and forth.
+* No second "ghost" follower at your own position when the follower is behind the camera.
+* Three at once; the slider to 8; back to 2 removes the newest. The list shows whom each follows, what he does, how far away he is and how often he dropped in.
+* A follower following another (New followers follow: My last follower); one following an NPC you aim at; "Stay here".
+* The other characters in the combo (the ones that can follow; a greyed one says why).
+* Switch character, respawn, and use a teleporter: your followers appear behind you a moment later.
+* Open the emote wheel and press F (or click the left stick): they come back to you, dropping in from above.
+* The G-SA1 spawn tab's Followers group: click Tails; Undo (Z) removes him.
+* First person (camera distance 0): your followers are visible.
+* Sounds: a following Tails' own sound effects are silent, his flying sounds; a box a follower breaks plays no jingle; "Followers' own sounds" off silences them all.
+* Rings and item boxes (default "in their own game"): a follower runs through them; nothing changes for you. "They pass through them": they ignore them.
+* An NPC hits a follower: it is knocked back, nothing else; your own attacks do not hit it.
+* With an addon that renders reflections (your `prism_fx`): followers are not drawn in its views; "Followers in other addons' views" ticks them in, and costs frames.
+
+**Boards**
+
+* As Sonic with a Tails follower: press B in the open wheel: Tails gets on a board too; again: he gets off and his board stays behind like yours (it counts towards your 5 left boards).
+* A Sonic follower: over several rides it uses both of the game's boards, by its own pick, not always yours.
+* A Board On box a Tails / Sonic follower runs into: he walks to the box's board and gets on, and comes back to you; the box's board is still there for you; a Board Off box: he gets off. "Get on at once" is a choice on the page. Get on with Ice Cap's push from a box: your followers get the push too.
+* A Knuckles, Amy, E-102 or Big follower stays on foot whatever you do.
+
+**Head look**
+
+* Sonic running past a friendly NPC turns his head to it; standing still he moves only his eyes. Tails, Knuckles and Amy turn their heads standing too; E-102 never; Big only his eyes.
+* Bind "Hold to look at the camera" on the Head look page and hold it: your character looks at your camera, your followers too.
+* A follower looks at you when you stop and there is nothing else to look at. Hostile NPCs only with their box ticked. Super Sonic only with "Super Sonic turns his head too".
+
+**Big's fishing camera**
+
+* Big on a map with water (gm_construct's pond or your own): hold the action key: the view swings behind Big with the game's slow turn; WASD moves the cursor relative to the screen.
+* Release: the lure flies, the view stays; the lure lands: the view flies to it in about a third of a second and stays about 60 HU from it; **the line is bright near the lure**.
+* **Big, the lure and the line stay drawn the whole time** (if any of them vanishes while the view is on the lure, send the log and say which: only the game can show this).
+* Hold jump: the lure comes in, the view follows, then cuts behind Big and blends back to your camera, looking where you were last shown. R does that at once.
+* Dry ground: only the aim part. Options > Camera: Off is 0.9.5 exactly; Lure only skips the aim.
+* First person works and returns. The Camera tool's view is untouched. The mouse does nothing while it shows; with the orbit box it turns around the lure.
+* Deep water: after some seconds the view is under water with the lure, as the game's rule (say if you mind). Big's sounds get quieter while the view is far away.
+* With a Tails follower while fishing: he keeps following Big; if he drops in, it is near Big, not above the lake.
+* Big dies while the lure camera shows: back to your camera at once.
+
+**Character Select**
+
+* C menu: the "Character Select" icon (a plain one first, then Sonic's 1-up from your disc); the menubar's G-SA1 menu; the `gsa1_charselect` command.
+* The key you set, and Start, open and close it.
+* It looks like the Dreamcast's; Left / Right, stick, mouse wheel turn the ring with its sound; the character stands in the circle with its idle; "Choose Your Buddy!" plays once, with no double music with game music on. It's lit by G-SA1, not the game's palette.
+* A, Enter or a click: the pose and the voice; after 5 s (or a second A) you are that character where you stood, with your ticked upgrades; your followers appear behind you.
+* B, Backspace or right click: back. Start picks. Escape closes at once.
+* Super Sonic: the spinning "?"; it plays the one you played last.
+* The jukebox resumes where it was. Q menu > Character still works. At 3440 x 1440: centred, sky to the edges.
+* If the screen ever faults: the simple chooser appears, the log says why.
+* Open it while riding a board: the board rides on with no input until it stops.
+
+**The secret and the speed**
+
+* Say the secret (`/unlikesonicIdontchuckle`): you become Knuckles, his theme plays, 99 Knuckles followers appear over about 5 s, silent. Watch the frame rate; send the log (a line "followers 99: tick ... ms on N workers, draw ... ms"). Try "CPU threads for followers" 1 against automatic, "Far followers: pictures per second" 15 against 5, "Followers drawn in full detail" 8 against 0, and note the fps for each.
+* While the secret runs, followers tick on several CPU threads, so Task Manager shows several cores busy and about 2 GB more memory for Garry's Mod. A crash or a stall here is worth reporting.
+* The faster drawing, if you want to try it: Q menu > Options > G-SA1 > Rendering > "Draw with the module's own mesh path (faster; off = the Lua path)". Say the secret with it on and off and note the fps of each. The session log should say "native mesh: on, VMaterialSystem080, the self check passed". If it turns itself off, the log and the page say why. **The first time you turn it on it can end the game.** If it does, the next load keeps it off and says so; "Try again" clears that note and turns it on again, which risks one more crash.
+* Change map: no followers, no errors; the log has no Lua errors.
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_follower` | 1 | Followers: check box "Followers" |
+| `gsa1_follower_kind` | 2 | Followers: combo "Character to spawn" (greyed with libsa1's reason) |
+| `gsa1_follower_max` | 3 | Followers: slider 1-8 "Most followers at once (each is a whole game, about 21 MB)" |
+| `gsa1_follower_target` | 0 | Followers: combo "New followers follow": Me / The nearest player / My last follower / What I aim at / Stay here |
+| `gsa1_follower_upgrades` | 1 | Followers: check "Followers get your ticked upgrades of their character" |
+| `gsa1_follower_objects` | 1 | Followers: combo "Rings and item boxes": They pass through them / They touch them in their own game |
+| `gsa1_follower_sounds` | 1 | Followers: check "Followers' own sounds (the game's: a following Tails' own sound effects are silent)" |
+| `gsa1_follower_board` | 1 | Followers > Board: check "Sonic and Tails followers get on a board when the one they follow does (and off again)" |
+| `gsa1_follower_board_boxes` | 1 | Followers > Board: combo "In Board On / Off boxes": not at all / walk to the box's board like you / get on at once with a board of their own |
+| `gsa1_follower_come_along` | 1 | Followers: check "Followers come along when you switch character, respawn or teleport" |
+| `gsa1_follower_loop_guard` | 1 | Followers: check "A follower that keeps dropping in (4 times within 10 s) waits 3 s and comes back behind you; one that falls below the map drops in again at once" |
+| `gsa1_follower_fix_view` | 1 | Followers > Fixes (not in the game): check "Followers' own animations run where the game's camera cannot see them" |
+| `gsa1_follower_fix_respawn` | 1 | Followers > Fixes: check "After dropping in, followers other than Tails forget where they were (stops Knuckles bouncing back)" |
+| `gsa1_follower_full_detail` | 8 | Followers > Drawing: slider 0-99 "Followers drawn in full detail (the nearest)" |
+| `gsa1_follower_far_rate` | 15 | Followers > Drawing: slider 5-30 "Far followers: pictures per second" |
+| `gsa1_follower_draw_dist` | 4800 | Followers > Drawing: slider 500-12000 "Followers drawn up to (units)" |
+| `gsa1_follower_other_views` | 0 | Followers > Drawing: check "Followers in other addons' views (reflections, cube maps)" |
+| `gsa1_follower_threads` | 0 | Followers > Drawing: slider 0-16 "CPU threads for followers (0 = automatic)" + a status line |
+| `gsa1_follower_call_key` | 16 (`KEY_F`) | Followers: binder "Call your followers back (in the open emote wheel)" |
+| `gsa1_follower_call_pad` | 64 | Followers: combo "Controller button in the open wheel" |
+| `gsa1_sv_follower_icons` | 1 | Followers (admins, the listen host): check "Follower icons in the spawn menu work on this server" |
+| `gsa1_look` | 1 | Head look: combo "Heads turn to look at": only what the game looks at / also Garry's Mod things |
+| `gsa1_look_people` | 1 | Head look: check "Friendly and neutral NPCs and other players" |
+| `gsa1_look_hostile` | 0 | Head look: check "Hostile NPCs too (the game never looks at enemies)" |
+| `gsa1_look_items` | 1 | Head look: check "Items lying near" |
+| `gsa1_look_defeated` | 1 | Head look: check "What you just defeated, for 5 seconds" |
+| `gsa1_look_range` | 120 | Head look: slider 40-400 "How near (Hammer units)" |
+| `gsa1_look_emotes` | 1 | Head look: check "Also while an emote plays" |
+| `gsa1_look_followers` | 1 | Head look: combo "Followers look at": only what the game makes them / the same things as you, and at you |
+| `gsa1_look_camera_key` | 0 | Head look: binder "Hold to look at the camera (the game's Z button)" |
+| `gsa1_look_camera_all` | 1 | Head look: check "The camera key turns your followers' heads too" |
+| `gsa1_look_super` | 0 | Head look: check "Super Sonic turns his head too" |
+| `gsa1_cam_fish` | 2 | Camera: combo "Big's fishing camera": Off / Lure only / As the game; a help line "There are no fish in Garry's Mod yet: cast, watch and reel in." |
+| `gsa1_cam_fish_blend` | 0.3 | Camera: slider 0-1.5 "Blend from and to your camera (s)" |
+| `gsa1_cam_fish_mouse` | 0 | Camera: check "The mouse turns around the lure while fishing" |
+| `gsa1_cam_fish_fov` | 0 | Camera: check "The game's field of view (70) while fishing" |
+| `gsa1_cam_fish_first` | 1 | Camera: check "Also when you play in first person" |
+| `gsa1_cam_fish_rkey` | 1 | Camera: check "R reels in at once (the game's L + R)" |
+| `gsa1_cam_fish_toggle_key` | 0 | Camera: binder "Look elsewhere for this cast"; command `gsa1_cam_fish_toggle` |
+| `gsa1_charselect_key` | 0 | Character: binder "Character Select key" |
+| `gsa1_charselect_pad` | 1 | Character: check "Controller Start opens it" |
+| `gsa1_charselect_dialog` | 0 | Character: check "Show the game's Game / Instruction / Cancel dialog" |
+| `gsa1_charselect_close` | 0 | Character: combo "After a pick": the game's 5-second pose (A skips it after the voice) / switch when the voice starts |
+| `gsa1_charselect_music` | 1 | Character: check "Play Choose Your Buddy!" |
+| `gsa1_charselect_file` | 0 | Character: check "Show File and Clear in the bottom bar" |
+| `gsa1_charselect_wide` | 0 | Character: combo "Wide screens": 4:3 with the sky continued / stretched |
+| `gsa1_charselect_super` | "last" | Character: combo "The Super Sonic slot plays": the one you played last / Vs. Perfect Chaos / General Gameplay |
+| `gsa1_native_mesh` | 0 | Rendering: check "Draw with the module's own mesh path (faster; off = the Lua path)" |
+
 ## What 0.9.5b changes: the sun shadow moves as smoothly as the character
 
 The owner's note on 0.9.5a: "the shadow is visible but it runs at a lower frame rate to the rest of the game." The shadow's picture was made at most 30 times a second, and in practice 20 to 30. It's now made in every frame, so its shape moves with the character. A new slider, Q menu > Options > G-SA1 > Rendering > "Sun shadow pictures per second (0 = every frame)", brings the old rate back if you want it a little cheaper.

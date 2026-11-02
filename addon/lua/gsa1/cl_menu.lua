@@ -236,7 +236,10 @@ local function camera_panel(panel)
     -- 0.9.5 (sadc docs/research/board095_cam.md 5.4 item 5)
     panel:CheckBox("The game uses this camera", "gsa1_cam_real")
     panel:ControlHelp("Big's fishing line and the rings and item boxes that appear while he fishes follow the camera you "
-        .. "see. Off: the game uses a camera of its own behind the character (as in 0.9.4).")
+        .. "see. Off: the game uses a camera of its own behind the character (as in 0.9.4). While Big's fishing camera "
+        .. "shows (below), they follow that camera instead, and this switch only says where it starts from.")
+    -- 0.9.8 (sadc docs/research/gsa1_098_plan.md 2.4 C11): a feature's rows at the end of this page
+    if GSA1.CameraPanelExtra then GSA1.CameraPanelExtra(panel) end
 end
 
 local function controller_panel(panel)
@@ -331,6 +334,8 @@ local function rendering_panel(panel)
     panel:Button("Check the painted textures (console)", "gsa1_texcheck")
     panel:Button("Repaint the textures", "gsa1_texrepaint")
     panel:CheckBox("Debug overlay and log", "gsa1_debug")
+    -- 0.9.8 (sadc docs/research/gsa1_098_plan.md 2.4 C11): a feature's rows at the end of this page
+    if GSA1.RenderingPanelExtra then GSA1.RenderingPanelExtra(panel) end
 end
 
 local function sound_panel(panel)

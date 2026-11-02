@@ -421,6 +421,8 @@ end
 
 -- the riding state of ply's character slot changed
 function B.StateMsg(ply, on, why, ent, slot)
+    -- (0.9.8, review R.6: a follower's slot sends nothing and is ignored: no hook, no NW2 flag, no use)
+    if (tonumber(slot) or 0) >= 1 then return false, "a follower's slot" end
     -- (off is taken from anyone: a removed character's client says it after telling the server it stopped being one)
     if on and not is_char(ply) then return false, "not a character" end
     if slot == 0 and ply.SetNW2Bool then ply:SetNW2Bool(B.NW_RIDING, on and true or false) end
@@ -438,9 +440,12 @@ function B.StateMsg(ply, on, why, ent, slot)
     return true
 end
 
--- a left board: a bucket of 3 per player refilled at 1 a second (review R.5), finite, within 2,048 HU of his character
+-- a left board: a bucket of 3 per player refilled at 1 a second (review R.5), finite, within 2,048 HU of his character;
+-- 0.9.8 (096 review R.6, the slot argument: recheck row 9): a follower's (slot >= 1: the server knows no follower's position)
+-- within 16,384 HU of the player's entity instead
+B.LEFT_RADIUS_FOLLOWER = 16384
 local function finite(v) return v == v and v > -1e9 and v < 1e9 end
-function B.LeftOk(ply, place, ang, kind, variant)
+function B.LeftOk(ply, place, ang, kind, variant, slot)
     if not is_char(ply) then return false, "not a character" end
     if cv.sv_left_max:GetInt() <= 0 then return false, "left boards are off on this server" end
     if kind ~= B.KIND_SONIC and kind ~= B.KIND_TAILS then return false, "not a board kind" end
@@ -449,7 +454,13 @@ function B.LeftOk(ply, place, ang, kind, variant)
         return false, "not a place"
     end
     local s = ply.GSA1State
-    if s and s.x then
+    if (tonumber(slot) or 0) >= 1 then
+        local pp = ply:GetPos()
+        local dx, dy, dz = place.x - pp.x, place.y - pp.y, place.z - pp.z
+        if dx * dx + dy * dy + dz * dz > B.LEFT_RADIUS_FOLLOWER * B.LEFT_RADIUS_FOLLOWER then
+            return false, "too far from the player"
+        end
+    elseif s and s.x then
         local dx, dy, dz = place.x - s.x, place.y - s.y, place.z - s.z
         if dx * dx + dy * dy + dz * dz > B.LEFT_RADIUS * B.LEFT_RADIUS then return false, "too far from the character" end
     elseif not (game.SinglePlayer and game.SinglePlayer()) then
@@ -466,7 +477,7 @@ function B.LeftOk(ply, place, ang, kind, variant)
 end
 
 function B.Left(ply, place, ang, kind, variant, slot)
-    local ok, why = B.LeftOk(ply, place, ang, kind, variant)
+    local ok, why = B.LeftOk(ply, place, ang, kind, variant, slot)
     if not ok then
         S.counts.refused = S.counts.refused + 1
         return nil, why
@@ -486,10 +497,17 @@ function B.Left(ply, place, ang, kind, variant, slot)
     local list = S.left[ply] or {}
     S.left[ply] = list
     list[#list + 1] = ent
-    -- at most gsa1_sv_board_left_max per player: the oldest goes
+    -- at most gsa1_sv_board_left_max per player: the oldest goes (0.9.8, review R.6: the oldest of a follower's first)
     local maxn = cv.sv_left_max:GetInt()
     while #list > maxn do
-        local old = table.remove(list, 1)
+        local at = 1
+        for i, e in ipairs(list) do
+            if IsValid(e) and e.GetSlot and (tonumber(e:GetSlot()) or 0) >= 1 then
+                at = i
+                break
+            end
+        end
+        local old = table.remove(list, at)
         if IsValid(old) then old:Remove() end
     end
     if undo and undo.Create then

@@ -67,7 +67,7 @@ static_assert(offsetof(lua_State, luabase) == (sizeof(void *) == 8 ? 120 : 72),
 using GarrysMod::Lua::ILuaBase;
 namespace LT = GarrysMod::Lua::Type;
 
-#define GSA1_MODULE_VERSION "0.9.5a"
+#define GSA1_MODULE_VERSION "0.9.8"
 #define GSA1_API_VERSION 6
 
 namespace {
@@ -2237,7 +2237,7 @@ GSA1_FN(gsa1_lua_PollEvents)
     for (const sa1_event &e : ev) {
         if (e.type == SA1_EVENT_RUMBLE && g_pad) {
             gsa1::Character *c = g_session->get(e.character);
-            if (c && !c->puppet) {
+            if (gsa1::rumble_allowed(c)) {   // 0.9.8: not a puppet's, not a follower's
                 g_pad->rumble_event(e.id, e.arg, now_s());   // id: power 1..7, arg: 1/60 s frames
             }
         }

@@ -6,11 +6,18 @@
 #include <cstddef>
 #include <cstring>
 #include <exception>
+#include <functional>
+#include <thread>
 
 #include "config.hpp"
 #include "util.hpp"
 
 namespace gsa1 {
+
+// 0.9.8: follower.hpp's numbers are libsa1's
+static_assert(kEventSound == SA1_EVENT_SOUND && kEventSoundStop == SA1_EVENT_SOUND_STOP && kEventVoice == SA1_EVENT_VOICE &&
+                  kEventJingle == SA1_EVENT_JINGLE && kEventRumble == SA1_EVENT_RUMBLE,
+              "follower.hpp's event numbers");
 
 namespace {
 
@@ -400,7 +407,9 @@ void Session::shutdown()
     disc_state_ = DiscState::Idle;
     events_.clear();
     black_.clear();
+    black_kinds_filled_ = 0;
     super_forms_ = false;
+    pool_.set_workers(0);
 }
 
 bool Session::audio_open_async(bool japanese, std::string &err)
@@ -421,7 +430,9 @@ int Session::poll_audio(std::string &msg)
     msg = scrub(m);
     if (r > 0) {
         for (const auto &c : chars_) {
-            audio_.character(c->id, c->st.position, !c->puppet);
+            if (c->follower_sounds) {   // 0.9.8 (D5): a silent follower never registers (64 characters in the mixer)
+                audio_.character(c->id, c->st.position, !c->puppet && !c->follower);
+            }
         }
     }
     return r;
@@ -487,14 +498,14 @@ void Session::commit_movers(double now)
     if (!ctx_) {
         return;
     }
-    const float *focus = nullptr;
+    // 0.9.8 (follow096_gsa1.md 4.2): the foci of every ticking character, the player's first (0.9.5: the first one only)
+    mover_foci_.clear();
     for (const auto &c : chars_) {
         if (!c->puppet && !c->faulted) {
-            focus = c->st.position;
-            break;
+            mover_foci_.push_back(c->st.position);
         }
     }
-    movers_.commit(ctx_, focus, now);
+    movers_.commit(ctx_, mover_foci_.data(), mover_foci_.size(), now);
 }
 
 bool Session::world_info(sa1_collision_info &out) const
@@ -558,8 +569,8 @@ int32_t Session::create(int32_t kind, const float pos[3], float yaw, std::string
         err = "invalid position or yaw";
         return 0;
     }
-    if (chars_.size() >= 16) {
-        err = "too many characters";
+    if (chars_.size() >= kMaxCharacters) {
+        err = kReasonMaxChars;
         return 0;
     }
     sa1_character_desc d;
@@ -717,6 +728,9 @@ bool Session::destroy(int32_t id)
 {
     for (size_t i = 0; i < chars_.size(); i++) {
         if (chars_[i]->id == id) {
+            // 0.9.8: its followers become host-fed with its last state (libsa1 does the same in their worlds)
+            followers_.leader_gone(id, chars_[i]->st.position, chars_[i]->st.yaw);
+            followers_.remove(id);
             audio_.stop(id);
             if (ctx_) {
                 sa1_character_destroy(ctx_, id);   // libsa1's own queue goes with the world
@@ -776,30 +790,46 @@ void Session::take_events()
             break;
         }
         for (uint32_t i = 0; i < n; i++) {
-            // 0.9.3: a Perfect Chaos stage tone of a Super world is not played from Emerald Coast's stage bank
-            // (kStageTonesFirst; the event still goes to Lua); 0.9.4a: the whoosh is, through its stage rule (admit_sound)
-            const sa1_event &e = buf[i];
-#if defined(SA1_API_BOARD)
-            // 0.9.5: the board's events of a character's world go to its board core (the one-shot refusal / frees)
-            if (e.type == board::kEventBoard) {
-                Character *bc = get((int32_t)e.character);
-                if (bc) {
-                    board::on_event(bc->board, e.id, e.arg, bc->st.held_object != 0u);
-                }
-            }
-#endif
-            if (admit_sound(e)) {
-                audio_.event(e);
-            }
-            if (events_.size() >= kMaxEvents) {
-                events_.pop_front();
-            }
-            events_.push_back(buf[i]);
+            take_event(buf[i]);
         }
         if (n < 64) {
             break;
         }
     }
+}
+
+void Session::take_event(const sa1_event &e)
+{
+    // 0.9.3: a Perfect Chaos stage tone of a Super world is not played from Emerald Coast's stage bank
+    // (kStageTonesFirst; the event still goes to Lua); 0.9.4a: the whoosh is, through its stage rule (admit_sound)
+#if defined(SA1_API_BOARD)
+    // 0.9.5: the board's events of a character's world go to its board core (the one-shot refusal / frees)
+    if (e.type == board::kEventBoard) {
+        Character *bc = get((int32_t)e.character);
+        if (bc) {
+            board::on_event(bc->board, e.id, e.arg, bc->st.held_object != 0u);
+        }
+    }
+#endif
+    bool mixed = admit_sound(e);
+    if (mixed) {
+        audio_.event(e);
+    }
+    if (event_tap_) {
+        event_tap_(event_tap_user_, e, mixed);
+    }
+    // 0.9.8 (096 4.17, 4.21): a follower's sound, voice, jingle and rumble events are mixed (or dropped) here and never queued for
+    // Lua (99 followers' footsteps); its other events reach Lua with e.character = its id
+    if (!follower_event_for_lua(e.type) && e.character != 0) {
+        Character *fc = get((int32_t)e.character);
+        if (fc && fc->follower) {
+            return;
+        }
+    }
+    if (events_.size() >= kMaxEvents) {
+        events_.pop_front();
+    }
+    events_.push_back(e);
 }
 
 // ---- 0.9.4a: the aura's whoosh through libsa1's stage rules (sadc docs/research/super2_sound.md 7.2, super2_plan.md 6.4
@@ -872,6 +902,19 @@ uint32_t Session::whoosh_characters() const
 
 bool Session::admit_sound(const sa1_event &e)
 {
+    // 0.9.8 (096 4.17): never a follower's jingle or music cue; a stop always passes; its sounds and voices with its sounds on
+    if (e.character != 0 && (e.type == SA1_EVENT_SOUND || e.type == SA1_EVENT_SOUND_STOP || e.type == SA1_EVENT_VOICE ||
+                             e.type == SA1_EVENT_JINGLE)) {
+        Character *fc = get((int32_t)e.character);
+        if (fc && fc->follower) {
+            if (!follower_event_mixes(e.type, fc->follower_sounds)) {
+                return false;
+            }
+            if (e.type != SA1_EVENT_SOUND) {
+                return true;
+            }
+        }
+    }
     // 0.9.5 (gsa1.BoardSounds(false)): a rider's board tones stay out of the mixer; stops always pass (board::admit)
     if (!board_sounds_ && e.type == SA1_EVENT_SOUND && board::board_tone(e.id)) {
         Character *bc = get((int32_t)e.character);
@@ -909,7 +952,7 @@ void Session::board_after_tick(Character &c)
 {
     board::refresh(ctx_, c.id, c.board);
     c.board.rider = !c.faulted && board::rider(c.kind, c.st.mode, c.st.flags);
-    bool want = board_sounds_ && c.board.rider && !c.puppet;
+    bool want = board_sounds_ && c.board.rider && !c.puppet && c.follower_sounds;   // 0.9.8 (D5): rules need a slot in the mixer
     if (want != c.board.rules_on) {
         board_rules(c, want);
     }
@@ -942,7 +985,7 @@ bool Session::set_board_sounds(bool on)
                 }
             }
         }
-        bool want = on && c.board.rider;
+        bool want = on && c.board.rider && c.follower_sounds;   // 0.9.8 (D5)
         if (want != c.board.rules_on) {
             board_rules(c, want);
         }
@@ -1041,46 +1084,56 @@ sa1_status Session::tick(int32_t id, float stick_x, float stick_y, float camera_
     }
     refresh_state(*c);
     board_after_tick(*c);
+    tick_tail(*c, dt, step0, before);
+    // 0.9.8 (D5): a silent follower never registers with the mixer; a follower's sounds come from where it is
+    if (c->follower_sounds) {
+        audio_.character(id, c->st.position, !c->follower);
+    }
+    take_events();
+    return SA1_OK;
+}
+
+// what a tick leaves in the Character after its state: only c is written (and the thread-safe log), so a follower's pool job
+// runs it too (plan 2.4 D2)
+void Session::tick_tail(Character &c, float dt, uint32_t step0, const float before[3])
+{
     // 0.9.3: the form (Super Sonic or normal Sonic) after this tick
-    bool sup = (c->st.flags & kStateSuper) != 0;
-    if (sup != c->super) {
-        c->super = sup;
-        c->super_changes++;
-        c->super_step = c->st.step;
+    bool sup = (c.st.flags & kStateSuper) != 0;
+    if (sup != c.super) {
+        c.super = sup;
+        c.super_changes++;
+        c.super_step = c.st.step;
     }
-    uint32_t pairs = (c->st.step - step0) / 2u;
-    c->pairs_last = pairs;
-    c->pairs_total += pairs;
-    c->acc += (double)dt - (double)pairs * kPairSeconds;
-    if (c->acc < 0.0) {
-        c->acc = 0.0;
+    uint32_t pairs = (c.st.step - step0) / 2u;
+    c.pairs_last = pairs;
+    c.pairs_total += pairs;
+    c.acc += (double)dt - (double)pairs * kPairSeconds;
+    if (c.acc < 0.0) {
+        c.acc = 0.0;
     }
-    if (c->acc >= kPairSeconds) {
-        c->acc = std::fmod(c->acc, kPairSeconds);   // libsa1 dropped a backlog (more than 8 pairs)
+    if (c.acc >= kPairSeconds) {
+        c.acc = std::fmod(c.acc, kPairSeconds);   // libsa1 dropped a backlog (more than 8 pairs)
     }
-    c->alpha = (float)(c->acc / kPairSeconds);
+    c.alpha = (float)(c.acc / kPairSeconds);
     if (pairs == 1) {
-        std::memcpy(c->prev_pos, before, sizeof before);
+        std::memcpy(c.prev_pos, before, sizeof c.prev_pos);
     } else if (pairs > 1) {
         for (int k = 0; k < 3; k++) {
-            c->prev_pos[k] = c->st.position[k] - c->st.velocity[k] * (float)kPairSeconds;
+            c.prev_pos[k] = c.st.position[k] - c.st.velocity[k] * (float)kPairSeconds;
         }
     }
     if (pairs > 0) {
-        if (!c->upgrades_checked) {
+        if (!c.upgrades_checked) {
             // PInitialize ran in the first step: the equipment it derived from the flags
-            c->upgrades_checked = true;
-            uint32_t got = c->st.equipment & 0x7FFFu;
-            c->upgrades_ok = (got & c->upgrade_bits) == c->upgrade_bits;
-            if (!c->upgrades_ok) {
+            c.upgrades_checked = true;
+            uint32_t got = c.st.equipment & 0x7FFFu;
+            c.upgrades_ok = (got & c.upgrade_bits) == c.upgrade_bits;
+            if (!c.upgrades_ok) {
                 log_line(SA1_LOG_WARN, format("upgrades: the game's equipment is 0x%04X, the upgrades ask for 0x%04X",
-                                              (unsigned)got, (unsigned)c->upgrade_bits).c_str());
+                                              (unsigned)got, (unsigned)c.upgrade_bits).c_str());
             }
         }
     }
-    audio_.character(id, c->st.position, true);
-    take_events();
-    return SA1_OK;
 }
 
 sa1_status Session::pose(int32_t id, int32_t action, float frame, const float pos[3], float yaw)
@@ -1195,14 +1248,31 @@ sa1_status Session::render(int32_t id, float alpha)
         last_error_ = "no such character";
         return SA1_ERR_NOT_FOUND;
     }
+    // 0.9.8 (plan 5.5): the pool renders followers (gsa1.FollowerDraw); gsa1.Render(followerId) answers its last render
+    if (c->follower) {
+        return SA1_OK;
+    }
+    std::string err;
+    sa1_status st = render_copy(*c, alpha, err);
+    if (SA1_FAILED(st)) {
+        last_error_ = err;
+    }
+    return st;
+}
+
+// sa1_character_render + the copy into c + the batches: only c is written (a pool job runs it: review R.1; build_batches'
+// shadow test goes through batch_black, which never inserts in a job). err only on a failure
+sa1_status Session::render_copy(Character &cr, float alpha, std::string &err)
+{
+    Character *c = &cr;
     if (!std::isfinite(alpha)) {
         alpha = 1.0f;
     }
     double t0 = now_ms();
     const sa1_render *r = nullptr;
-    sa1_status st = sa1_character_render(ctx_, id, alpha, &r);
+    sa1_status st = sa1_character_render(ctx_, c->id, alpha, &r);
     if (SA1_FAILED(st) || !r) {
-        last_error_ = scrub(format("sa1_character_render: %s: %s", sa1_status_string(st), sa1_last_error(ctx_)));
+        err = scrub(format("sa1_character_render: %s: %s", sa1_status_string(st), sa1_last_error(ctx_)));
         return SA1_FAILED(st) ? st : SA1_ERR_NOT_FOUND;
     }
     c->rendered = true;
@@ -1445,7 +1515,7 @@ void Session::build_batches(Character &c)
         // the diffuse alpha 204) as a darkening mask (WRAP_MASK; sadc docs/research/gsa1_060_shadow.md G3)
         if ((d.flags & SA1_DRAW_SHADOW) && pass && textured && d.prim == SA1_PRIM_TRIANGLES &&
             !(d.flags & SA1_DRAW_ADDITIVE) && bs == SA1_BLEND_SRC_ALPHA && bd == SA1_BLEND_INV_SRC_ALPHA &&
-            texture_black(c.kind, ar, tx)) {
+            batch_black(c, ar, tx)) {
             wrap |= WRAP_MASK;
         }
 #if defined(SA1_DRAW_SUPER_GOLD)
@@ -1944,6 +2014,498 @@ bool Session::texture_black(int32_t kind, int32_t archive, int32_t index)
     }
     black_[key] = black;
     return black;
+}
+
+// ---- 0.9.8: followers (session.hpp; sadc docs/research/gsa1_098_plan.md 2.4, 5.5, 6.6; gsa1_096_plan.md 4.11 d, 6.4 with its
+// Review R.1) -----------------------------------------------------------------------------------------------------------------
+// The texture_black answers a job needs: the map is read-only during a phase (no job inserts). A miss (a texture of another
+// archive than the kind's, or an answer not filled): the batch without WRAP_MASK for now, the key queued, this follower's
+// batches rebuilt after the join (tick_followers). review R.1: two workers inserting at once would corrupt the heap
+bool Session::batch_black(Character &c, int32_t archive, int32_t index)
+{
+    if (!c.job_running) {
+        return texture_black(c.kind, archive, index);
+    }
+    if (!ready() || c.kind < 0 || archive < 0 || index < 0) {
+        return false;
+    }
+    uint64_t key = ((uint64_t)(uint32_t)c.kind << 40) ^ ((uint64_t)(uint32_t)archive << 20) ^ (uint64_t)(uint32_t)index;
+    auto it = black_.find(key);
+    if (it != black_.end()) {
+        return it->second;
+    }
+    c.black_misses.push_back(std::make_pair(archive, index));
+    return false;
+}
+
+// every texture of a kind's archives through texture_black, once per kind (game thread, Session::create_follower)
+void Session::fill_black(int32_t kind)
+{
+    if (kind < 0 || kind >= 32 || ((black_kinds_filled_ >> kind) & 1u)) {
+        return;
+    }
+    black_kinds_filled_ |= 1u << kind;
+    for (uint32_t a = 0, na = texture_archives(kind); a < na; a++) {
+        uint32_t n = 0;
+        std::string e;
+        if (texture_count(kind, a, n, e)) {
+            for (uint32_t i = 0; i < n; i++) {
+                texture_black(kind, (int32_t)a, (int32_t)i);
+            }
+        }
+    }
+}
+
+Character *Session::test_add_character(int32_t id, int32_t kind, bool follower, bool follower_sounds, int32_t leader)
+{
+    std::unique_ptr<Character> c(new Character());
+    c->id = id;
+    c->kind = kind;
+    c->follower = follower;
+    c->follower_sounds = follower_sounds;
+    Character *raw = c.get();
+    chars_.push_back(std::move(c));
+    if (follower) {
+        followers_.add(id, kind, leader, FollowerOpts());
+    }
+    return raw;
+}
+
+int32_t Session::create_follower(int32_t kind, const float pos[3], float yaw, int32_t leader, const FollowerOpts &o,
+                                 std::string &err, const char **code, double *ms)
+{
+    const char *unused_code = nullptr;
+    const char *&cd = code ? *code : unused_code;
+    cd = "bad_argument";
+#if !defined(SA1_API_FOLLOWER)
+    (void)kind, (void)pos, (void)yaw, (void)leader, (void)o, (void)ms;
+    cd = "unsupported";
+    err = kReasonNoApi;
+    return 0;
+#else
+    if (!ready()) {
+        cd = "not_ready";
+        err = "not initialised (no disc loaded)";
+        return 0;
+    }
+    if (kind < 0 || kind >= SA1_CHAR_COUNT) {
+        err = "unknown character";
+        return 0;
+    }
+    if (!pos || !std::isfinite(pos[0]) || !std::isfinite(pos[1]) || !std::isfinite(pos[2]) || !std::isfinite(yaw) ||
+        std::fabs(pos[0]) > 65536.0f || std::fabs(pos[1]) > 65536.0f || std::fabs(pos[2]) > 65536.0f) {
+        err = "invalid position or yaw";
+        return 0;
+    }
+    if (leader != 0 && !get(leader)) {
+        cd = "not_found";
+        err = "no such character";
+        return 0;
+    }
+    if (followers_.count() >= kMaxFollowers) {
+        cd = "limit";
+        err = kReasonMaxFollowers;
+        return 0;
+    }
+    if (chars_.size() >= kMaxCharacters) {
+        cd = "limit";
+        err = kReasonMaxChars;
+        return 0;
+    }
+    if (!follower_memory_ok()) {
+        cd = "limit";
+        err = kReasonMemory;
+        return 0;
+    }
+    sa1_follower_desc d;
+    std::memset(&d, 0, sizeof d);
+    d.struct_size = sizeof d;
+    d.kind = kind;
+    d.leader = (sa1_character_id)leader;
+    if (!o.fix_view) {
+        d.flags |= SA1_FOLLOW_GAME_VIEW;
+    }
+    if (!o.fix_respawn) {
+        d.flags |= SA1_FOLLOW_GAME_HISTORY;
+    }
+    if (o.objects == 0u) {
+        d.flags |= SA1_FOLLOW_NO_SET;
+    }
+    if (o.seed_given) {
+        d.flags |= SA1_FOLLOW_SEED;
+        d.seed = o.seed;
+    }
+    d.host_leader.struct_size = sizeof d.host_leader;
+    std::memcpy(d.host_leader.position, pos, sizeof d.host_leader.position);
+    d.host_leader.yaw = yaw;
+    d.host_leader.flags = SA1_LEADER_ON_GROUND;
+    d.host_leader.kind = -1;
+    std::vector<uint16_t> flags;
+    uint32_t bits = 0;
+    for (const UpgradeDef *u : o.upgrades) {
+        if (!u || u->kind != upgrade_kind(kind) || u->flag >= 512) {
+            err = "an upgrade of another character";
+            return 0;
+        }
+        if (std::find(flags.begin(), flags.end(), u->flag) != flags.end()) {
+            continue;
+        }
+        if (flags.size() >= sizeof d.upgrade_flags / sizeof d.upgrade_flags[0]) {
+            err = "too many upgrades";
+            return 0;
+        }
+        d.upgrade_flags[flags.size()] = u->flag;
+        flags.push_back(u->flag);
+        bits |= u->equipment;
+    }
+    if (!flags.empty()) {
+        d.flags |= SA1_FOLLOW_UPGRADES;
+        d.num_upgrade_flags = (uint32_t)flags.size();
+    }
+    sa1_character_id id = 0;
+    double t0 = now_ms();
+    sa1_status st = sa1_follower_create(ctx_, &d, &id);
+    if (ms) {
+        *ms = now_ms() - t0;
+    }
+    if (SA1_FAILED(st)) {
+        cd = st == SA1_ERR_UNSUPPORTED        ? "unsupported"
+             : st == SA1_ERR_NOT_LOADED       ? "not_ready"
+             : st == SA1_ERR_LIMIT            ? "limit"
+             : st == SA1_ERR_INVALID_ARGUMENT ? "bad_argument"
+             : st == SA1_ERR_NOT_FOUND        ? "not_found"
+             : (st == SA1_ERR_GAME_FAULT || st == SA1_ERR_NOT_IMPLEMENTED) ? "fault"
+                                                                           : "error";
+        const char *why = sa1_last_error(ctx_);
+        err = scrub(why && *why ? std::string(why) : std::string(sa1_status_string(st)));
+        return 0;
+    }
+    // review R.1: every texture_black answer of the kind now, on the game thread: a job never inserts into the map
+    fill_black(kind);
+    std::unique_ptr<Character> c(new Character());
+    c->id = id;
+    c->kind = kind;
+    c->follower = true;
+    c->follower_sounds = o.sounds;
+    c->follower_objects = o.objects;
+    c->num_archives = texture_archives(kind);
+    c->upgrade_flags = flags;
+    c->upgrade_bits = bits;
+    refresh_state(*c);
+    std::memcpy(c->prev_pos, c->st.position, sizeof c->prev_pos);
+    Character *raw = c.get();
+    chars_.push_back(std::move(c));
+    followers_.add(id, kind, leader, o);
+    std::string rerr;
+    render_copy(*raw, 1.0f, rerr);      // the first pose until its first pair (as Session::create)
+    return id;
+#endif
+}
+
+bool Session::set_follower_leader(int32_t id, int32_t leader, std::string &err, const char **code)
+{
+    const char *unused_code = nullptr;
+    const char *&cd = code ? *code : unused_code;
+    cd = "bad_argument";
+    Character *c = get(id);
+    if (!c) {
+        cd = "not_found";
+        err = "no such character";
+        return false;
+    }
+    if (!c->follower) {
+        err = "this character is not a follower";
+        return false;
+    }
+    if (leader != 0 && !get(leader)) {
+        cd = "not_found";
+        err = "no such character";
+        return false;
+    }
+    if (!followers_.can_follow(id, leader, err)) {
+        return false;
+    }
+#if defined(SA1_API_FOLLOWER)
+    sa1_status st = sa1_follower_set_leader(ctx_, id, leader);
+    if (SA1_FAILED(st)) {
+        cd = st == SA1_ERR_UNSUPPORTED ? "unsupported" : st == SA1_ERR_NOT_FOUND ? "not_found"
+             : st == SA1_ERR_INVALID_ARGUMENT                                    ? "bad_argument"
+                                                                                 : "error";
+        const char *why = sa1_last_error(ctx_);
+        err = scrub(why && *why ? std::string(why) : std::string(sa1_status_string(st)));
+        return false;
+    }
+    followers_.set_leader(id, leader);
+    return true;
+#else
+    cd = "unsupported";
+    err = kReasonNoApi;
+    return false;
+#endif
+}
+
+uint32_t Session::follower_workers() const
+{
+    if (!kPoolLibParallel) {
+        return 0;       // the snapshot's libsa1 has no L4 and T1 yet: every job on the game thread (pool.hpp)
+    }
+    return follower_threads_ != 0 ? std::min(follower_threads_, kPoolMaxWorkers)
+                                  : pool_automatic_workers(followers_.count(), pool_logical_cores());
+}
+
+uint32_t Session::set_follower_threads(uint32_t n)
+{
+    follower_threads_ = std::min(n, kPoolMaxWorkers);
+    return follower_workers();
+}
+
+// One follower, on any thread: writes only *j.c (review R.1). No sa1_poll_events, no audio_, no Lua, no last_error_; the board's
+// state, the mixer and the events come after the join, in world order (plan 2.4 D2). Reads, read-only during the phase: ctx_ (the
+// calls of SA1_API_PARALLEL only), ff_, black_ (batch_black), disc_dir_ / config_dir_ (scrub), followers_ (j.feed).
+void Session::follower_job(const FollowerJob &j)
+{
+    Character &c = *j.c;
+    c.job_thread = (uint64_t)std::hash<std::thread::id>()(std::this_thread::get_id());
+    c.job_status = SA1_OK;
+    c.job_pairs = 0;
+    c.job_rendered = false;
+    c.job_restructured = false;
+    c.job_render_ms = 0.0;
+    c.tick_ms_last = 0.0;
+    if (!c.job_error.empty()) {
+        c.job_error.clear();
+    }
+    if (c.faulted) {
+        c.job_status = SA1_ERR_GAME_FAULT;
+        c.job_error = "the character's world faulted earlier; recreate the character";
+        return;
+    }
+#if defined(SA1_API_FOLLOWER)
+    c.job_running = true;
+    if (j.feed && j.feed->valid) {
+        sa1_leader_state ls;
+        std::memset(&ls, 0, sizeof ls);
+        ls.struct_size = sizeof ls;
+        std::memcpy(ls.position, j.feed->pos, sizeof ls.position);
+        std::memcpy(ls.velocity, j.feed->vel, sizeof ls.velocity);
+        ls.yaw = j.feed->yaw;
+        ls.flags = j.feed->ground ? SA1_LEADER_ON_GROUND : 0u;
+        ls.kind = j.feed->kind;
+        sa1_status fs = sa1_follower_feed(ctx_, c.id, &ls);
+        if (SA1_FAILED(fs)) {
+            c.job_status = fs;
+            c.job_error = scrub(format("sa1_follower_feed: %s: %s", sa1_status_string(fs), sa1_last_error(ctx_)));
+            c.job_running = false;
+            return;
+        }
+    }
+    sa1_input in;
+    std::memset(&in, 0, sizeof in);
+    in.struct_size = sizeof in;
+    in.camera_yaw = ff_.view_yaw;
+    uint32_t hflags = c.host_flags_next & kHostWaterFlags;   // a follower ignores the game's camera request (plan 5.3)
+#if defined(SA1_API_092)
+    in.host_flags = hflags;
+#endif
+    c.host_flags_last = hflags;
+    if (hflags != 0u) {
+        c.host_flag_ticks++;
+    }
+    c.host_camera_last = j.camera;
+    c.host_camera_passed = false;
+    if (j.camera) {
+        std::memcpy(c.host_cam_last, ff_.cam_pos, sizeof ff_.cam_pos);
+        std::memcpy(c.host_cam_last + 3, ff_.cam_target, sizeof ff_.cam_target);
+#if defined(SA1_INPUT_HOST_CAMERA)
+        std::memcpy(in.host_cam_pos, ff_.cam_pos, sizeof in.host_cam_pos);
+        std::memcpy(in.host_cam_target, ff_.cam_target, sizeof in.host_cam_target);
+        in.host_flags |= SA1_INPUT_HOST_CAMERA;
+        c.host_camera_passed = true;
+        c.host_camera_ticks++;
+#endif
+    }
+    float before[3];
+    std::memcpy(before, c.st.position, sizeof before);
+    uint32_t step0 = c.st.step;
+    double t0 = now_ms();
+    sa1_status st = sa1_character_tick(ctx_, c.id, &in, ff_.dt, nullptr, nullptr);
+    refresh_state(c);
+    c.tick_ms_last = now_ms() - t0;
+    c.tick_ms_max = std::max(c.tick_ms_max, c.tick_ms_last);
+    if (SA1_FAILED(st)) {
+        if (st == SA1_ERR_GAME_FAULT || st == SA1_ERR_NOT_IMPLEMENTED) {
+            c.faulted = true;
+            c.fault_status = st;
+        }
+        c.job_status = st;
+        c.job_error = scrub(format("%s: %s", sa1_status_string(st), sa1_last_error(ctx_)));
+        c.job_running = false;
+        return;
+    }
+    tick_tail(c, ff_.dt, step0, before);
+    c.job_pairs = c.pairs_last;
+    // the render of its draw level (096 4.10): full every frame with the player's alpha rule; far at alpha 1 on its due frame
+    // (the last pair: 0.010-0.014 ms instead of 0.072-0.085 interpolated); none: nothing
+    bool due = c.draw_level == kFollowerDrawFull ||
+               (c.draw_level == kFollowerDrawFar && follower_far_due(ff_.frame, c.id, c.draw_rate));
+    if (due) {
+        uint32_t gen0 = c.batch_gen;
+        float alpha = c.draw_level == kFollowerDrawFull && ff_.interpolate ? -1.0f : 1.0f;
+        sa1_status rs = render_copy(c, alpha, c.job_error);
+        if (SA1_FAILED(rs)) {
+            c.job_status = rs;
+        } else {
+            c.view_ready = false;
+            c.job_rendered = true;
+            c.job_restructured = c.batch_gen != gen0;
+            c.job_render_ms = c.render_ms;
+        }
+    }
+    c.job_running = false;
+#endif
+}
+
+void Session::follower_job_run(void *user, uint32_t index)
+{
+    Session *s = static_cast<Session *>(user);
+    s->follower_job(s->fjobs_[s->fphase_base_ + index]);
+}
+
+void Session::follower_job_threw(void *user, uint32_t index, const char *what)
+{
+    Session *s = static_cast<Session *>(user);
+    Character &c = *s->fjobs_[s->fphase_base_ + index].c;
+    c.job_running = false;
+    c.faulted = true;
+    c.fault_status = SA1_ERR_GAME_FAULT;
+    c.job_status = SA1_ERR_GAME_FAULT;
+    c.job_error = std::string("G-SA1 internal error: ") + (what ? what : "");
+}
+
+void Session::follower_stats_add(double wall_ms, double join_ms)
+{
+    double now = now_ms();
+    if (fstats_t0_ == 0.0) {
+        fstats_t0_ = now;
+    }
+    FollowerStats &a = fstats_acc_;
+    a.frames++;
+    a.ms_wall += wall_ms;
+    a.ms_join += join_ms;
+    for (const FollowerJob &j : fjobs_) {
+        a.ms_tick += j.c->tick_ms_last;
+        a.ms_render += j.c->job_render_ms;
+    }
+    a.followers = (uint32_t)followers_.count();
+    a.workers = pool_.workers();
+    if (now - fstats_t0_ >= 1000.0 || fstats_last_.frames == 0) {
+        double n = (double)std::max(1u, a.frames);
+        fstats_last_ = a;
+        fstats_last_.ms_wall /= n;
+        fstats_last_.ms_join /= n;
+        fstats_last_.ms_tick /= n;
+        fstats_last_.ms_render /= n;
+        fstats_acc_ = FollowerStats();
+        fstats_t0_ = now;
+    }
+}
+
+void Session::tick_followers(float dt, float view_yaw, const TickExtra *camera, bool interpolate,
+                             std::vector<FollowerTickResult> &out)
+{
+    out.clear();
+    fjobs_.clear();
+    fphases_.clear();
+    fms_last_ = fjoin_last_ = 0.0;
+    if (!ctx_ || followers_.count() == 0) {
+        return;
+    }
+    double t0 = now_ms();
+    ff_.dt = std::isfinite(dt) && dt > 0.0f ? std::min(dt, 0.25f) : 0.0f;
+    ff_.view_yaw = std::isfinite(view_yaw) ? view_yaw : 0.0f;
+    ff_.camera = camera && camera->camera && std::isfinite(camera->cam_pos[0]) && std::isfinite(camera->cam_pos[1]) &&
+                 std::isfinite(camera->cam_pos[2]) && std::isfinite(camera->cam_target[0]) &&
+                 std::isfinite(camera->cam_target[1]) && std::isfinite(camera->cam_target[2]);
+    if (ff_.camera) {
+        std::memcpy(ff_.cam_pos, camera->cam_pos, sizeof ff_.cam_pos);
+        std::memcpy(ff_.cam_target, camera->cam_target, sizeof ff_.cam_target);
+    }
+    ff_.interpolate = interpolate;
+    ff_.frame = ++follower_frame_;
+    // the jobs, by chain level (game thread: nothing below changes until the join)
+    for (const std::vector<int32_t> &level : followers_.levels()) {
+        uint32_t first = (uint32_t)fjobs_.size();
+        for (int32_t id : level) {
+            Character *c = get(id);
+            if (!c) {
+                continue;
+            }
+            FollowerJob j;
+            j.c = c;
+            j.feed = followers_.leader_of(id) == 0 ? followers_.feed_of(id) : nullptr;
+            if (ff_.camera) {
+                int32_t root = followers_.root_of(id);
+                Character *rc = root > 0 ? get(root) : nullptr;
+                j.camera = rc && !rc->puppet;
+            }
+            fjobs_.push_back(j);
+        }
+        if (fjobs_.size() > first) {
+            fphases_.push_back(std::make_pair(first, (uint32_t)fjobs_.size() - first));
+        }
+    }
+    pool_.set_workers(follower_workers());     // rebuilt between frames only
+    pool_.take_wait_ms();
+    for (const auto &ph : fphases_) {
+        fphase_base_ = ph.first;
+        pool_.run_phase(follower_job_run, follower_job_threw, this, ph.second);
+    }
+    fjoin_last_ = pool_.take_wait_ms();
+    // after the join, on the game thread, in world order (plan 2.4 D2): the board's state and rules, a job's WRAP_MASK misses, the
+    // mixer's position (D5: a silent follower never registers), then the events of every world
+    for (const auto &cp : chars_) {
+        Character &c = *cp;
+        if (!c.follower) {
+            continue;
+        }
+        if (c.kind == board::kKindSonic || c.kind == board::kKindTails) {
+            board_after_tick(c);
+        }
+        if (!c.black_misses.empty()) {
+            for (const auto &m : c.black_misses) {
+                texture_black(c.kind, m.first, m.second);
+            }
+            c.black_misses.clear();
+            uint32_t gen0 = c.batch_gen;
+            build_batches(c);
+            c.job_restructured = c.job_restructured || c.batch_gen != gen0;
+        }
+        if (c.follower_sounds) {
+            audio_.character(c.id, c.st.position, false);
+        }
+    }
+    take_events();
+    out.reserve(fjobs_.size());
+    for (const FollowerJob &j : fjobs_) {
+        const Character &c = *j.c;
+        FollowerTickResult r;
+        r.id = c.id;
+        r.pairs = c.job_pairs;
+        r.status = c.job_status;
+        r.msg = c.job_error.empty() ? nullptr : &c.job_error;
+        r.rendered = c.job_rendered;
+        r.restructured = c.job_restructured;
+        // level 3 is not rendered: its drawn root would stand still while its world goes on (the Lua side's distance reads this)
+        const bool live = c.draw_level == kFollowerDrawNone || !c.rendered;
+        std::memcpy(r.pos, live ? c.st.position : c.r_pos, sizeof r.pos);
+        r.yaw = live ? c.st.yaw : c.r_yaw;
+        r.interpolated = c.r_interpolated != 0;
+        r.alpha = c.r_alpha;
+        r.tris = c.out_triangles;
+        out.push_back(r);
+    }
+    fms_last_ = now_ms() - t0;
+    follower_stats_add(fms_last_, fjoin_last_);
 }
 
 bool Session::texture_pixel(int32_t kind, uint32_t archive, uint32_t index, uint32_t x, uint32_t y, uint8_t out[4])

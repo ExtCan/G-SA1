@@ -475,6 +475,45 @@ function GSA1.LogFrame(dt, sections, counted, gc)
     end
 end
 
+-- 0.9.8 (sadc docs/research/gsa1_098_plan.md 6.7 task 7, recheck098 3.3: the perf line is cut at about 900 characters): the
+-- followers' own line every PERF_EVERY seconds, with or without a character: "followers N (egg M): tick x ms on W workers (join
+-- y ms), draw z ms; levels ...; garbage of the gsa1_follower* hooks ..." (feat/cl_follower.lua calls this once per frame while
+-- there are followers; all figures are per frame, the window's mean)
+L.fo = L.fo or { t0 = nil, frames = 0, tick = 0, join = 0, draw = 0, workers = 0, n = 0, egg = 0 }
+function GSA1.LogFollowers(now, n, egg, tick_ms, join_ms, workers, draw_ms, lv1, lv2, lv3)
+    local w = L.fo
+    if not enabled() then
+        w.t0 = nil
+        return
+    end
+    if not w.t0 then
+        w.t0, w.frames, w.tick, w.join, w.draw, w.workers = now, 0, 0, 0, 0, 0
+    end
+    w.frames, w.tick, w.join, w.draw = w.frames + 1, w.tick + (tick_ms or 0), w.join + (join_ms or 0), w.draw + (draw_ms or 0)
+    if (workers or 0) > w.workers then w.workers = workers end
+    if now - w.t0 < PERF_EVERY then return end
+    local hooks = ""
+    local GM = GSA1.GcMeter
+    if GM and GM.list then
+        local top = {}
+        for _, s in ipairs(GM.list) do
+            if string.find(s.key, "gsa1_follower", 1, true) then
+                local d = s.kb - (s.foLast or 0)
+                s.foLast = s.kb
+                if d > 0 then top[#top + 1] = { s.key, d } end
+            end
+        end
+        table.sort(top, function(a, b) return a[2] > b[2] end)
+        local parts = {}
+        for i = 1, math.min(3, #top) do parts[i] = string.format("%s %.2f", top[i][1], top[i][2] / w.frames) end
+        if #parts > 0 then hooks = "; garbage of the gsa1_follower* hooks, KB per frame: " .. table.concat(parts, ", ") end
+    end
+    GSA1.Log("followers", "followers %d (egg %d): tick %.2f ms on %d workers (join %.2f ms), draw %.2f ms; levels %d full, %d "
+        .. "far, %d not drawn%s", n, egg, w.tick / w.frames, w.workers, w.join / w.frames, w.draw / w.frames, lv1 or 0, lv2 or 0,
+        lv3 or 0, hooks)
+    w.t0 = nil
+end
+
 -- 0.9.5 (sadc docs/research/board095_cam.md 5.4 item 6): which camera the game's code measures against, one line per
 -- change (cl_character.lua calls it every tick while the module takes the host camera): yours (G-SA1's view passed in
 -- sa1_input), its own because "The game uses this camera" is off, or its own because G-SA1's view is not in use (a camera
@@ -731,7 +770,8 @@ local function count_draws()
     if type(f) ~= "function" or f == L.drawWrap then return end
     local inner = f
     L.drawWrap = function(C, pass, ...)
-        pcall(GSA1.LogDraw, C, pass, ...)       -- counting never stops a draw; the STUDIO flags go along (D1)
+        -- counting never stops a draw; the STUDIO flags go along (D1); a follower's is not your character's view (0.9.8)
+        if not (C and C.follower) then pcall(GSA1.LogDraw, C, pass, ...) end
         return inner(C, pass, ...)
     end
     GSA1.DrawCharacter = L.drawWrap

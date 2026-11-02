@@ -109,19 +109,29 @@ local DRAW_UNLIT, DRAW_PALETTE_LIT, DRAW_ADDITIVE = 0x10, 0x20, 0x200
 -- kind, of which only the blob shadow's is drawn: made at its first use; review R.3.2 of gsa1_060_shadow.md)
 T.NO_PREPARE = { OBJ_REGULAR = true }
 
+-- 0.9.8 Character Select (sadc docs/research/gsa1_098_plan.md 2.4 C2, 5.5, 6.10 task 3; review R98.11): gsa1.FRONTEND.KIND (32) is
+-- not a character: its textures, the menu's nine archives, come through gsa1.FrontendTexture*; gsa1.Texture stays range-checked
+local function is_frontend(kind)
+    local f = gsa1 and gsa1.FRONTEND
+    return f ~= nil and kind == f.KIND
+end
+
 -- the archives of a character: { [0] = {name, count}, ... }
 function T.Archives(kind)
     local a = T.archives[kind]
     if a then return a end
     a = { n = 0 }
-    local list = gsa1.TextureArchives(kind)
+    local front = is_frontend(kind)
+    local list
+    if front then list = gsa1.FrontendTextureArchives() else list = gsa1.TextureArchives(kind) end
     if type(list) == "table" then
         for i, e in ipairs(list) do
             a[i - 1] = { name = e.name, count = e.count }
             a.n = i
         end
     end
-    T.archives[kind] = a
+    -- (the first sa1_frontend_open loads the menu's archives: an empty answer before it is not kept)
+    if not front or a.n > 0 then T.archives[kind] = a end
     return a
 end
 
@@ -136,7 +146,9 @@ local function info_of(kind, archive, index, variant)
     local i = T.infos[k]
     if i == nil then
         local info, err
-        if variant > 0 then
+        if is_frontend(kind) then
+            info, err = gsa1.FrontendTexture(index, archive)
+        elseif variant > 0 then
             info, err = gsa1.Texture(kind, index, archive, variant)
         else
             info, err = gsa1.Texture(kind, index, archive)
@@ -238,6 +250,11 @@ end
 
 function T.Pending()
     return #T.queue + #T.later
+end
+
+-- the texture's table (w, h, name, runs ...; nil: none), without making its render target
+function T.Info(kind, archive, index)
+    return info_of(kind, archive, index)
 end
 
 hook.Add("PostRender", "gsa1_texture_later", function()
@@ -775,6 +792,47 @@ function T.PaintFrame()
     local ok, err = pcall(paint_frame)
     if am and am ~= 1 then surface.SetAlphaMultiplier(am) end
     if not ok then error(err, 0) end
+end
+
+-- 0.9.8 Character Select: every texture of `kind` in the clamped address mode painted NOW, whatever the budget, so a first open
+-- never shows the screen piecemeal (the 67 menu textures, about 30 ms: charsel098 4.3). Call it in PostRender, as the painting
+-- above. Returns the textures painted, and the ms.
+function T.PaintNow(kind)
+    if not T.probe then T.PaintFrame() end
+    local t0 = SysTime()
+    local a = T.Archives(kind)
+    local wrap = bor(WRAP_CLAMP_U, WRAP_CLAMP_V)
+    local am = surface.GetAlphaMultiplier and surface.GetAlphaMultiplier()
+    if am and am ~= 1 then surface.SetAlphaMultiplier(1) end
+    local n = 0
+    local ok, err = pcall(function()
+        for ai = 0, a.n - 1 do
+            for i = 0, (a[ai].count or 0) - 1 do
+                local e = T.Get(kind, ai, i, wrap, false)
+                if e and not e.done then
+                    for qi, q in ipairs(T.queue) do
+                        if q == e then
+                            table.remove(T.queue, qi)
+                            break
+                        end
+                    end
+                    e.queued = false
+                    if e.info.nruns == 0 then
+                        clear_only(e)
+                        e.done = true
+                    else
+                        while not e.done do paint_some(e, e.info.nruns) end
+                    end
+                    n = n + 1
+                end
+            end
+        end
+    end)
+    if am and am ~= 1 then surface.SetAlphaMultiplier(am) end
+    if not ok then error(err, 0) end
+    local ms = (SysTime() - t0) * 1000
+    if GSA1.HitchAdd then GSA1.HitchAdd("Texture paint", SysTime() - t0) end
+    return n, ms
 end
 
 -- device-reset check (one painted texture's canary pixel), only after a device-reset signal: the window got the

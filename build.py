@@ -3,6 +3,7 @@
 
     py -3.12 build.py                         # snapshot libsa1, build win64 + linux64, verify exports
     py -3.12 build.py --test [--gdi GAME.gdi] [--bsp MAP.bsp] [--maps DIR] [--fuzz N] [--seconds S] [--verbose]
+                             [--test-jobs N]
     py -3.12 build.py --target x86_64-windows # one target
     py -3.12 build.py --no-snapshot           # reuse build/deps (do not touch libsa1's build lock)
     py -3.12 build.py --lib-build             # first build libsa1 itself for every target (LIB: build.py --target ...)
@@ -34,6 +35,12 @@ tests/feat_<feature>_binding_test.cpp (linked like binding_test: the module's ob
 tests/mock_lua.hpp), each with --gdi GAME.gdi when one is given, and runs every tests/feat_<feature>_test.lua in
 Garry's Mod's LuaJIT like the other Lua tests (tests/seam_test.lua: the addon's feature loading, menu pages, ConVar
 helper and HasFeature). The features found are listed at the start.
+
+--test runs its programs in three stages, --test-jobs N (default 4) at a time inside each, because tests read files other
+tests write and a missing one can mean a skip, not a failure: stage 1 the writers (core_test, feat_super_test,
+feat_emote_test, every tests/feat_*_binding_test.cpp), stage 2 the other C++ programs, stage 3 the Lua programs. Each
+program's output is kept and printed whole, in the fixed order of the list; a program that fails is run again alone at the
+end of its stage and that result counts, whatever N is (the summary names it). More than 4 fails binding_test's 8 ms check.
 
 Builds of this directory are serialised by an exclusive lock on build/.build.lock (another agent's or terminal's
 build of g-sa1 waits for this one; --lock-timeout); libsa1's own lock is taken inside it, for the snapshot only.
@@ -524,6 +531,79 @@ def build_target(key, args, info):
     return True
 
 
+def test_stage(name):
+    """the stage of a test program, by its file name without .exe (the docstring at the top)"""
+    if name.endswith(".lua"):
+        return 3
+    if name in ("core_test", "feat_super_test", "feat_emote_test") or re.fullmatch(r"feat_.*_binding_test", name):
+        return 1
+    return 2
+
+
+def run_test_programs(key, cmds, host, jobs):
+    """run cmds by test_stage, jobs at a time inside a stage; print each program's command line and output whole, in the
+    order of cmds, as soon as every program before it has ended. Returns the names that failed (after a run alone, which is
+    the one that counts) and the names that were run again"""
+    def name_of(cmd):
+        return os.path.basename(cmd[1] if cmd[0] == host else cmd[0])
+
+    def run_one(cmd):
+        t0 = time.time()
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return r.returncode, r.stdout, time.time() - t0
+
+    def emit(data):
+        sys.stdout.flush()
+        sys.stdout.buffer.write(data)
+        if data and not data.endswith(b"\n"):
+            sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.flush()
+
+    results, printed, failed, again = [None] * len(cmds), 0, [], []
+    t_start, t_sum = time.time(), 0.0
+    stem = lambda cmd: os.path.splitext(name_of(cmd))[0] if cmd[0] != host else name_of(cmd)
+
+    def print_ready():
+        nonlocal printed
+        while printed < len(cmds) and results[printed] is not None:
+            cmd = cmds[printed]
+            print("[%s] %s" % (key, " ".join('"%s"' % c if " " in c else c for c in cmd)), flush=True)
+            first, second = results[printed]
+            emit(first[1])
+            if second is not None:
+                print("[%s] %s failed (exit %d), run again alone:" % (key, name_of(cmd), first[0]), flush=True)
+                emit(second[1])
+                print("[%s] %s, run alone: %s" % (key, name_of(cmd), "exit %d" % second[0] if second[0] else "passed"),
+                      flush=True)
+            printed += 1
+
+    for stage in (1, 2, 3):
+        idx = [i for i, cmd in enumerate(cmds) if test_stage(stem(cmd)) == stage]
+        first_runs = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            futures = {pool.submit(run_one, cmds[i]): i for i in idx}
+            for fu in concurrent.futures.as_completed(futures):
+                i = futures[fu]
+                first_runs[i] = fu.result()
+                t_sum += first_runs[i][2]
+                if first_runs[i][0] == 0:
+                    results[i] = (first_runs[i], None)
+                    print_ready()
+        for i in idx:                       # (nothing else of this runner runs now; the next stage may read its files)
+            if results[i] is None:
+                second = run_one(cmds[i])
+                t_sum += second[2]
+                results[i] = (first_runs[i], second)
+                again.append(name_of(cmds[i]))
+                if second[0] != 0:
+                    failed.append(name_of(cmds[i]))
+                print_ready()
+        print_ready()
+    print("[%s] the tests took %.1f s, %.1f s of programs, %d at a time" % (key, time.time() - t_start, t_sum, max(1, jobs)),
+          flush=True)
+    return [name_of(c) for c in cmds if name_of(c) in failed], again
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--target", default="all", choices=sorted(TARGETS) + ["all"])
@@ -534,6 +614,8 @@ def main():
     ap.add_argument("--clean", action="store_true")
     ap.add_argument("--test", action="store_true",
                     help="run pad_test, core_test, binding_test, collision_test and map_test (runnable targets)")
+    ap.add_argument("--test-jobs", type=int, default=4, metavar="N", help="--test: run N test programs at a time inside "
+                    "each of the three stages (default 4)")
     ap.add_argument("--gdi", default=os.environ.get("SA1_TEST_GDI", ""))
     ap.add_argument("--libsa1", default="", help="libsa1's folder (default: LIBSA1_ROOT, ../libsa1 or "
                     "../LibSA1/libsa1)")
@@ -625,15 +707,11 @@ def build_and_test(args, keys):
             elif "windows" in triple:
                 print("[%s] the Lua tests are skipped: Garry's Mod's lua_shared.dll is not at %s (set GMOD_LUA_SHARED "
                       "or GARRYSMOD_DIR, or pass --gmod)" % (k, GMOD_LUA_SHARED or "(Garry's Mod not found)"))
-            failed = []
-            for cmd in cmds:
-                print("[%s] %s" % (k, " ".join('"%s"' % c if " " in c else c for c in cmd)), flush=True)
-                r = subprocess.run(cmd)
-                if r.returncode != 0:
-                    ok = False
-                    failed.append(os.path.basename(cmd[1] if cmd[0] == host else cmd[0]))
-            print("[%s] %d test program(s) run, %s" % (k, len(cmds), ("FAILED: " + ", ".join(failed)) if failed
-                                                       else "all passed"), flush=True)
+            failed, again = run_test_programs(k, cmds, host, args.test_jobs)
+            ok = ok and not failed
+            print("[%s] %d test program(s) run, %s%s" % (k, len(cmds), ("FAILED: " + ", ".join(failed)) if failed
+                                                         else "all passed", "; run again alone: " + ", ".join(again)
+                                                         if again else ""), flush=True)
     return 0 if ok else 1
 
 

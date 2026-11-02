@@ -380,7 +380,7 @@ end
 local END_TEXT = { [1] = "it played to its end", [2] = "the game went back to its music", [3] = "the game stopped its music",
                    [4] = "new background music", [5] = "another jingle", [6] = "its character went", [7] = "its file could "
                    .. "not be read" }
-local HOLD_TEXT = { jingle = "jingle", stopped = "music stop", restart = "restart" }
+local HOLD_TEXT = { jingle = "jingle", stopped = "music stop", restart = "restart", charselect = "Character Select" }
 
 local function hold_log(why, was, ms, mode)
     if P.current == nil then return end                    -- nothing of the jukebox plays: nothing held
@@ -393,6 +393,10 @@ local function hold_log(why, was, ms, mode)
         log("%s: the game stopped its music (a drown); it waits until the character is back", verb)
     elseif why == "restart" then
         log("%s until the character respawns (the game asked for the restart)", verb)
+    elseif why == "charselect" then
+        log("paused for Character Select")
+    elseif was == "charselect" then
+        log("back after Character Select")
     else
         local how = ms and was == "jingle" and END_TEXT[tonumber(ms.last_end) or 0] or nil
         log("back after the game's %s%s", HOLD_TEXT[was] or "music", how and (" (" .. how .. ")") or "")
@@ -412,14 +416,58 @@ function P.HoldStep(now, mode)
     P.music = ms
     local why = J.HoldReason(ms, P.respawnHold)
     if mode == J.HOLD_KEEP then why = nil end
+    if P.selectHold then why = "charselect" end
     local dt = P.holdT and math.Clamp(now - P.holdT, 0, 0.25) or 0
     P.holdT = now
-    P.jgain = J.HoldGain(P.jgain, why ~= nil, dt)
+    if why ~= "charselect" then P.jgain = J.HoldGain(P.jgain, why ~= nil, dt) end
     if why ~= P.holdWhy then
         hold_log(why, P.holdWhy, ms, mode)
         P.holdWhy = why
     end
+    -- Character Select's own music plays on channel 1: the engine's hold and this factor are for every channel, so its hold is
+    -- the personal channel's own pause (P.SelectPlay), and the jingle's fade stays where it was
+    if why == "charselect" then return 1, false end
     return J.HoldApply(mode, P.jgain)
+end
+
+-- 0.9.8 Character Select (feat/cl_charselect.lua; sadc docs/research/charsel098.md 6.5, gsa1_090_charselect.md review RC2): the
+-- screen's music on channel 1, 2D, looped, at the music volume - the one source of it whatever gsa1_sound_bgm says. The personal
+-- channel pauses where it is, the game's music is silenced (update below: gsa1.AudioDuck(0, false)); P.SelectStop puts both back.
+P.CH_SELECT = 1
+P.selectHold, P.selectPaused = false, false
+function P.SelectPlay(music)
+    local ok, why = P.Ready()
+    if not ok then return false, why end
+    local c = GSA1.cv or {}
+    local vol = (c.snd_master and c.snd_master:GetFloat() or 1) * (c.snd_music and c.snd_music:GetFloat() or 1)
+    local t0 = SysTime()
+    gsa1.JukeboxVolume(P.CH_SELECT, math.Clamp(vol, 0, 1))
+    local res, err = gsa1.JukeboxPlay(P.CH_SELECT, music, 0, "forever", 1, 0, 0)
+    prof(t0)
+    if not res then
+        local m = tostring(err or "the module refused it")
+        log("Character Select's music %s refused: %s", tostring(music), m)
+        return false, m
+    end
+    P.used, P.selectHold = true, true
+    if P.current ~= nil and not P.paused then
+        P.Pause(true)
+        P.selectPaused = true
+    end
+    return true
+end
+
+-- ends channel 1 with a short fade; the personal channel goes on where it was, if this paused it
+function P.SelectStop(fade)
+    if not P.selectHold then return false end
+    if have() then gsa1.JukeboxStop(P.CH_SELECT, math.Clamp(tonumber(fade) or 0.3, 0, 10)) end
+    P.selectHold = false
+    P.quietUntil = SysTime() + 2                -- (the Think hook goes on until the game's music is back)
+    if P.selectPaused then
+        P.selectPaused = false
+        P.Pause(false)
+    end
+    return true
 end
 
 -- the game asked for the restart (a death): the jukebox waits for the respawn (review R4.4: the game's music comes back
@@ -459,8 +507,8 @@ local function update(now)
     if gsa1.AudioDuck then
         -- held for a jingle the jukebox still counts as playing: the game's own music stays silenced
         local playing = n > 0 or (P.holdWhy ~= nil and P.current ~= nil and not P.paused and not paused)
-        local want = (cv.duck:GetBool() and playing) and 0 or 1
-        local dj = cv.duck_jingles:GetBool()
+        local want = ((cv.duck:GetBool() and playing) or P.selectHold) and 0 or 1
+        local dj = not P.selectHold and cv.duck_jingles:GetBool()
         if want ~= P.duckGain or (want < 1 and (dj ~= P.duckJingles or now >= P.duckAgain)) then
             gsa1.AudioDuck(want, dj)
             if want ~= P.duckGain then
@@ -489,7 +537,7 @@ local function think()
             say("jukebox: %s", tostring(msg))
         end
     end
-    if P.current ~= nil or P.duckGain < 1 or now < P.quietUntil then
+    if P.current ~= nil or P.duckGain < 1 or now < P.quietUntil or P.selectHold then
         local t0 = SysTime()
         update(now)
         if P.current ~= nil and now >= P.nextState then

@@ -9,12 +9,16 @@
 -- range costs one move). Shapes: a brush entity's model ("*N") was built with the map (cl_module.lua: only the solid
 -- brush entity classes); a prop's comes from its physics model (the .phy next to the .mdl, read through Garry's
 -- Mod's file system and cleaned like brushes by the module), or its collision box for SOLID_BBOX entities.
+-- 0.9.8 (gsa1_096_plan.md 6.5 task 5): a look around also goes around at most 4 followers far from you and from each other
+-- (GSA1.Followers.FarFoci, feat/cl_follower.lua), one look every 0.25 s while there are such; the module's commit puts the
+-- nearest to ANY character into libsa1. With no character of yours cl_follower.lua runs GSA1.MoversThink(nil, now) itself.
 GSA1 = GSA1 or {}
 GSA1.Movers = GSA1.Movers or { list = {}, missing = {}, nextScan = 0 }
 local M = GSA1.Movers
 
 local SCAN_INTERVAL = 0.2       -- seconds between looks around
 local SCAN_RANGE = 2600         -- Hammer units (the module's own range is 2400 from a chunk's sphere)
+local SCAN_FAR_INTERVAL, FAR_APART, FAR_FOCI = 0.25, 1200, 4     -- 0.9.8: followers far from you (s, Hammer units, at most)
 local NEW_SHAPES_PER_FRAME = 2
 local SOLID_BBOX, SOLID_OBB, SOLID_OBB_YAW, SOLID_VPHYSICS = 2, 3, 4, 6
 local FSOLID_TRIGGER = 0x8
@@ -100,19 +104,28 @@ local function is_solid(e, ply)
     return true
 end
 
--- the entities near pos -> M.list ({ent, idx, key})
-local function scan(pos, ply)
-    local budget = { n = NEW_SHAPES_PER_FRAME }
-    local list, seen = {}, {}
-    for _, e in ipairs(ents.FindInSphere(pos, SCAN_RANGE)) do
+local function look(at, ply, budget, list, seen)
+    for _, e in ipairs(ents.FindInSphere(at, SCAN_RANGE)) do
         if wanted(e, ply) then
-            local key = shape_key(e, budget)
-            if key then
-                local idx = e:EntIndex()
-                list[#list + 1] = { ent = e, idx = idx, key = key }
-                seen[idx] = true
+            local idx = e:EntIndex()
+            if not seen[idx] then
+                local key = shape_key(e, budget)
+                if key then
+                    list[#list + 1] = { ent = e, idx = idx, key = key }
+                    seen[idx] = true
+                end
             end
         end
+    end
+end
+
+-- the entities near pos and the foci (0.9.8: nil, or a list of positions) -> M.list ({ent, idx, key})
+local function scan(pos, ply, foci)
+    local budget = { n = NEW_SHAPES_PER_FRAME }
+    local list, seen = {}, {}
+    if pos then look(pos, ply, budget, list, seen) end
+    if foci then
+        for _, p in ipairs(foci) do look(p, ply, budget, list, seen) end
     end
     for _, it in ipairs(M.list) do
         if not seen[it.idx] then gsa1.MoverForget(it.idx) end
@@ -126,8 +139,11 @@ function GSA1.MoversThink(C, now)
     local t0 = SysTime()
     local ply = LocalPlayer()
     if now >= M.nextScan then
-        M.nextScan = now + SCAN_INTERVAL
-        scan(C.drawPos, ply)
+        local Fo = GSA1.Followers
+        local foci = Fo and Fo.FarFoci and Fo.FarFoci(C, FAR_APART, FAR_FOCI) or nil
+        local far = foci ~= nil and foci[1] ~= nil
+        M.nextScan = now + (far and SCAN_FAR_INTERVAL or SCAN_INTERVAL)
+        scan(C and C.drawPos or nil, ply, far and foci or nil)
     end
     for _, it in ipairs(M.list) do
         local e = it.ent

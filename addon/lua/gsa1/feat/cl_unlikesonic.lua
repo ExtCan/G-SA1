@@ -28,7 +28,7 @@ function U.Go()
     local made = 0
     if GSA1.SpawnFollower then
         timer.Create("gsa1_unlikesonic", 0.05, U.MAX_FOLLOWERS, function()
-            local ok, more = pcall(GSA1.SpawnFollower, "knuckles", { ignore_cap = true })
+            local ok, more = pcall(GSA1.SpawnFollower, "knuckles", { ignore_cap = true, silent = true, objects = 0, why = "egg" })
             if ok and more == false then ok = false end
             if ok then made = made + 1 end
             if not ok or not GSA1.SpawnFollower then timer.Remove("gsa1_unlikesonic") end

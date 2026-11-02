@@ -53,6 +53,9 @@ public:
     void forget(int32_t ent);
     // applies the selection around `focus` (the character; nullptr: everything parked) to libsa1
     void commit(sa1_context *ctx, const float *focus, double now);
+    // 0.9.8 (followers; sadc docs/research/gsa1_098_plan.md 2.4, follow096_gsa1.md 4.2): the same around n foci (every ticking
+    // character, the player's first): a chunk's distance is to its nearest focus. n 0: everything parked
+    void commit(sa1_context *ctx, const float *const *foci, size_t n, double now);
     // every libsa1 object removed, the entities forgotten (ctx may be null: the context is gone)
     void clear(sa1_context *ctx);
     MoverOptions opt;
