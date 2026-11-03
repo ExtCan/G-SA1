@@ -347,6 +347,7 @@ end
 function B.CanBoard(C, have)
     if not C then return false, "no character" end
     if C.puppet then return false, "another player's character" end
+    if C.form == "question" then return false, "the ? doesn't ride a board" end
     if C.kind == B.KIND_SUPER then return false, "Super Sonic doesn't ride a board" end
     if C.kind ~= B.KIND_SONIC and C.kind ~= B.KIND_TAILS then return false, "only Sonic and Tails ride a board" end
     if (C.form == "general" or C.superForm == true) and not (cv.super and cv.super:GetBool()) then

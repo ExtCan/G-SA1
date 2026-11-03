@@ -7,6 +7,10 @@
 --     (EyePos; a G-SA1 player: the root + the eyes' height), free weapons and item_* pickups (WorldSpaceCenter; never G-SA1's
 --     rings and boxes), what was just defeated (when I.killed[idx] appears for an entity the pool held: its last point, 5 s),
 --     then your character and your followers (drawPos + the kind's eyes: a table read, no engine Vector).
+--   * THE SECOND LIST (round 0.9.9, gsa1_look_props, gsa1_look_usable, both off by default: sadc docs/research/gsa1_099_plan.md 4.1 B6,
+--     small099.md 3.1; off: none of its code runs): L.ScanExtras, at most L.EXTRA_MAX interactables (the server's NW2 gsa1_use: the interact
+--     key's own rule, feat/sv_interact.lua) and physics props after the world's people and items, so they never crowd them out. Never
+--     G-SA1's own objects, a hazard or what the character carries.
 --   * THE CHOICE, once per looker per round: L.Choose (feat/sh_look.lua).
 --   * LINE OF SIGHT for the chosen target: util.TraceLine from the looker's eyes (MASK_VISIBLE, its own entity, the target and
 --     the player filtered), at most every 0.25 s per looker and 60 a second in all, round robin (100 lookers: each about every
@@ -30,6 +34,7 @@ local L = GSA1.Look
 if not L then return end
 
 local CAT_DEFEATED, CAT_PEOPLE, CAT_HOSTILE, CAT_ITEM = L.CAT_DEFEATED, L.CAT_PEOPLE, L.CAT_HOSTILE, L.CAT_ITEM
+local CAT_USABLE, CAT_PROP = L.CAT_USABLE, L.CAT_PROP
 
 local cv = {
     look       = GSA1.ConVar("gsa1_look", 1, "Heads turn to look at: 0 = only what the game looks at, 1 = also Garry's Mod "
@@ -37,6 +42,9 @@ local cv = {
     people     = GSA1.ConVar("gsa1_look_people", 1, "Heads turn to friendly and neutral NPCs and other players", 0, 1),
     hostile    = GSA1.ConVar("gsa1_look_hostile", 0, "Heads turn to hostile NPCs too (the game never looks at enemies)", 0, 1),
     items      = GSA1.ConVar("gsa1_look_items", 1, "Heads turn to items lying near", 0, 1),
+    props      = GSA1.ConVar("gsa1_look_props", 0, "Heads turn to physics props near (never G-SA1's own objects)", 0, 1),
+    usable     = GSA1.ConVar("gsa1_look_usable", 0, "Heads turn to what the interact key can use: doors, buttons, vehicles, "
+        .. "scripted entities with a Use (never G-SA1's own objects)", 0, 1),
     defeated   = GSA1.ConVar("gsa1_look_defeated", 1, "Heads turn to what you just defeated, for 5 seconds", 0, 1),
     range      = GSA1.ConVar("gsa1_look_range", 120, "How near a thing must be for a head to turn to it (Hammer units; items "
         .. "and what you defeated 40 more)", 40, 400),
@@ -67,7 +75,9 @@ L.pool, L.spare, L.npool, L.nall = {}, {}, 0, 0 -- pool[1..nall]: every sampled 
 L.byKey, L.free = {}, {}
 L.round, L.poolTime, L.nextRound = 0, 0, 0
 L.cursor, L.traceTokens, L.traceUsed, L.traceWindow, L.lastFrame = 0, 0, 0, 0, nil
-L.o = L.SetOptions({}, 120, true, false, true, true)
+L.o = L.SetOptions({}, 120, true, false, true, true, false, false)
+L.nextra, L.extraCursor = 0, 0
+L.extraClass = {}      -- [class] = false: never an interactable or a prop (a class-level fact: person, item, weapon, ours, a hazard)
 L.stats = { frames = 0, rounds = 0, traces = 0, sent = 0, choose_s = 0, radius = 0 }
 L.nextLine = 0
 L.eyes = {}
@@ -118,7 +128,7 @@ local function take(key)
     else
         c = {}
     end
-    c.key, c.t, c.till, c.npc, c.follower = key, nil, nil, false, false
+    c.key, c.t, c.till, c.npc, c.follower, c.extra, c.lookedRound = key, nil, nil, false, false, false, nil
     L.byKey[key] = c
     return c
 end
@@ -193,6 +203,87 @@ local function note_defeated(I, now)
     end
 end
 
+-- 0.9.9: interactables and physics props (off: none of this runs, 0.9.8's scan). The second list of the pool, at most L.EXTRA_MAX
+-- after the world's people and items, before the characters. Where they come from: one small sphere per round, around the eyes of the
+-- next looker that chooses (radius: their own reach, range + 40), so what is found is within a head's reach by construction and a map
+-- with hundreds of props costs what lies within that sphere. A kept one is read again every L.EXTRA_REFRESH-th round (one Vector), a
+-- targeted one every round. The garbage: the sphere's table, one Vector per new or refreshed one.
+local extra_at = Vector(0, 0, 0)
+local function extra_is(e, cls, idx, o, I)
+    local known = L.extraClass[cls]
+    if known == false then return nil end
+    if known == nil then
+        if e.GSA1Object or L.IsOurClass(cls) or L.IsItemClass(cls) or e:IsNPC() or (e.IsNextBot ~= nil and e:IsNextBot()) or e:IsPlayer()
+           or e:IsWeapon() or (I and I.HAZARDS and I.HAZARDS[cls]) then
+            L.extraClass[cls] = false
+            return nil
+        end
+        L.extraClass[cls] = true
+    end
+    if e.IsDormant and e:IsDormant() then return nil end
+    if I and I.held and I.held.idx == idx then return nil end   -- what the character carries
+    if o.usable and e:GetNW2Bool("gsa1_use", false) then return CAT_USABLE end
+    if o.props and e:GetMoveType() == MOVETYPE_VPHYSICS and not e:IsVehicle() then return CAT_PROP end
+    return nil
+end
+
+local function next_chooser(o)
+    local n = L.nlookers
+    for _ = 1, n do
+        L.extraCursor = L.extraCursor % n + 1
+        local l = L.lookers[L.extraCursor]
+        if not l.refused and not l.dead and not l.held and (not l.follower or o.followers) then return l end
+    end
+    return nil
+end
+
+function L.ScanExtras(C, n, now, ply, I, found)
+    local o, round, byKey = L.o, L.round, L.byKey
+    local first, max = n, n + L.EXTRA_MAX
+    -- those kept: still there, the option still on, not expired
+    for i = 1, L.nall do
+        local c = L.pool[i]
+        if c.extra and c.till > now and n < max and IsValid(c.ent) and ((c.cat == CAT_PROP and o.props) or (c.cat == CAT_USABLE and o.usable)) then
+            if c.lookedRound == round - 1 or (c.key + round) % L.EXTRA_REFRESH == 0 then
+                local v = c.ent:WorldSpaceCenter()
+                sample(c, v.x, v.y, v.z, now)
+            end
+            n = put(c, n + 1)
+        end
+    end
+    local l = next_chooser(o)
+    if l then
+        -- (one looker: the main scan's table is that sphere, no second engine call)
+        if L.nlookers > 1 then
+            extra_at:SetUnpacked(l.x, l.y, l.z)
+            found = ents.FindInSphere(extra_at, o.range + L.ITEM_EXTRA)
+        end
+        local keep = math.min(L.EXTRA_KEEP_MAX, L.ROUND * (L.nlookers + 2))
+        for i = 1, #found do
+            local e = found[i]
+            local idx = e:EntIndex()
+            if idx > 0 and e ~= ply then
+                local c = byKey[idx]
+                if c and c.round == round then
+                    if c.extra then c.till = now + keep end
+                elseif n < max then
+                    local cls = e:GetClass()
+                    local cat = extra_is(e, cls, idx, o, I)
+                    if cat then
+                        c = take(idx)
+                        c.cat, c.word, c.name, c.ent, c.npc, c.extra, c.till = cat, cat == CAT_PROP and "prop" or "usable", cls, e, false, true, now + keep
+                        local v = e:WorldSpaceCenter()
+                        sample(c, v.x, v.y, v.z, now)
+                        n = put(c, n + 1)
+                    end
+                end
+            end
+        end
+    end
+    L.nextra = n - first
+    return n
+end
+
 -- the candidates of this round: L.pool[1..L.nall], the first L.npool are chosen from (the rest: leaders only)
 function L.Scan(C, radius, now)
     local I = GSA1.Interact
@@ -211,6 +302,14 @@ function L.Scan(C, radius, now)
         local e = found[i]
         local c = L.byKey[e:EntIndex()]
         if not (c and c.round == L.round) then n = scan_entity(e, ply, I, killed, now, n) end
+    end
+    -- 0.9.9: the second list (nothing at all with both options off)
+    local o = L.o
+    if o.props or o.usable then
+        n = L.ScanExtras(C, n, now, ply, I, found)
+        max = max + L.nextra
+    else
+        L.nextra = 0
     end
     -- the characters: table reads (followers last: they never crowd out the world's things)
     local Fo = GSA1.Followers
@@ -260,7 +359,8 @@ end
 
 -- one round --------------------------------------------------------------------------------------------------------------------
 local function read_options(o)
-    L.SetOptions(o, cv.range:GetFloat(), cv.people:GetBool(), cv.hostile:GetBool(), cv.items:GetBool(), cv.defeated:GetBool())
+    L.SetOptions(o, cv.range:GetFloat(), cv.people:GetBool(), cv.hostile:GetBool(), cv.items:GetBool(), cv.defeated:GetBool(),
+        cv.props:GetBool(), cv.usable:GetBool())
     o.on, o.followers, o.emotes = cv.look:GetBool(), cv.followers:GetBool(), cv.emotes:GetBool()
     o.camera_key, o.camera_all = cv.camera_key:GetInt(), cv.camera_all:GetBool()
 end
@@ -338,6 +438,7 @@ function L.Round(C, now)
             local lk = l.leaderKey
             l.leaderEntry = lk and byKey[lk] or nil
             local t = L.Choose(l, pool, npool, o, now)
+            if t then t.lookedRound = L.round end
             if t ~= l.target then
                 l.target = t
                 if not t or l.losKey ~= t.key then l.losKey, l.nextTrace = nil, 0 end
@@ -485,22 +586,28 @@ end
 function L.LogLine(now)
     local st = L.stats
     local secs = 10
-    log("look", "head look: lookers %d, candidates %d (radius %.0f HU); choosing %.4f ms a round, %.1f traces and %.1f looks "
-        .. "sent a second; garbage per frame: %s", L.nlookers, L.npool, st.radius, st.rounds > 0 and st.choose_s * 1000 / st.rounds
-        or 0, st.traces / secs, st.sent / secs, L.HooksField(st.frames))
+    log("look", "head look: lookers %d, candidates %d (%d props and things to use; radius %.0f HU); choosing %.4f ms a round, %.1f traces "
+        .. "and %.1f looks sent a second; garbage per frame: %s", L.nlookers, L.npool, L.nextra, st.radius, st.rounds > 0 and st.choose_s
+        * 1000 / st.rounds or 0, st.traces / secs, st.sent / secs, L.HooksField(st.frames))
     st.frames, st.rounds, st.traces, st.sent, st.choose_s = 0, 0, 0, 0, 0
 end
 
 function L.LogSettings()
     local function v(c) return c and c:GetString() or "?" end
     log("settings", "head look: heads turn %s, people %s, hostile %s, items %s, defeated %s, range %s, emotes %s, followers %s, "
-        .. "camera key %s (followers too %s), Super Sonic %s", v(cv.look), v(cv.people), v(cv.hostile), v(cv.items),
-        v(cv.defeated), v(cv.range), v(cv.emotes), v(cv.followers), v(cv.camera_key), v(cv.camera_all), v(cv.super))
+        .. "camera key %s (followers too %s), Super Sonic %s, physics props %s, interactables %s", v(cv.look), v(cv.people), v(cv.hostile),
+        v(cv.items), v(cv.defeated), v(cv.range), v(cv.emotes), v(cv.followers), v(cv.camera_key), v(cv.camera_all), v(cv.super),
+        v(cv.props), v(cv.usable))
 end
 
 -- the hooks -------------------------------------------------------------------------------------------------------------------
 function L.Frame(C, now)
-    if not L.byId[C.id] then add_looker(C.id, false, C.kind, C) end
+    if not L.byId[C.id] then
+        local l = add_looker(C.id, false, C.kind, C)
+        -- 0.9.9 (gsa1_099_plan.md review R99.1): the question mark has no head. It stays a looker, refused as E-102 is, and gets no gsa1.Look:
+        -- L.Round places it and goes on choosing for its followers, and L.Send skips a refused looker
+        if C.question then l.refused = "the ? has no head" end
+    end
     L.stats.frames = L.stats.frames + 1
     if now >= L.nextRound then
         L.nextRound = now + L.ROUND
@@ -522,7 +629,7 @@ end)
 -- Super Sonic's head: libsa1 knows which worlds can take it (kind 8 and a Sonic created super-capable; a plain Sonic's world
 -- answers "unsupported": nothing to say about that)
 function L.ApplySuper(C, on)
-    if not C or (C.kind ~= 8 and C.kind ~= 0) or not have() or not gsa1.SetCharOption or not gsa1.COPT_SUPER_LOOK then
+    if not C or C.question or (C.kind ~= 8 and C.kind ~= 0) or not have() or not gsa1.SetCharOption or not gsa1.COPT_SUPER_LOOK then
         return false
     end
     local ok, err, code = gsa1.SetCharOption(C.id, gsa1.COPT_SUPER_LOOK, on and 1 or 0)
@@ -582,8 +689,9 @@ end)
 -- the settings ------------------------------------------------------------------------------------------------------------------
 for _, name in ipairs({ "gsa1_look", "gsa1_look_people", "gsa1_look_hostile", "gsa1_look_items", "gsa1_look_defeated",
                         "gsa1_look_range", "gsa1_look_emotes", "gsa1_look_followers", "gsa1_look_camera_key",
-                        "gsa1_look_camera_all", "gsa1_look_super" }) do
-    cvars.AddChangeCallback(name, function() L.LogSettings() end, "gsa1_look")
+                        "gsa1_look_camera_all", "gsa1_look_super", "gsa1_look_props", "gsa1_look_usable" }) do
+    -- 0.9.9: one line a second after the last change, not one per slider tick (the owner's log: 34 lines in 0.9 s)
+    cvars.AddChangeCallback(name, function() timer.Create("gsa1_look_settings", 1, 1, L.LogSettings) end, "gsa1_look")
 end
 cvars.AddChangeCallback("gsa1_look_super", function(_, _, new)
     if GSA1.Char then L.ApplySuper(GSA1.Char, tonumber(new) ~= 0) end
@@ -605,7 +713,8 @@ function L.StatusLines()
     end
     local title = C.title or "Your character"
     if l.refused then
-        lines[1] = C.kind == 6 and "E-102 never turns his head (as the game)." or (title .. ": " .. l.refused)
+        lines[1] = C.question and "The ? has no head." or (C.kind == 6 and "E-102 never turns his head (as the game)."
+            or (title .. ": " .. l.refused))
         return lines
     end
     local st = gsa1.LookState and gsa1.LookState(C.id, stateOut) or nil
@@ -680,15 +789,19 @@ function L.BuildPage(panel)
     live_label(panel, L.StatusLines)
     choice_combo(panel, "Heads turn to look at", "gsa1_look", { { "only what the game looks at", 0 },
         { "also Garry's Mod things", 1 } })
-    panel:ControlHelp("Garry's Mod things are people, items and what you defeated: the game's characters look at people who "
-        .. "talk to them, upgrade items and freed animals. The camera key below works either way.")
+    panel:ControlHelp("Garry's Mod things are people, items, what you defeated and the two kinds of things you can tick below: the "
+        .. "game's characters look at people who talk to them, upgrade items and freed animals. The camera key below works either way.")
     panel:CheckBox("Friendly and neutral NPCs and other players", "gsa1_look_people")
     panel:CheckBox("Hostile NPCs too (the game never looks at enemies)", "gsa1_look_hostile")
     panel:CheckBox("Items lying near", "gsa1_look_items")
     panel:ControlHelp("Weapons and pickups. Never G-SA1's rings and item boxes: the game does not look at them either.")
+    panel:CheckBox("Physics props", "gsa1_look_props")
+    panel:ControlHelp("Anything the physics moves: props, ragdolls, balloons. Not in the game. Not the prop you carry, not vehicles.")
+    panel:CheckBox("Things you can use (doors, buttons, vehicles)", "gsa1_look_usable")
+    panel:ControlHelp("What the interact key can use right now. Not in the game. Never G-SA1's own objects.")
     panel:CheckBox("What you just defeated, for 5 seconds", "gsa1_look_defeated")
     panel:NumSlider("How near (Hammer units)", "gsa1_look_range", 40, 400, 0)
-    panel:ControlHelp("The game: 120 for people. Items and what you defeated: 40 more. Only within 100 degrees to either side "
+    panel:ControlHelp("The game: 120 for people. Items, props, things to use and what you defeated: 40 more. Only within 100 degrees to either side "
         .. "of where the character faces, and only what it can see.")
     panel:CheckBox("Also while an emote plays", "gsa1_look_emotes")
     choice_combo(panel, "Followers look at", "gsa1_look_followers", { { "only what the game makes them", 0 },

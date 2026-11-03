@@ -40,6 +40,105 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.9 changes: followers that keep up and stand apart, Eggman, Tikal and the "?"
+
+From the owner's test of 0.9.8. **None of this has been seen in the real game yet**: every test here runs against a stand-in for Garry's Mod and against Dreamcast references. Nothing planned was dropped.
+
+* **Followers can keep up.** Q menu > Options > G-SA1 > **Followers**, a slider, "Speed when catching up". It starts at 1, the game's own speed, where no kind keeps up with Sonic at full speed. Above 1, a follower near you runs at the game's speed, and one behind you may run up to that many times its own speed until it has caught up. **A plain multiplier failed in testing** (Knuckles lurched between almost stopped and very fast, and E-102 circled a standing leader for ever), so it only applies while a follower is behind. To stay with Sonic at full speed: Sonic 1.2, Knuckles 1.3, Tails 1.5, E-102 2.5, Big 3.5, Amy 4. Slow characters' legs move very fast at those values. Jump height, drowning and timers stay the game's.
+* **Followers stand apart.** Each has its own spot around you, and a slider, "Room between followers", sets how far apart. They stop there by the game's own steering. One follower alone is exactly as before, and at 0 they stack as before. While running they can still pass through each other for a moment, because each is alone in its own world. A spot beyond a ledge makes a follower fall once.
+* **Followers emote with you** (a box, on). Play a slot of the wheel, and each follower plays that page and slot of its own wheel. An empty slot does nothing and says nothing. A follower on its way joins when it arrives, and your emote ending ends theirs. Faces don't go with it. As Eggman, Tikal or "?" you have no wheel, so nothing starts.
+* **Heads turn to more things.** The Head look page has two new boxes, both off: "Physics props" and "Things you can use". A person always wins over a prop, and rings, Item Boxes and Board boxes are never looked at. Static props are part of the map, so heads can never turn to those.
+* **The "?" on Character Select is a clean gold.** The disc's own code draws a texture with the words "Player Select" as a reflection on it, so the small letters repeat over every bend. The texture coordinates and clamping are right, so this isn't a tiling fault as such. The disc has an unused gold texture in the same archive, which is now the default. The game's own look is one choice away on the Character page.
+* **Dr. Eggman and Tikal are playable**, on the Character page, in quick spawn and in the menubar. They're as broken as the game's code is, and nothing is repaired: a hit does nothing, Eggman has no jump pose and no action, Tikal uses one run motion for everything, and their lives icon is Sonic's. When their air runs out they just stand there, then come back about 4 seconds later because the game asks for its restart. On a real Dreamcast either one hangs before the stage loads, so this was never reachable there without a cheat. **The debug button** works on both: H on the keyboard, Y on the controller, and both can be changed. The stick moves them with no ground and no gravity, hold the button with the stick forward or back to fly up or down, jump leaves it, and action goes back to your spawn point (on a real Dreamcast that button crashes the game). They have no emotes, faces, head look or boards and can't be followers, but a follower can follow them.
+* **"?" is its own joke character.** A spinning gold question mark, its foot on the ground, with Super Sonic's (Vs. Perfect Chaos) moves and sounds and no golden Sonic or aura. It has its own rings, drain, water and spin options and shares nothing with either Super Sonic. Picking "?" on Character Select now gives you this character; a setting points that slot back at Super Sonic, and both Super Sonics stay on the Character page. A saved "played last" setting moves over once, and a later choice stays.
+* **The log:** dragging a slider writes one line about a second after you let go, not one per tick.
+* **Game code:** Eggman's 11 functions are decompiled (8 matching, 3 functionally checked); libsa1 is now 0.5.0.
+
+**How it was checked:** all 78 strict replays stay bit-exact, four of them new for Eggman and Tikal against the Dreamcast's own code; 84 test programs pass. The "?" world matched plain Super Sonic on every state, event and arena byte over 2,000 pairs. An independent check passed with no fails.
+
+**Known limits:** followers still don't collide with each other. A "?" or Eggman or Tikal can't be a follower. Calling followers back as these three is the Followers page's button, since there's no wheel. What the server's player and your followers do when you fly far off with the debug button isn't known yet.
+
+### The owner checklist
+
+**Followers keep up** (Options > G-SA1 > Followers)
+
+1. "Speed when catching up" at 1: run with Sonic on a long flat stretch with a Sonic follower: it falls behind and drops in from above every few seconds (the game's own). Set 1.5: it stays a little behind you, no drops. Set 4 with Amy or Big as well: they stay too, with very fast legs: **say whether that looks right.** While the slider is not 1, a speed-up box does nothing for a follower.
+2. Stop at once at speed 4: followers stop near you without running circles; E-102 too.
+3. Run into a wall at speed 4 with a follower far behind: it stops at the wall.
+
+**Followers stand apart**
+
+4. Spawn three of one kind and stand still: they stand apart around you, none inside another, none inside you. Slider at 0: all on one spot, as before. One follower alone: as before.
+5. In a corridor and beside a wall: followers beside you, some near the wall; they do not go through it and do not hop all the time. On a roof's edge some may fall once and drop in, and then stay by you. **Say if that happens too often.**
+6. A Board On box with Tails followers: they walk to the board and get on.
+7. The "& Knuckles" secret: a big ring of Knuckles instead of a clump. **What fps?** (0.9.8: 25-26.) With the room slider at 0 the secret's Knuckles clump too.
+
+**Followers emote with you**
+
+8. Open the wheel, play the top slot with a Tails and a Knuckles follower standing near: each plays the top of its own menu, and it ends when you move or your emote ends. Change Tails' top slot on the Emote wheel page: Tails plays that.
+9. Play a slot that is empty on a follower's wheel: nothing happens to that follower and nothing complains.
+10. Run, stop, emote at once: the followers arrive, then join in.
+11. A pose held with a follower being hit, or Call them back: that one stops; the rest go on.
+12. Switch character during an emote: everyone stops and they come along.
+13. Big's fishing camera and Character Select with followers on these settings: as before.
+
+**Heads** (Options > G-SA1 > Head look)
+
+14. Two new boxes, both off: "Physics props" and "Things you can use". Both off: heads do what they did in 0.9.8.
+15. Tick "Physics props", spawn a barrel, walk past it: Tails, Knuckles or Amy turn their heads to it; Sonic moves only his eyes while standing and his head while running. E-102 never, Big only his eyes.
+16. A friendly NPC next to the barrel wins. Pick the barrel up: the head stops looking at it.
+17. Tick "Things you can use", stand near a door or a button you can press with the interact key, or a vehicle: the head turns to it. A door that only opens by itself is not looked at. A static prop that is part of the map is never looked at.
+18. Rings, Item Boxes and Board boxes are never looked at. Your followers do all this too.
+19. On a map with many props, note the fps with the boxes on and off, and send the log (its "head look" line says how many it holds: never more than 96).
+
+**The "?" on Character Select**
+
+20. Go to the "?": one smooth gold reflection with no small repeating pattern, on Character Select and as the character. "Player Select" in the circle still says that. **If it still repeats, say so.**
+21. Character page, "The question mark's texture", second choice: white with yellow streaks, the words "Player Select" as a reflection: what the game's own code picks.
+
+**Dr. Eggman and Tikal**
+
+22. Character page: "Dr. Eggman", "Tikal" and "?" in the list, in quick spawn and in the menubar. Each comes up where you stand. One hitch at the first draw of each is expected.
+23. As Eggman: run, jump. He has no jump pose: he stands while he flies. Action does nothing. That is the game's own. He has a few plain untextured parts: the model's own, so say if they look wrong.
+24. As Tikal: run, jump. The same run motion in the air. Action in the air: she stops and drops. The game's own.
+25. Press H (or Y on the controller): the debug button. The stick moves them with no ground and no gravity. Hold it with the stick forward: up. Jump: out, they fall. Both keys can be changed on the Character page.
+26. In debug, press action: back at your spawn point after a second. (On a Dreamcast this crashes. Say if you want it otherwise.)
+27. Get shot or hit by an NPC as either of them: nothing happens, no rings lost. The game's own. Die as a Garry's Mod player: Tikal stands still in her drop pose until she comes back; Eggman plays nothing at all and can even keep walking for those 2 seconds. The game's own.
+28. Walk into deep water as either: they walk on the bottom, and the air countdown runs with its music. When the air runs out they just stand there, no pose and no voice, and can still walk; about 4 seconds later they come back, because the game asks for its restart. The game's own. **Say if you want otherwise.**
+29. Their lives icon on the HUD is Sonic's. The game's own.
+30. Spawn a Tails follower as Tikal, then as Eggman: it follows. Eggman and Tikal cannot be followers: the page says why. With followers out as these two or "?", calling them back is the Followers page's button: there is no wheel to do it from. Fly far off with the debug button: what the server's player and the followers do there is unknown (UNVERIFIED): **say what you see.**
+
+**"?"**
+
+31. Character page: "?": a spinning gold "?" as tall as about one and a third Sonics, its foot on the ground, moving like Super Sonic: run, jump, homing, the air stop. No golden Sonic, no aura. Round shadow under it. With the sun shadow on: a "?" shaped shadow.
+32. Rings stay at 50 and it stays as it is. Tick "lose a ring every second": they drain, nothing else changes.
+33. Tick and untick Sonic's upgrades and every Super Sonic option as "?": it is not re-created, nothing changes. Press G: nothing. The wheel key says it has no emotes, and the Emote wheel page does not open on Super Sonic's list.
+34. Character Select's "?" slot gives you the "?" character. Set the slot to "The Super Sonic you played last": it gives the Super Sonic you last played. Restart Garry's Mod: your choice stays.
+35. Character Select's "?" and the character look the same; `gsa1_charselect_qmark` changes both, at once.
+
+**The log**
+
+36. Drag the head look's "How near", or a follower slider: one "settings" line about a second after you let go, not one per tick.
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_follower_speed` | 1 (1-4) | Followers: "Speed when catching up" |
+| `gsa1_follower_spacing` | 64 (0-160 HU) | Followers: "Room between followers" |
+| `gsa1_follower_emotes` | 1 | Followers: "Followers play the same slot of their own wheel when you play one from the emote wheel" |
+| `gsa1_look_props` | 0 | Head look: "Physics props" |
+| `gsa1_look_usable` | 0 | Head look: "Things you can use (doors, buttons, vehicles)" |
+| `gsa1_charselect_qmark` | 1 | Character: "The question mark's texture" |
+| `gsa1_charselect_super` | "question" | Character: "The ? slot plays" |
+| `gsa1_debug_button` | 1 | Character: "Eggman and Tikal: the game's debug button" |
+| `gsa1_debug_key` | 18 (H) | Character: a key binder and "No key" |
+| `gsa1_debug_pad` | 0x8000 (Y) | Character: a controller button |
+| `gsa1_question_rings` | 50 (0-99) | Character: "The ?: start with N rings" |
+| `gsa1_question_drain` | 0 | Character: "The ?: lose a ring every second" |
+| `gsa1_question_water` | 1 | Character: "The ?: runs on water" |
+| `gsa1_question_spin` | 1 | Character: "The ?: spins as on the character menu" |
+
 ## What 0.9.8 changes: followers, the fishing camera, the game's own Character Select
 
 The old 0.9.6 and 0.9.7 are one update now. **All of this is new and none of it has been tried in the real game yet**: every test so far runs against a stand-in for Garry's Mod and against Dreamcast references. Nothing planned was dropped.
@@ -49,7 +148,7 @@ The old 0.9.6 and 0.9.7 are one update now. **All of this is new and none of it 
 * **Boards.** When you get on a board as Sonic or Tails, your Sonic and Tails followers get on boards of their own, and off when you get off; their boards stay behind like yours. A follower that enters a Board On box walks to the box's board like you do, and a Board Off box takes it off. A Sonic follower rides whichever of the game's two boards its own world picks, so it may differ from yours. Knuckles, Amy, E-102 and Big followers stay on foot.
 * **Sounds.** A following Tails' own sound effects are silent, as in the game. Other followers sound from where they are, and their music never plays for you. A switch silences them all.
 * **Heads turn.** Your character and your followers turn their heads to friendly and neutral NPCs and players nearby, to items lying close, and for 5 seconds to what you defeated, with the game's own head code. A key (unbound until you pick one) makes them look at your camera, the Dreamcast's Z button. It's on the **Head look** page. As in the game: E-102 never turns his head, Big moves only his eyes, and Sonic standing still moves only his eyes.
-* **The "& Knuckles" secret** does its third part: 99 Knuckles followers, silent so the theme carries, with their game code on several CPU cores and far ones drawn more cheaply. Without any drawing, their game code took 7.85 ms per game step on 8 threads against 26.7 ms on one. How smooth it really is on your PC is only known from your test.
+* **The "& Knuckles" secret** does its third part: 99 Knuckles followers, silent so the theme carries, with their game code on several CPU cores and far ones drawn more cheaply. Without any drawing, their game code took 7.85 ms per game step on 8 threads against 26.7 ms on one. Measured on the owner's PC (gm_genesis, 3440 x 1440, the faster drawing off, 2026-11-02): 25 to 26 fps with all 99 following, 59 fps again once they had gone. G-SA1 took 21 to 24 ms of each frame: 13 to 14 ms drawing them, 3.7 to 4.6 ms their game code on 8 CPU threads. Your PC will differ.
 * **Big's fishing camera.** Hold the action key as Big: the view swings behind him with the game's own slow turn, and WASD moves the cursor relative to the screen. When the lure lands in water, the view flies to it in about a third of a second and stays about 60 HU from it, **and the line glows near the lure as on the Dreamcast**. Hold jump to reel in, or press R at once (the game's L + R): the view cuts behind Big and blends back to your camera. On dry ground it's only the aim. Options > **Camera**: As the game (the default), Lure only, or Off (exactly 0.9.5). The mouse does nothing while it shows, as in the game, and a check box lets it turn around the lure. **There are no fish in Garry's Mod yet**: cast, watch and reel in. In deep water the lure sinks and the game's camera sinks with it. The view stops at walls by G-SA1's own trace, not the game's camera collision.
 * **Character Select.** The C menu has a **Character Select** icon, and so do the menubar's G-SA1 menu, a key you can set, and Start on the controller. It opens the Dreamcast's own screen, run by the game's own code from your disc: the sky, the ring of spheres, the names, the character in the circle with its idle motion, "Choose Your Buddy!" playing. Left / Right turn the ring, and A plays the pose and voice. After the game's 5 seconds (or a second A) you're that character where you stood, with your ticked upgrades and your followers behind you. B goes back and Escape closes. The game's "Game / Instruction / Cancel" box is skipped unless you tick it. Your character gets no input and can be hurt while it's open. Q menu > Character still works. If the screen faults, a simple chooser with the same buttons takes over and the log says why.
 * **Faster drawing, off by default.** A new way to draw characters directly through the game's material system, for the 99 Knuckles. It's on the Rendering page. **It has not run in the real game, and the first time you turn it on it can end the game**; a guard then keeps it off and says why. Only nearby followers and your own character use it; far followers keep their cheap drawing.

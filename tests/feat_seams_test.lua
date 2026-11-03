@@ -66,6 +66,17 @@ check(n20 >= 18 and n20 <= 21, "the built-in state send: %d packets in 1 s (20 H
 check(#post >= 25 and post[#post].C == C and post[#post].st == C.state and post[#post].dt > 0,
     "the hook GSA1PostTick(C, state, dt) runs after every tick (%d times in 60 frames)", #post)
 
+-- round 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.6): after every feature file, in the autorun's order, W.ON_PLAYED holds the followers' hook once:
+-- cl_follower.lua loads before cl_wheel.lua, whose W.ON_PLAYED = W.ON_PLAYED or {} must keep it
+do
+    local W, Fo = GSA1.Wheel, GSA1.Followers
+    local n = 0
+    for _, h in ipairs(W.ON_PLAYED or {}) do
+        if h == Fo.emoteHook then n = n + 1 end
+    end
+    check(type(W.ON_PLAYED) == "table" and n == 1 and #W.ON_PLAYED == 1, "W.ON_PLAYED exists after all the feature files and holds the followers' hook once (%d of %d)", n, #(W.ON_PLAYED or {}))
+end
+
 -- 2. every seam is called and does what it says ------------------------------------------------------------------------
 -- GSA1.TickYaw: the stick's frame
 local yaw_calls = 0

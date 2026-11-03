@@ -156,6 +156,10 @@ end
 
 GSA1 = nil
 M.included = {}
+-- 0.9.9 (the plan's addendum A4): what Garry's Mod kept from 0.9.8: a saved "last", no marker yet
+local cookies = {}
+cookie = { GetNumber = function(k, d) return tonumber(cookies[k]) or d end, Set = function(k, v) cookies[k] = v end }
+M.cv("gsa1_charselect_super", "last")
 local ok_load, err_load = pcall(M.load, "autorun/gsa1_autorun.lua")
 local feat_errors = GSA1 and GSA1.FeatureFileErrors or {}
 check(ok_load and #feat_errors == 0, "the addon's client files load with the feature's two files (%s)",
@@ -191,6 +195,25 @@ local function count_log(word)
 end
 local function reset_calls()
     calls.play, calls.stop, calls.pause, calls.volume, calls.duck = {}, {}, {}, {}, {}
+end
+
+-- 0.9.9, addendum A4: the slot's default is the "?", and a saved "last" moves to it once ---------------------------------------------
+do
+    GSA1.LogFlush()
+    check(S.cv.super:GetString() == "question" and tonumber(cookies.gsa1_charselect_super_099) == 1, "the first load of this version: a saved \"last\" became \"question\", the marker is set")
+    check(string.find(M.files["gsa1/log.txt"] or "", "moved once to", 1, true) ~= nil, "... with one log line")
+    S.cv.super:SetString("last")
+    check(S.MigrateSlot() == false and S.cv.super:GetString() == "last", "a later choice of \"last\" stays: the marker holds")
+    cookies.gsa1_charselect_super_099 = nil
+    S.cv.super:SetString("supersonic")
+    check(S.MigrateSlot() == false and S.cv.super:GetString() == "supersonic" and tonumber(cookies.gsa1_charselect_super_099) == 1, "a saved Super Sonic stays, the marker is set")
+    cookies.gsa1_charselect_super_099 = nil
+    S.cv.super:SetString("question")
+    check(S.MigrateSlot() == false and S.cv.super:GetString() == "question" and tonumber(cookies.gsa1_charselect_super_099) == 1, "a new installation: \"question\" from the default")
+    cookies.gsa1_charselect_super_099 = nil
+    S.cv.super:SetString("last")
+    check(S.MigrateSlot() == true and S.cv.super:GetString() == "question" and S.MigrateSlot() == false, "the move runs once")
+    check(S.SlotTitle(6) == "?" and S.EntryName(6) == "question", "the slot gives the \"?\" by default")
 end
 
 -- 1. the C menu's icon (R98.13: at file scope, behind the guard) -----------------------------------------------------------------
@@ -410,6 +433,27 @@ pick_super("last", "supersonic_general")
 S.Open("test")
 check(S.st.slot == 6, "both Super Sonics: the first selection is slot 6")
 S.Close("test")
+-- 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.10, playable099.md 5.6, 7.4, addendum A4): the slot's 4th choice, its default; "?" is no Super Sonic:
+-- "last" never becomes it
+do
+    local before = S.cv.super_last:GetString()
+    check(S.ENTRY_SLOT.question == 6 and S.SlotOf("question") == 6 and S.EntryOf(6, "question", before) == "question", "the slot of \"?\" is 6, and the choice \"question\" plays it")
+    check(S.SlotTitle(6) == "Super Sonic", "the slot's title on \"last\"")
+    pick_super("question", "question")
+    check(S.SlotTitle(6) == "?" and GSA1.Char.question == true, "the slot's title on the choice is \"?\"; the character has C.question")
+    check(S.cv.super_last:GetString() == before, "being \"?\" does not change the last Super Sonic (%s)", S.cv.super_last:GetString())
+    S.Open("test")
+    check(S.st.slot == 6, "\"?\": the first selection is slot 6")
+    S.Close("test")
+    pick_super("last", before)
+    check(S.SuperEntry("last", "question") == S.SUPER_FIRST, "\"last\" never gives \"question\", whatever its memory says")
+    S.cv.super:SetString("last")
+    GSA1.Spawn("tikal")
+    check(GSA1.Char and GSA1.Char.kind == 4, "Tikal comes up")
+    S.Open("test")
+    check(S.st.slot == 0, "Dr. Eggman and Tikal are not on the game's ring: as Tikal the screen starts on Sonic (slot %s)", tostring(S.st.slot))
+    S.Close("test")
+end
 GSA1.Spawn("supersonic")
 frames(1)
 check(S.cv.super_last:GetString() == "supersonic", "a Super Sonic from the Options page counts as the last one played")
@@ -680,13 +724,14 @@ do
         end
     end
     local want = { "gsa1_charselect_key", "gsa1_charselect_pad", "gsa1_charselect_dialog", "gsa1_charselect_close", "gsa1_charselect_music",
-                   "gsa1_charselect_file", "gsa1_charselect_wide", "gsa1_charselect_super" }
+                   "gsa1_charselect_file", "gsa1_charselect_wide", "gsa1_charselect_super", "gsa1_charselect_qmark" }
     local missing = {}
     for _, n in ipairs(want) do if not bound[n] then missing[#missing + 1] = n end end
     check(#missing == 0, "every row of 5.9 has its control (%s)", table.concat(missing, " "))
     -- every gsa1_charselect_* ConVar but the memory is a row of 5.9, with the default 5.9 gives it
     local defaults = { gsa1_charselect_key = "0", gsa1_charselect_pad = "1", gsa1_charselect_dialog = "0", gsa1_charselect_close = "0",
-                       gsa1_charselect_music = "1", gsa1_charselect_file = "0", gsa1_charselect_wide = "0", gsa1_charselect_super = "last" }
+                       gsa1_charselect_music = "1", gsa1_charselect_file = "0", gsa1_charselect_wide = "0", gsa1_charselect_super = "question",
+                       gsa1_charselect_qmark = "1" }
     local extra, wrong = {}, {}
     for n, d in pairs(GSA1.CONVARS) do
         if string.find(n, "^gsa1_charselect") and n ~= "gsa1_charselect_super_last" then
@@ -985,6 +1030,63 @@ do
     check(a.n == 2 and a[0].name == "AVA_BACK" and a[1].count == 4, "T.Archives on gsa1.FRONTEND.KIND: gsa1.FrontendTextureArchives")
     local m = T.Material(F.KIND, FE_BATCHES[2])
     check(m ~= nil, "T.Material on gsa1.FRONTEND.KIND works")
+end
+-- 0.9.9: the question mark's texture (sadc docs/research/small099.md 6.3, the prototype's 5 checks; gsa1_099_plan.md 2.4 C2). By name, render only, on the
+-- menu's kind; tests/feat_question_test.lua has the same for the character (kind 8, archive 62: C1)
+do
+    local T = GSA1.Tex
+    local NAMES = { [0] = "cs_ce_bd_1", "cs_ce_bd_2", "cs_ce_bd_3", "CS_CE_BU", "CS_CE_O", "CS_CE_OD", "CS_CE_OU", "CS_CE_TX", "cs_sinkou_e", "CS_TX_e", "sstx_body" }
+    local fa, ft = G.FrontendTextureArchives, G.FrontendTexture
+    local asked_tex = 0
+    function G.FrontendTextureArchives() return { { name = "AVA_CHSEL_E", count = 11 }, { name = "OTHER", count = 8 } } end
+    function G.FrontendTexture(i, a)
+        asked_tex = asked_tex + 1
+        if a == 1 then return { w = 4, h = 4, name = i == 7 and "CS_CE_TX" or "x" .. i, runs = "", nruns = 0 } end
+        return { w = 8, h = 8, name = NAMES[i] or "?", runs = "", nruns = 0 }
+    end
+    local keep_a, keep_i, keep_e, keep_q = T.archives[F.KIND], T.infos, T.entries, T.queue
+    T.archives[F.KIND], T.infos, T.queue = nil, {}, {}
+    local function asked()
+        local e = {}
+        for k in pairs(T.entries) do e[#e + 1] = k end
+        table.sort(e)
+        return table.concat(e, " ")
+    end
+    local function fresh()
+        T.entries = {}
+        T.ForgetKeys()
+    end
+    local Q = { key = "7.7.68.1.0.3.0", archive = 0, tex = 7, flags = 0x68, wrap = 3, src = 1, dst = 0, pass = 0, tris = 692, all = 0x68, mat = 0x9461A400 }
+    check(GetConVar("gsa1_charselect_qmark") ~= nil and T.Remap == S.QuestionTexture, "the option exists; T.Remap is S.QuestionTexture")
+    fresh()
+    T.Material(F.KIND, Q)
+    check(string.find(asked(), F.KIND .. "_0_10_3", 1, true) ~= nil and string.find(asked(), F.KIND .. "_0_7_3", 1, true) == nil,
+        "gsa1_charselect_qmark 1 (the default): the question mark's batch draws sstx_body (texture 10), clamped: %s", asked())
+    S.cv.qmark:SetString("0")
+    T.entries = {}
+    T.Material(F.KIND, Q)
+    check(string.find(asked(), F.KIND .. "_0_7_3", 1, true) ~= nil, "gsa1_charselect_qmark 0: as the Dreamcast, texture 7, after the callback's T.ForgetKeys: %s", asked())
+    S.cv.qmark:SetString("1")
+    fresh()
+    T.Material(F.KIND, { key = "plain", archive = 0, tex = 7, flags = 0x11, wrap = 3, src = 4, dst = 5, pass = 1, tris = 2, all = 0x11, mat = 0 })
+    check(string.find(asked(), F.KIND .. "_0_7_3", 1, true) ~= nil and string.find(asked(), F.KIND .. "_0_10_3", 1, true) == nil, "a batch that is not sphere-mapped keeps its texture: %s", asked())
+    fresh()
+    T.Material(F.KIND, { key = "other", archive = 0, tex = 6, flags = 0x68, wrap = 3, src = 1, dst = 0, pass = 0, tris = 2, all = 0x68, mat = 0 })
+    check(string.find(asked(), F.KIND .. "_0_6_3", 1, true) ~= nil, "a sphere-mapped batch of another texture keeps it: %s", asked())
+    fresh()
+    T.Material(F.KIND, { key = "noBody", archive = 1, tex = 7, flags = 0x68, wrap = 3, src = 1, dst = 0, pass = 0, tris = 2, all = 0x68, mat = 0 })
+    check(string.find(asked(), F.KIND .. "_1_7_3", 1, true) ~= nil, "an archive without sstx_body keeps the texture: %s", asked())
+    if GSA1.LogFlush then GSA1.LogFlush() end
+    check(string.find(M.files["gsa1/log.txt"] or "", "has no sstx_body: the question mark stays as the disc draws it", 1, true) ~= nil, "... with one log line")
+    -- C2: the name first; the walk of the archive only for a batch that IS cs_ce_tx
+    fresh()
+    T.infos = {}
+    asked_tex = 0
+    T.Material(F.KIND, { key = "other2", archive = 0, tex = 5, flags = 0x68, wrap = 3, src = 1, dst = 0, pass = 0, tris = 2, all = 0x68, mat = 0 })
+    check(asked_tex == 1, "C2: a sphere-mapped batch of another name makes one texture call (%d), no walk of its archive", asked_tex)
+    G.FrontendTextureArchives, G.FrontendTexture = fa, ft
+    T.archives[F.KIND], T.infos, T.entries, T.queue = keep_a, keep_i, keep_e, keep_q
+    T.ForgetKeys()
 end
 -- the music comes from the game's own request
 frames(2)

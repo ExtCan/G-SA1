@@ -367,6 +367,11 @@ void super_open(ILuaBase *L, int t)
     raw_num(L, c, "CREATE_SUPER_CAPABLE", SA1_CREATE_SUPER_CAPABLE);
     raw_num(L, c, "CREATE_WATER_FLOOR", SA1_CREATE_WATER_FLOOR);
     raw_num(L, c, "STATE_SUPER", SA1_STATE_SUPER);
+#if defined(SA1_API_QUESTION)
+    raw_num(L, c, "CREATE_QUESTION", SA1_CREATE_QUESTION);          // 0.9.9: the "?" (feat/cl_question.lua)
+    raw_num(L, c, "ARCHIVE_QUESTION", SA1_ARCHIVE_QUESTION);
+    raw_num(L, c, "COPT_QUESTION_SPIN", SA1_COPT_QUESTION_SPIN);
+#endif
 #endif
     raw_num(L, c, "EQUIPMENT", 0x8000);
     raw_num(L, c, "START_RINGS", 50);
@@ -434,5 +439,6 @@ const gsa1::FeatureFn k_super_fns[] = {
 // version 4 (0.9.4a): SuperWhoosh, SuperInfo.whoosh / whoosh_on / whoosh_bank / whoosh_characters / polish,
 //                     SuperState.whoosh, gsa1.SUPER's SUPOPT_SUPER_ANIMS, SUPOPT_LSD_GOLD, SUPER_EFFECTS_*, DRAW_SUPER_GOLD,
 //                     TEXTURE_VARIANT_SUPER_GOLD, WHOOSH_STAGE
-GSA1_FEATURE(super, 4, k_super_fns, super_open, nullptr, gsa1::kCloseDefault);
+// version 5 (0.9.9): gsa1.SUPER's CREATE_QUESTION, ARCHIVE_QUESTION, COPT_QUESTION_SPIN (sadc docs/research/gsa1_099_plan.md 5.5)
+GSA1_FEATURE(super, 5, k_super_fns, super_open, nullptr, gsa1::kCloseDefault);
 #endif

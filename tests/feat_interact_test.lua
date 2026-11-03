@@ -152,6 +152,7 @@ function ply:IsNextBot() return false end
 function ply:IsVehicle() return false end
 function ply:IsWeapon() return false end
 function ply:IsWorld() return false end
+function ply:IsScripted() return false end
 function ply:Ping() return 0 end
 function ply:Alive() return true end
 function ply:InVehicle() return self.vehicle_in ~= nil end
@@ -1184,6 +1185,62 @@ do (function()     -- (a function: this file's main chunk is at Lua's limit of 2
     GSA1.Char, render.DrawWireframeBox, I.objects, M.view_setup = keepChar, keepBox, keepObjects, keepVs
     check(main2d == 1 and sky1 == 0 and sky3d == 0, "the debug shapes on a 2D-sky map's main view (false, true, false): %d "
         .. "draw; the 3D sky's view %d and %d", main2d, sky1, sky3d)
+end)() end
+
+-- 7c. 0.9.9 (sadc docs/research/gsa1_099_plan.md 4.2 D8, small099.md 6.2): the server's NW2 gsa1_use, the interact key's own rule ------------
+do (function()     -- (a function: this file's main chunk is at Lua's limit of 200 locals)
+    local function at(idx, cls, t) return new_ent(idx, cls, Vector(30, idx - 300, 0), t) end
+    local door_use = at(301, "func_door", { spawnflags = 256 })
+    local door_no = at(302, "func_door", { spawnflags = 0 })
+    local rot_use = at(303, "func_door_rotating", { spawnflags = 256 })
+    local pdoor = at(304, "prop_door_rotating", { spawnflags = 0 })
+    local pdoor_no = at(305, "prop_door_rotating", { spawnflags = 32768 })
+    local button = at(306, "func_button", { spawnflags = 0 })
+    local button_touch = at(307, "func_button", { spawnflags = 256 })
+    local mom = at(308, "momentary_rot_button", {})
+    local sent = at(309, "gmod_button", { scripted = true })
+    local gmhands = at(310, "gmod_hands", { scripted = true })
+    local veh = at(311, "prop_vehicle_jeep", { vehicle = true, movetype = MOVETYPE_VPHYSICS })
+    local cit = at(312, "npc_citizen", { npc = true })
+    local wep = at(313, "weapon_smg1", { scripted = true })
+    wep.IsWeapon = function() return true end
+    local own = at(314, "prop_door_rotating", { spawnflags = 0, GSA1Object = true })
+    local plainprop = at(315, "prop_physics", { movetype = MOVETYPE_VPHYSICS })
+    local bot = at(316, "gmod_button", { scripted = true, nextbot = true })
+    local keepFound = found
+    found = { door_use, door_no, rot_use, pdoor, pdoor_no, button, button_touch, mom, sent, gmhands, veh, cit, wep, own, plainprop, bot, ply }
+    local think = SH.Think and SH.Think.gsa1_interact
+    local function scan()
+        M.T = M.T + 0.6
+        think()
+    end
+    local function tagged(e) return e.nw2.gsa1_use == true end
+    check(think ~= nil, "the server's Think runs the scan")
+    local ok, err = pcall(scan)
+    check(ok, "the scan runs over doors, buttons, vehicles, an NPC, a weapon and the player (%s)", tostring(err))
+    check(tagged(door_use) and tagged(rot_use) and not tagged(door_no), "a func_door or func_door_rotating with Use Opens (256) gets gsa1_use, one without it does not")
+    check(tagged(pdoor) and not tagged(pdoor_no), "prop_door_rotating gets it; with Ignore player +USE (32768) it does not")
+    check(tagged(button) and not tagged(button_touch) and tagged(mom), "func_button gets it, one only touch fires does not; momentary_rot_button gets it")
+    check(tagged(sent) and not tagged(gmhands), "a scripted entity with its own Use gets it; gmod_hands (base_anim's empty Use) does not")
+    check(tagged(veh) and not tagged(plainprop), "a vehicle gets it, a plain physics prop does not")
+    check(cit.nw2.gsa1_use == nil and bot.nw2.gsa1_use == nil and not tagged(wep), "an NPC and a NextBot are untouched and a weapon is not tagged")
+    check(own.nw2.gsa1_use == nil, "a G-SA1 object is untouched")
+    check(ply.nw2.gsa1_use ~= true, "the player is not tagged")
+    local writes, setb = 0, EMT.SetNW2Bool
+    EMT.SetNW2Bool = function(s, k, v)
+        if k == "gsa1_use" then writes = writes + 1 end
+        return setb(s, k, v)
+    end
+    scan()
+    EMT.SetNW2Bool = setb
+    check(writes == 0, "a second scan with nothing changed writes nothing (%d)", writes)
+    S.GetConVar("gsa1_sv_interact"):SetString("0")
+    scan()
+    check(not tagged(door_use) and not tagged(veh) and not tagged(sent), "gsa1_sv_interact 0: false again")
+    S.GetConVar("gsa1_sv_interact"):SetString("1")
+    scan()
+    check(tagged(door_use), "gsa1_sv_interact 1: back")
+    found = keepFound
 end)() end
 
 -- 8. without the module's part ------------------------------------------------------------------------------------------------------

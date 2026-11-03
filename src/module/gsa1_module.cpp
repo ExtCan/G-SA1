@@ -67,7 +67,7 @@ static_assert(offsetof(lua_State, luabase) == (sizeof(void *) == 8 ? 120 : 72),
 using GarrysMod::Lua::ILuaBase;
 namespace LT = GarrysMod::Lua::Type;
 
-#define GSA1_MODULE_VERSION "0.9.8"
+#define GSA1_MODULE_VERSION "0.9.9"
 #define GSA1_API_VERSION 6
 
 namespace {
@@ -2562,6 +2562,9 @@ GMOD_MODULE_OPEN()
     set_const(LUA, t, "BUTTON_ACTION2", SA1_BUTTON_ACTION2);
     set_const(LUA, t, "BUTTON_L", SA1_BUTTON_L);
     set_const(LUA, t, "BUTTON_R", SA1_BUTTON_R);
+#if defined(SA1_API_PLAYABLE)
+    set_const(LUA, t, "BUTTON_X", SA1_BUTTON_X);     // 0.9.9: Eggman's and Tikal's debug button (feat/cl_playable.lua)
+#endif
     set_const(LUA, t, "DRAW_BLEND", SA1_DRAW_BLEND);
     set_const(LUA, t, "DRAW_ALPHA_TEST", SA1_DRAW_ALPHA_TEST);
     set_const(LUA, t, "DRAW_DOUBLE_SIDED", SA1_DRAW_DOUBLE_SIDED);

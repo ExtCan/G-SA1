@@ -17,6 +17,9 @@
 --   * The seam GSA1.FollowerTickCamera(C) -> origin, target | nil (decision A9): the camera FollowersTick gets.
 --   * Per frame (D10): no engine call that returns a Vector or an Angle per follower. Exceptions, one per TARGET, not per
 --     follower: a host-fed target's own entity (position, velocity, facing), read once a frame per entity.
+--   * Round 0.9.9 (sadc docs/research/gsa1_099_plan.md 4.1 B3-B5, follow099.md 5, 6.3), three options on the page: Fo.ApplySpeed(F) (the catch-up,
+--     gsa1_follower_speed), Fo.ApplySpots() (each follower's own spot around the one it follows, gsa1_follower_spacing), Fo.EmoteStart / Fo.EmoteThink /
+--     Fo.EmoteEnd (Fo.emote: they play the same page and slot of their own wheels while you play yours, gsa1_follower_emotes, through W.ON_PLAYED).
 GSA1 = GSA1 or {}
 
 -- Seam L2 (decision A9): the camera the followers' tick gets. feat/cl_gamecam.lua wraps it while the fishing camera shows
@@ -320,11 +323,13 @@ function Fo.WalkTo(F, pos, yaw)
     gsa1.FollowerLeader(F.id, nil)
     F.leaderId, F.hostFed = nil, true
     F.walkFeed = { pos = pos, yaw = yaw }
+    Fo.ApplySpots()     -- (0.9.9: its spot is 0 during the walk, or the AI stops off the board)
 end
 function Fo.WalkEnd(F)
     F.walkFeed = nil
     if F.removed then return end
     Fo.ApplyTarget(F)
+    Fo.ApplySpots()
 end
 
 -- whom it follows, in words (the page's rows)
@@ -418,6 +423,43 @@ function Fo.RefreshTargets(now)
     end
 end
 
+-- keeping up and standing apart (round 0.9.9; every value is the host's option: follow099.md 3.5, 4.2) ---------------------------------
+Fo.refusedNotes = Fo.refusedNotes or {}
+local function note_refused(F, what, err)
+    if Fo.refusedNotes[what] then return end
+    Fo.refusedNotes[what] = true
+    log("%s (follower %d): %s: %s", F.title or "?", F.uid or 0, what, tostring(err))
+end
+-- at 1 libsa1 never writes a number of the world: a follower near its spot runs at the game's own speed at any value
+function Fo.ApplySpeed(F)
+    if not (gsa1 and gsa1.FollowerSpeed) then return false end
+    local ok, err = gsa1.FollowerSpeed(F.id, math.Clamp(cv.speed:GetFloat(), 1, Fo.SPEED_MAX))
+    if not ok then note_refused(F, "the catch-up speed", err) end
+    return ok and true or false
+end
+-- every follower's spot, by its place in the list. One follower alone stands where the game puts it; so does one walking to a box's board.
+-- 0 turns them off for all; while the secret's followers are here all use Fo.SPACING_EGG. A call only for a spot that changed
+function Fo.ApplySpots()
+    if not (gsa1 and gsa1.FollowerSpot) then return end
+    local list = Fo.list
+    local n = #list
+    local s = cv.spacing:GetFloat()
+    if s > 0 and Fo.Count(true) > 0 then s = Fo.SPACING_EGG end
+    for i = 1, n do
+        local F = list[i]
+        local x, y = 0, 0
+        if not F.walkFeed then x, y = Fo.SpotOf(i, n, s) end
+        if x ~= (F.spotX or 0) or y ~= (F.spotY or 0) then
+            local ok, err = gsa1.FollowerSpot(F.id, x, y)
+            if ok then
+                F.spotX, F.spotY = x, y
+            else
+                note_refused(F, "its spot", err)
+            end
+        end
+    end
+end
+
 -- the entry ---------------------------------------------------------------------------------------------------------------------
 -- the world: -> id | nil, message, code
 local function create_world(kind, target, opts, C)
@@ -475,6 +517,9 @@ function Fo.MakeEntry(id, kind, opts, target, pos, yaw, C)
     ent:SetPos(F.drawPos)
     Fo.list[#Fo.list + 1] = F
     Fo.byId[id] = F
+    -- 0.9.9: before its first tick
+    Fo.ApplySpeed(F)
+    Fo.ApplySpots()
     -- host objects, Tails' tail blend, the item icon guard (its own game's rings and boxes)
     if gsa1.ObjWorldMask then gsa1.ObjWorldMask(id, Fo.HostObjMask(F.egg)) end
     if GSA1.CharOpt and GSA1.CharOpt.ApplyTailBlend then GSA1.CharOpt.ApplyTailBlend(F) end
@@ -520,10 +565,11 @@ local function spawn_follower(kind, opts)
         Fo.settingsLogged = true
         GSA1.Log("settings", "followers: at most %d, new ones follow %s, upgrades %s, rings and boxes %s, sounds %s, board %s, boxes %s, "
             .. "come along %s, loop guard %s, fixes view %s respawn %s, full detail %d, far rate %d, draw distance %d, other views %s, "
-            .. "threads %d", cv.max:GetInt(), tostring(Fo.TARGET_NAMES[cv.target:GetInt()]), cv.upgrades:GetString(), cv.objects:GetString(),
-            cv.sounds:GetString(), cv.board:GetString(), cv.board_boxes:GetString(), cv.come_along:GetString(), cv.loop_guard:GetString(),
-            cv.fix_view:GetString(), cv.fix_respawn:GetString(), cv.full_detail:GetInt(), cv.far_rate:GetInt(), cv.draw_dist:GetInt(),
-            cv.other_views:GetString(), cv.threads:GetInt())
+            .. "threads %d, catch-up speed %s, room between them %s, emote with you %s", cv.max:GetInt(), tostring(Fo.TARGET_NAMES[cv.target:GetInt()]),
+            cv.upgrades:GetString(), cv.objects:GetString(), cv.sounds:GetString(), cv.board:GetString(), cv.board_boxes:GetString(),
+            cv.come_along:GetString(), cv.loop_guard:GetString(), cv.fix_view:GetString(), cv.fix_respawn:GetString(), cv.full_detail:GetInt(),
+            cv.far_rate:GetInt(), cv.draw_dist:GetInt(), cv.other_views:GetString(), cv.threads:GetInt(), cv.speed:GetString(),
+            cv.spacing:GetString(), cv.emotes:GetString())
     end
     local F = Fo.MakeEntry(id, k, opts, target, pos, yaw)
     run_hook("GSA1FollowerCreated", F, opts.why or "spawned")
@@ -573,6 +619,8 @@ function Fo.Remove(F, why)
     if GSA1.mod and gsa1 and gsa1.Destroy then gsa1.Destroy(F.id) end
     if GSA1.FreeStaticMeshes then GSA1.FreeStaticMeshes(F) end
     if IsValid(F.ent) then F.ent:Remove() end
+    Fo.EmoteForget(F)
+    Fo.ApplySpots()
     log("%s (follower %d) removed (%s); %d followers left", F.title or "?", F.uid, tostring(why), #Fo.list)
 end
 
@@ -611,6 +659,7 @@ function Fo.Recreate(F, why, removedWhy)
     gsa1.Destroy(F.id)
     GSA1.FreeStaticMeshes(F)
     if IsValid(F.ent) then F.ent:Remove() end
+    Fo.EmoteForget(F)
     local id, err, _, pos, yaw = create_world(kind, target, opts)
     if not id then
         log("%s (follower %d) could not be made again: %s", keep.title or "?", uid, tostring(err))
@@ -618,6 +667,7 @@ function Fo.Recreate(F, why, removedWhy)
         for _, G in ipairs(Fo.list) do
             if G.target.type == "follower" and G.target.uid == uid then Fo.LoseTarget(G, keep.title .. " went away") end
         end
+        Fo.ApplySpots()
         return nil
     end
     local NF = Fo.MakeEntry(id, kind, opts, target, pos, yaw)
@@ -631,6 +681,7 @@ function Fo.Recreate(F, why, removedWhy)
     for _, G in ipairs(Fo.list) do
         if G.target.type == "follower" and G.target.uid == uid then Fo.ApplyTarget(G) end
     end
+    Fo.ApplySpots()     -- (it is back at its place in the list)
     run_hook("GSA1FollowerCreated", NF, "re-created")
     log("%s (follower %d) made again behind its leader (%s)", NF.title or "?", uid, tostring(why))
     return NF
@@ -724,6 +775,7 @@ local function chain_of(C, fn)
 end
 
 hook.Add("GSA1CharacterLeaving", "gsa1_follower", function(C, how)
+    Fo.EmoteEnd(Fo.EmoteConst("STOP_NOW", 0), "your character is leaving")
     if not C or not Fo.list[1] or not cv.come_along:GetBool() then return end
     chain_of(C, function(F)
         if Fo.Hold(F, true) then
@@ -736,16 +788,19 @@ end)
 
 -- relink: a target "me" gets the new character (C) or your player entity (nil)
 function Fo.Relink(C)
+    local walks = false
     for _, F in ipairs(Fo.list) do
         local t = F.target
         if t.type == "me" or (t.type == "player" and not IsValid(t.ent)) then
             if F.walkFeed then
                 F.walkFeed = nil
+                walks = true
                 if F.board then F.board.fwalk = nil end
             end
             Fo.ApplyTarget(F, C)
         end
     end
+    if walks then Fo.ApplySpots() end       -- (0.9.9: a walk that ended here gets its spot back)
 end
 -- the ones parked for your character's change come back: the game's mode 0 places them behind the leader
 function Fo.ReleaseHeld()
@@ -787,6 +842,163 @@ function Fo.CallBack(how)
     end
     log("%d followers called back (%s)", n, tostring(how or "the page"))
     return n
+end
+
+-- they emote with you (round 0.9.9: sadc docs/research/gsa1_099_plan.md 2.4 C3, 4.1 B5, 5.6; follow099.md 5.1, 5.3, 5.4; review R99.16) ------------
+-- You play a slot of the wheel: each of your followers plays the same page and slot of its own wheel, with that slot's own loop, hold and rate and its
+-- kind's own catalogue. Fo.emote = { id, page, slot, pending = { [F] = true }, started = { [F] = true }, was (the record before: whom a skip must stop) }.
+-- An empty slot, a face alone, "(stop)", a gate's refusal: a plain skip, no toast. A refusal of the moment ("moving", "on the way"): asked again at 5 Hz,
+-- so one on its way joins when it arrives. One that took it and lost it is not asked again. Faces are not sent. Never SA1_EMOTE_IN_AIR: it would stop a
+-- running follower where it is. W.playing stays the player's: followers never go through W.PlayBody. Your emote ending ends theirs.
+Fo.EMOTE_RETRY = 0.2        -- s between two rounds of asking (5 Hz)
+Fo.EMOTE_WAIT = 1.25        -- s your own emote may take to show: it is latched until your next pair and may wait 30 pairs to settle (its state is NONE until then)
+Fo.EMOTE_MOVING = 4         -- HU/s: above this you are off running, and your emote's end stops theirs at once; below it they blend into the stand
+
+function Fo.EmoteConst(name, default)
+    local E = gsa1 and gsa1.EMOTE
+    return E and tonumber(E[name]) or default
+end
+local emote_const = Fo.EmoteConst
+
+-- one word once per record in the log, whoever says it (the secret's 99 would write 99 lines)
+local function emote_note(rec, F, word)
+    if rec.words[word] then return end
+    rec.words[word] = true
+    log("%s (follower %d): page %d slot %d of its wheel: %s", F.title or "?", F.uid or 0, rec.page, rec.slot, tostring(word))
+end
+
+local function emote_stop(F, how)
+    if not F.removed and gsa1 and gsa1.EmoteStop then gsa1.EmoteStop(F.id, how) end
+end
+
+-- W.ON_PLAYED: your body emote started from the page's slot s. Page 0 is a catalogue row or gsa1_emote, not a slot: nothing maps (2.4 C3)
+function Fo.EmoteStart(C, page, s)
+    page, s = tonumber(page) or 0, tonumber(s) or 0
+    if page < 1 or s < 1 or not cv.emotes:GetBool() or not C then return end
+    if not (W and W.WheelOf and W.SlotEntry and W.ListOf and gsa1 and gsa1.Emote) then return end
+    local pending = {}
+    for _, F in ipairs(Fo.list) do
+        if is_mine(F) and not F.held then pending[F] = true end
+    end
+    local old = Fo.emote
+    if old then
+        -- you went on to another slot: who does not take part any more stops now, who has an empty slot there stops at its skip
+        for F in pairs(old.started) do
+            if not pending[F] then emote_stop(F, emote_const("STOP_BLEND", 1)) end
+        end
+    end
+    if next(pending) == nil then
+        Fo.emote = nil
+        return
+    end
+    Fo.emote = { id = C.id, page = page, slot = s, pending = pending, started = {}, was = old and old.started or nil, words = {}, kinds = {}, seen = false,
+                 waitUntil = SysTime() + Fo.EMOTE_WAIT, nextTry = 0 }
+end
+if W then
+    W.ON_PLAYED = W.ON_PLAYED or {}
+    for i = #W.ON_PLAYED, 1, -1 do
+        if W.ON_PLAYED[i] == Fo.emoteHook then table.remove(W.ON_PLAYED, i) end
+    end
+    Fo.emoteHook = function(C, page, s) return Fo.EmoteStart(C, page, s) end
+    W.ON_PLAYED[#W.ON_PLAYED + 1] = Fo.emoteHook
+end
+
+-- the record ends: how (gsa1.EMOTE.STOP_*) for those that play, by default STOP_NOW if you are moving (your own cancel is the same clear), else STOP_BLEND
+function Fo.EmoteEnd(how, why)
+    local rec = Fo.emote
+    if not rec then return end
+    Fo.emote = nil
+    if not how then
+        local C = GSA1.Char
+        local st = C and C.state
+        local vx, vy = st and st.vx or 0, st and st.vy or 0
+        how = vx * vx + vy * vy > Fo.EMOTE_MOVING * Fo.EMOTE_MOVING and emote_const("STOP_NOW", 0) or emote_const("STOP_BLEND", 1)
+    end
+    local n = 0
+    for F in pairs(rec.started) do
+        emote_stop(F, how)
+        n = n + 1
+    end
+    if n > 0 then log("%d followers stop their emote (%s)", n, tostring(why or "your emote ended")) end
+end
+
+-- a follower goes (Fo.Remove, Fo.Recreate: a new world plays nothing)
+function Fo.EmoteForget(F)
+    local rec = Fo.emote
+    if not rec then return end
+    rec.pending[F], rec.started[F] = nil, nil
+    if rec.was then rec.was[F] = nil end
+    if next(rec.pending) == nil and next(rec.started) == nil then Fo.emote = nil end
+end
+
+local function emote_skip(rec, F, word)
+    rec.pending[F] = nil
+    if rec.was and rec.was[F] then emote_stop(F, emote_const("STOP_BLEND", 1)) end
+    emote_note(rec, F, word)
+end
+
+-- what the slot means on an entry's wheel, once per record (W.DefaultWheel makes a table each time; the secret's 99 are asked at 5 Hz)
+local function emote_slot(rec, name)
+    local k = rec.kinds[name]
+    if k then return k end
+    local wheel = W.WheelOf(name)
+    local slot = wheel and wheel.pages and wheel.pages[rec.page] and wheel.pages[rec.page][rec.slot]
+    local e, why = W.SlotEntry(slot, W.ListOf(name))
+    k = { e = e, why = why or "empty", flags = 0 }
+    if e then
+        if slot.loop then k.flags = bit.bor(k.flags, emote_const("LOOP", 0x100)) end
+        if W.HoldApplies(slot, e) then k.flags = bit.bor(k.flags, emote_const("HOLD", 0)) end
+        if W.SpeedSupported() then k.rate = W.PlayRate(slot, W.cv.speed:GetFloat()) end
+    end
+    rec.kinds[name] = k
+    return k
+end
+
+local function emote_try(rec, F)
+    if F.removed or F.held then
+        rec.pending[F] = nil
+        return
+    end
+    local k = emote_slot(rec, F.name)
+    local e = k.e
+    if not e then return emote_skip(rec, F, k.why) end
+    for _, g in ipairs(W.PLAY_GATES or {}) do
+        local gok, gwhy = pcall(g.gate, F, e)
+        if gok and gwhy then return emote_skip(rec, F, gwhy) end
+    end
+    local ok, reason, code
+    if k.rate then
+        ok, reason, code = gsa1.Emote(F.id, e.key, k.flags, k.rate)
+    else
+        ok, reason, code = gsa1.Emote(F.id, e.key, k.flags)
+    end
+    if ok then
+        rec.pending[F], rec.started[F] = nil, true
+    elseif code == "unsupported" or code == "limit" then
+        emote_note(rec, F, reason or code)          -- (of the moment: asked again)
+    else
+        emote_skip(rec, F, reason or code or "refused")
+    end
+end
+
+-- every frame while the record exists: one module call; at 5 Hz the pending ones
+function Fo.EmoteThink(now)
+    local rec = Fo.emote
+    if not rec then return end
+    local C = GSA1.Char
+    if not C or C.id ~= rec.id or not gsa1.EmoteState then return Fo.EmoteEnd(nil, "your character went") end
+    local st = gsa1.EmoteState(C.id)
+    if st == nil or st == emote_const("STATE_NONE", 0) then
+        if rec.seen or now >= rec.waitUntil then return Fo.EmoteEnd() end
+        return
+    end
+    rec.seen = true
+    if st == emote_const("STATE_ENDING", 2) or now < rec.nextTry then return end
+    rec.nextTry = now + Fo.EMOTE_RETRY
+    for F in pairs(rec.pending) do
+        emote_try(rec, F)
+    end
+    if next(rec.pending) == nil and next(rec.started) == nil then Fo.emote = nil end
 end
 
 -- the frame -----------------------------------------------------------------------------------------------------------------------
@@ -1029,6 +1241,7 @@ function GSA1.FollowersThink(now)
     end
     local dt = Fo.FrameDt(now)
     Fo.RefreshTargets(now)
+    Fo.EmoteThink(now)
     local fn = FrameNumber()
     local hostFlags = GSA1.HostWaterFlags
     for i = 1, #list do
@@ -1127,6 +1340,7 @@ end
 -- the map goes (the module destroys every world with its shutdown)
 hook.Add("ShutDown", "gsa1_follower", function()
     Fo.list, Fo.byId, Fo.byToken = {}, {}, {}
+    Fo.emote = nil
 end)
 
 -- settings ------------------------------------------------------------------------------------------------------------------------
@@ -1140,6 +1354,24 @@ cvars.AddChangeCallback("gsa1_follower_max", function(_, _, new)
         if not F then break end
         Fo.Remove(F, "cap")
     end
+end, "gsa1_follower")
+-- 0.9.9: all three act at once on the followers there are; one settings line a second after the last change, not one per tick of a drag
+local function log_setting(what, c)
+    timer.Create("gsa1_follower_log_" .. what, 1, 1, function()
+        if GSA1.Log then GSA1.Log("settings", "followers: %s %s", what, c:GetString()) end
+    end)
+end
+cvars.AddChangeCallback("gsa1_follower_speed", function()
+    for _, F in ipairs(Fo.list) do Fo.ApplySpeed(F) end
+    log_setting("catch-up speed", cv.speed)
+end, "gsa1_follower")
+cvars.AddChangeCallback("gsa1_follower_spacing", function()
+    Fo.ApplySpots()
+    log_setting("room between them", cv.spacing)
+end, "gsa1_follower")
+cvars.AddChangeCallback("gsa1_follower_emotes", function(_, _, new)
+    if tonumber(new) == 0 then Fo.EmoteEnd(nil, "the option went off") end
+    log_setting("emote with you", cv.emotes)
 end, "gsa1_follower")
 cvars.AddChangeCallback("gsa1_follower_far_rate", function()
     for _, F in ipairs(Fo.list) do
@@ -1574,6 +1806,17 @@ function Fo.BuildPage(panel)
     panel:Button("Call them back to me", "gsa1_follower_call")
     choice_combo(panel, "New followers follow", "gsa1_follower_target", Fo.TARGET_CHOICES)
     panel:NumSlider("Most followers at once (each is a whole game, about 21 MB)", "gsa1_follower_max", 1, Fo.NORMAL_MAX, 0)
+    panel:NumSlider("Speed when catching up (1 = the game's own, 2 = up to twice its speed)", "gsa1_follower_speed", 1, Fo.SPEED_MAX, 2)
+    panel:ControlHelp("Near you they run at the game's own speed. Behind you they may run up to this many times faster until they have caught up. To stay with Sonic at "
+        .. "full speed: Sonic 1.2, Knuckles 1.3, Tails 1.5, E-102 2.5, Big 3.5, Amy 4. At 1 they fall behind and drop in from above, as in the game.")
+    panel:NumSlider("Room between followers (0 = the game's own: they can stand inside each other)", "gsa1_follower_spacing", 0, Fo.SPACING_MAX, 0)
+    panel:ControlHelp("With two or more, each has its own spot around the one it follows; one follower alone stands where the game puts it. While running they can still "
+        .. "pass through each other for a moment: they do not collide with each other.")
+    panel:CheckBox("Followers play the same slot of their own wheel when you play one from the emote wheel", "gsa1_follower_emotes")
+    panel:ControlHelp("An empty slot on a follower's wheel does nothing. A follower on its way joins when it arrives; your emote ending ends theirs. Faces do not go with it.")
+    if not (gsa1 and gsa1.FollowerSpeed) then
+        panel:ControlHelp("This G-SA1 module has no catch-up speed and no spots: they need module 0.9.9.")
+    end
     panel:CheckBox("Followers get your ticked upgrades of their character", "gsa1_follower_upgrades")
     choice_combo(panel, "Rings and item boxes", "gsa1_follower_objects", { { 0, "They pass through them" },
         { 1, "They touch them in their own game (nothing changes for you)" } })
@@ -1602,7 +1845,7 @@ function Fo.BuildPage(panel)
     panel:ControlHelp("Their boards follow the game's own pick in their own game. The board a follower leaves counts towards your "
         .. "left boards (Board page). The box's own board stays there for you.")
     -- the keys
-    panel:Help("Call your followers back (in the open emote wheel)")
+    panel:Help("Call your followers back (in the open emote wheel). Dr. Eggman, Tikal and ? have no wheel: use the button Call them back to me, or gsa1_follower_call")
     local b = vgui.Create("DBinder", panel)
     if b.SetConVar then b:SetConVar("gsa1_follower_call_key") end
     if b.SetTall then b:SetTall(28) end
@@ -1615,6 +1858,7 @@ function Fo.BuildPage(panel)
     -- fixes
     panel:Help("Fixes (not in the game; for new followers)")
     panel:CheckBox("Followers' own animations run where the game's camera cannot see them", "gsa1_follower_fix_view")
+    panel:ControlHelp("Off: a follower's emote also pauses while the game's camera cannot see it.")
     panel:CheckBox("After dropping in, followers other than Tails forget where they were (stops Knuckles bouncing back)",
         "gsa1_follower_fix_respawn")
     -- drawing

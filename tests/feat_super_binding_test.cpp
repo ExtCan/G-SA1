@@ -124,7 +124,7 @@ int main(int argc, char **argv)
                           "SuperVoiceClip", "SuperWhoosh"}) {
         fns = fns && g.tab->field(f).type == Type::Function;
     }
-    CHECK(fns && feats.type == Type::Table && feats.tab->field("super").num == 4 && L.st.empty(),
+    CHECK(fns && feats.type == Type::Table && feats.tab->field("super").num == 5 && L.st.empty(),
           "gsa1.FEATURES.super = %g; SuperOrder, SuperState, SuperInfo, SuperOption, SuperGameOption, SuperVoicePreview, "
           "SuperVoiceClip, SuperWhoosh registered",
           feats.type == Type::Table ? feats.tab->field("super").num : -1.0);

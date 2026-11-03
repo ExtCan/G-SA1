@@ -1888,8 +1888,13 @@ int main(int argc, char **argv)
 #if !defined(SA1_API_SUPER)
     CHECK(false, "libsa1.h has no Super Sonic section (API 0.4, SA1_API_SUPER)");
 #else
+#if defined(SA1_API_QUESTION)
+    const uint32_t expect_extra = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR | SA1_CREATE_QUESTION;     // 0.9.9: the "?"
+#else
+    const uint32_t expect_extra = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR;
+#endif
     CHECK(kSuperApi && ((playable_kinds() >> SA1_CHAR_SUPER_SONIC) & 1u) && ((playable_kinds() >> SA1_CHAR_SONIC) & 1u) &&
-              kCreateExtraFlags == (SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR) &&
+              kCreateExtraFlags == expect_extra &&
               kSuperHostFlags == (SA1_SUPER_NO_DRAIN | SA1_SUPER_KEEP_AT_ZERO | SA1_SUPER_FAITHFUL_REVERT | kSuperGeneralFlags) &&
               !(kSuperHostFlags & SA1_SUPER_SEA_PLANE) && kKindSuperSonic == 8 && kStageTonesFirst <= 1035 &&
               kStageTonesLast >= 1036,

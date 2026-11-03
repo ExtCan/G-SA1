@@ -1,12 +1,16 @@
 -- G-SA1 shared configuration: constants, character names, ConVars, network strings.
 GSA1 = GSA1 or {}
 
-GSA1.VERSION = "0.9.8"
+GSA1.VERSION = "0.9.9"
 GSA1.REQUIRED_API = 6          -- gsa1.API_VERSION the addon is written for
 GSA1.SCALE = 4.0               -- Hammer units per SA1 unit (libsa1's Source preset)
 GSA1.MODULE = "gsa1"           -- require("gsa1") -> garrysmod/lua/bin/gmcl_gsa1_<platform>.dll
 
--- The game's own character ids (sa1_character_desc.kind). Eggman and Tikal cannot be played yet. 0.9.3: Super Sonic
+-- The game's own character ids (sa1_character_desc.kind). 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.6): Dr. Eggman (1) and
+-- Tikal (4) as the game's code leaves them, nothing repaired (nowheel: no emotes; airEndsNothing: cl_character.lua adds no host drown
+-- when the air timer ends: their code has none, the game's own restart request still comes), and "?" (form "question": kind 8 with
+-- SA1_CREATE_QUESTION, feat/sh_question.lua, sharing nothing
+-- with either Super Sonic but the world's code; noUpgrades: never Sonic's). 0.9.3: Super Sonic
 -- (kind 8, the module's feature "super" with libsa1 0.4: feat/{sh,cl}_super.lua; "super" also finds him).
 -- 0.9.3a (sadc docs/research/super_general_design.md 6.1 with its Review R.4 RC4): two Super Sonics. A character is made by
 -- its ENTRY (cl_character.lua create_character(..., def)), not only by its kind: "Super Sonic (Vs. Perfect Chaos)" is
@@ -20,8 +24,11 @@ GSA1.CHARACTERS = {
     { kind = 5, name = "amy",      title = "Amy" },
     { kind = 6, name = "gamma",    title = "E-102 Gamma" },
     { kind = 7, name = "big",      title = "Big" },
+    { kind = 1, name = "eggman",   title = "Dr. Eggman", nowheel = true, airEndsNothing = true },
+    { kind = 4, name = "tikal",    title = "Tikal", nowheel = true, airEndsNothing = true },
     { kind = 8, name = "supersonic", title = "Super Sonic (Vs. Perfect Chaos)" },
     { kind = 0, name = "supersonic_general", title = "Super Sonic (General Gameplay)", form = "general" },
+    { kind = 8, name = "question", title = "?", form = "question", nowheel = true, noUpgrades = true },
 }
 
 -- other names of the entries (0.9.3a: "super" stays the Vs. Perfect Chaos Super Sonic of 0.9.3)
@@ -29,6 +36,7 @@ GSA1.CHARACTER_ALIASES = {
     e102 = "gamma", ["e-102"] = "gamma",
     super = "supersonic", super_sonic = "supersonic", ["super-sonic"] = "supersonic", vspc = "supersonic",
     supergeneral = "supersonic_general", super_general = "supersonic_general", ssg = "supersonic_general",
+    ["?"] = "question", qm = "question", question_mark = "question", questionmark = "question",
 }
 
 -- the entry of a list name, an alias or a kind number ("0" is Sonic's own entry); nil: none

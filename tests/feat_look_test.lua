@@ -104,9 +104,18 @@ ents.FindInSphere = function(pos, r)
     local out = {}
     if not scans.inside then return out end
     scans.n, scans.r, scans.pos = scans.n + 1, r, pos
+    if scans.by_radius then     -- (0.9.9's block: which sphere finds what matters there)
+        local r2 = r * r
+        for _, e in ipairs(scene) do
+            local dx, dy, dz = e.x - pos.x, e.y - pos.y, e.z - pos.z
+            if dx * dx + dy * dy + dz * dz <= r2 then out[#out + 1] = e end
+        end
+        return out
+    end
     for i, e in ipairs(scene) do out[i] = e end
     return out
 end
+MOVETYPE_VPHYSICS = MOVETYPE_VPHYSICS or 6
 local function ent(idx, class, x, y, z, how)
     how = how or {}
     local e = { idx = idx, class = class, x = x, y = y, z = z, nw2 = {} }
@@ -115,10 +124,11 @@ local function ent(idx, class, x, y, z, how)
     function e:IsNPC() return how.npc == true end
     function e:IsNextBot() return how.nextbot == true end
     function e:IsPlayer() return how.player == true end
-    function e:IsVehicle() return false end
+    function e:IsVehicle() return how.vehicle == true end
     function e:IsWeapon() return how.weapon == true end
     function e:IsWorld() return false end
     function e:IsDormant() return how.dormant == true end
+    function e:GetMoveType() return how.mt or 0 end
     function e:Alive() return how.dead ~= true end
     function e:GetOwner() return how.owner or NULL end
     function e:GetPos() return Vector(self.x, self.y, self.z) end
@@ -931,6 +941,8 @@ do
             gsa1_look_emotes = "Also while an emote plays",
             gsa1_look_camera_all = "The camera key turns your followers' heads too",
             gsa1_look_super = "Super Sonic turns his head too",
+            gsa1_look_props = "Physics props",
+            gsa1_look_usable = "Things you can use (doors, buttons, vehicles)",
         }
         local wrong = {}
         for cvname, label in pairs(want) do
@@ -966,7 +978,7 @@ do
         -- every option is a ConVar with its default
         local defaults = { gsa1_look = "1", gsa1_look_people = "1", gsa1_look_hostile = "0", gsa1_look_items = "1", gsa1_look_defeated = "1",
                            gsa1_look_range = "120", gsa1_look_emotes = "1", gsa1_look_followers = "1", gsa1_look_camera_key = "0",
-                           gsa1_look_camera_all = "1", gsa1_look_super = "0" }
+                           gsa1_look_camera_all = "1", gsa1_look_super = "0", gsa1_look_props = "0", gsa1_look_usable = "0" }
         local bad_defaults, nrows = {}, 0
         for name, d in pairs(defaults) do
             nrows = nrows + 1
@@ -976,7 +988,12 @@ do
         for name in pairs(GSA1.CONVARS) do
             if string.find(name, "^gsa1_look") and not defaults[name] then extra[#extra + 1] = name end
         end
-        check(#bad_defaults == 0 and #extra == 0 and nrows == 11, "the 11 ConVars of 5.9 with their defaults, no other%s", table.concat(bad_defaults, " ") .. table.concat(extra, " "))
+        check(#bad_defaults == 0 and #extra == 0 and nrows == 13, "the 13 ConVars (5.9 and 0.9.9's two) with their defaults, no other%s", table.concat(bad_defaults, " ") .. table.concat(extra, " "))
+        -- 0.9.9 (gsa1_099_plan.md 5.9): both rows on the page, with their help
+        check(string.find(all, "Anything the physics moves: props, ragdolls, balloons. Not in the game. Not the prop you carry, not vehicles.", 1, true) ~= nil
+            and string.find(all, "What the interact key can use right now. Not in the game. Never G-SA1's own objects.", 1, true) ~= nil
+            and string.find(all, "Items, props, things to use and what you defeated: 40 more", 1, true) ~= nil,
+            "the help of the two new rows and of the range")
         local rc = GSA1.CONVARS.gsa1_look_range
         check(rc.min == 40 and rc.max == 400, "gsa1_look_range's limits 40-400")
     end
@@ -993,7 +1010,7 @@ do
     GSA1.LogFlush()
     local log = M.files["gsa1/log.txt"] or ""
     check(string.find(log, " settings +head look: heads turn 1, people 1, hostile 0, items 1, defeated 1, range 120, emotes 1, followers 1, camera "
-        .. "key 0 %(followers too 1%), Super Sonic 0") ~= nil, "one settings line with every gsa1_look* value")
+        .. "key 0 %(followers too 1%), Super Sonic 0, physics props 0, interactables 0") ~= nil, "one settings line with every gsa1_look* value")
     check(string.find(log, " look +head look: lookers %d+") ~= nil and string.find(log, "GSA1PreTick / gsa1_look %d+ B", 1) ~= nil,
         "its own log line with the top gsa1_look* hooks' garbage")
     for line in string.gmatch(log, "[^\n]+") do
@@ -1110,6 +1127,271 @@ do
         check(#wrong == 0, "this test's mock module matches build/x86_64-windows/look_api.txt (%d functions, %d constants, %d fields)%s",
             n["function"], n.const, n.field, #wrong > 0 and (": " .. table.concat(wrong, "; ")) or "")
     end
+end
+
+-- 22. 0.9.9: physics props and things you can use (gsa1_099_plan.md 5.9, 5.10; small099.md 3.1, 6.1, 4.3) ---------------------------------------------------------
+do
+    GSA1.Followers = nil
+    local keepTimer = timer.Create
+    local timers = {}
+    timer.Create = function(name, delay, reps, fn) timers[name] = { at = M.T + delay, fn = fn } end
+    local function run_timers()
+        for name, t in pairs(timers) do
+            if M.T >= t.at then
+                timers[name] = nil
+                t.fn()
+            end
+        end
+    end
+    local function secs(s)
+        for _ = 1, math.floor(s * 60 + 0.5) do
+            M.frame(1 / 60)
+            run_timers()
+        end
+    end
+    local function prop(idx, x, y, z) return ent(idx, "prop_physics", x, y, z, { mt = MOVETYPE_VPHYSICS }) end
+    local function door(idx, x, y, z, tag)
+        local e = ent(idx, "prop_door_rotating", x, y, z, { mt = 7 })
+        e.nw2.gsa1_use = tag
+        return e
+    end
+    local function looking(id)
+        local c = last(id)
+        return c ~= nil and c.kind == G.LOOK_POINT
+    end
+    local function new_scene()
+        setcv("gsa1_look_props", 0)
+        setcv("gsa1_look_usable", 0)
+        local C, x, y, z = fresh()
+        return C, x, y, z
+    end
+    scans.by_radius = true
+
+    do  -- 1, 2: off is 0.9.8's; on looks at its centre; off again ends it
+        local C, x, y, z = new_scene()
+        scene = { prop(2100, x + 80, y, z) }
+        secs(0.8)
+        check(not looking(C.id), "gsa1_look_props 0 (the default): a prop 80 HU in front is not looked at (0.9.8's behaviour)")
+        setcv("gsa1_look_props", 1)
+        secs(0.8)
+        check(looks_at(C.id, x + 80, y, z), "gsa1_look_props 1: it is looked at, at its WorldSpaceCenter")
+        local line = table.concat(L.StatusLines(), " ")
+        check(string.find(line, "(prop,", 1, true) ~= nil, "the status line says it is a prop: %s", line)
+        setcv("gsa1_look_props", 0)
+        secs(0.8)
+        check(not looking(C.id), "gsa1_look_props back to 0: the look ends")
+    end
+    do  -- 3: the reach is the items' row (range + 40)
+        local C, x, y, z = new_scene()
+        setcv("gsa1_look_props", 1)
+        scene = { prop(2101, x + 165, y, z) }
+        secs(0.8)
+        check(not looking(C.id), "a prop 165 HU away is out of reach (120 + 40)")
+        C, x, y, z = fresh()
+        scene = { prop(2102, x + 155, y, z) }
+        secs(0.8)
+        check(looking(C.id), "a prop 155 HU away is in reach")
+    end
+    do  -- 4: the server's tag decides, a separate option
+        local C, x, y, z = new_scene()
+        scene = { door(2110, x + 60, y, z, true), door(2111, x + 60, y + 30, z, false) }
+        setcv("gsa1_look_props", 1)
+        secs(0.8)
+        check(not looking(C.id), "gsa1_look_props alone: a door is not looked at")
+        setcv("gsa1_look_props", 0)
+        setcv("gsa1_look_usable", 1)
+        secs(0.8)
+        check(looks_at(C.id, x + 60, y, z), "gsa1_look_usable 1: the door the server tagged is looked at, the untagged one is not")
+        local line = table.concat(L.StatusLines(), " ")
+        check(string.find(line, "(usable,", 1, true) ~= nil, "the status line says it can be used: %s", line)
+    end
+    do  -- 5: never G-SA1's own, never what the character carries, not a vehicle as a prop, never a hazard
+        local C, x, y, z = new_scene()
+        setcv("gsa1_look_props", 1)
+        setcv("gsa1_look_usable", 1)
+        local ours = ent(2120, "gsa1_obj_ring", x + 60, y, z, { mt = MOVETYPE_VPHYSICS })
+        ours.GSA1Object, ours.nw2.gsa1_use = true, true
+        scene = { ours }
+        secs(0.8)
+        check(not looking(C.id), "G-SA1's own objects are never looked at, tag and VPHYSICS or not")
+        scene = { prop(2121, x + 60, y, z) }
+        local keepHeld = I.held
+        I.held = { idx = 2121 }
+        secs(0.8)
+        check(not looking(C.id), "the prop the character carries is not looked at")
+        I.held = keepHeld
+        setcv("gsa1_look_usable", 0)
+        scene = { ent(2122, "prop_vehicle_jeep", x + 60, y, z, { mt = MOVETYPE_VPHYSICS, vehicle = true }) }
+        secs(0.8)
+        check(not looking(C.id), "physics props alone: a vehicle is not a prop")
+        local hazard = next(I.HAZARDS)
+        scene = { ent(2123, hazard, x + 60, y, z, { mt = MOVETYPE_VPHYSICS }) }
+        secs(0.8)
+        check(not looking(C.id), "a hazard (%s) is never looked at", tostring(hazard))
+    end
+    do  -- 6, 7: people before them; hundreds of props crowd out nothing; an interactable before a nearer prop
+        local C, x, y, z = new_scene()
+        setcv("gsa1_look_props", 1)
+        setcv("gsa1_look_usable", 1)
+        local list = {}
+        for i = 1, 400 do list[i] = prop(3000 + i, x + 30 + i % 100, y + (i % 7) * 3, z) end
+        list[401] = npc(2130, x + 100, y, z)
+        scene = list
+        secs(1.5)
+        check(looks_at(C.id, x + 100, y, z), "400 props and one friendly NPC: the NPC is looked at")
+        check(L.npool <= 96 and L.nextra <= L.EXTRA_MAX, "the pool stays bounded: %d candidates, %d of them props (64 + 32 at most)", L.npool, L.nextra)
+        scene = { door(2131, x + 60, y, z, true), prop(2132, x + 50, y, z) }
+        secs(2.0)
+        check(looks_at(C.id, x + 60, y, z), "an interactable before a physics prop, though the prop is nearer")
+    end
+    do  -- 8: a follower looks at a prop only its own sphere can find (the prop beyond your character's own reach), and with gsa1_look_followers 0 it does not
+        local C, x, y, z = new_scene()
+        setcv("gsa1_look_props", 1)
+        local Fo = followers_of(C, 1)
+        local F = Fo.list[1]
+        F.drawPos:SetUnpacked(x + 100, y, C.drawPos.z)
+        F.drawYaw = 0
+        scene = { prop(2140, x + 240, y, z) }
+        secs(1.2)
+        check(looks_at(F.id, x + 240, y, z), "a follower looks at a prop near it that lies beyond your character's reach (its own sphere found it)")
+        check(not looks_at(C.id, x + 240, y, z), "... your character does not")
+        setcv("gsa1_look_followers", 0)
+        secs(1.2)
+        check(not looks_at(F.id, x + 240, y, z), "gsa1_look_followers 0: not the follower either")
+        setcv("gsa1_look_followers", 1)
+        M.run_hook("GSA1FollowerRemoved", F, "removed")
+        GSA1.Followers = nil
+    end
+    do  -- 9: the counts (bench_props.lua's scene: seed 7, 64 props in 400 HU, every 8th a door)
+        local count = { engine = 0, vec = 0 }
+        local function meth(f)
+            return function(...)
+                count.engine = count.engine + 1
+                return f(...)
+            end
+        end
+        local function counted(idx, class, x, y, z, mt, use)
+            local e = { idx = idx, class = class, x = x, y = y, z = z }
+            e.EntIndex = meth(function(s) return s.idx end)
+            e.GetClass = meth(function(s) return s.class end)
+            e.IsNPC = meth(function() return false end)
+            e.IsNextBot = meth(function() return false end)
+            e.IsPlayer = meth(function() return false end)
+            e.IsVehicle = meth(function() return false end)
+            e.IsWeapon = meth(function() return false end)
+            e.IsWorld = meth(function() return false end)
+            e.IsDormant = meth(function() return false end)
+            e.GetMoveType = meth(function() return mt end)
+            e.GetOwner = meth(function() return NULL end)
+            e.GetPos = meth(function(s) count.vec = count.vec + 1 return Vector(s.x, s.y, s.z) end)
+            e.WorldSpaceCenter = meth(function(s) count.vec = count.vec + 1 return Vector(s.x, s.y, s.z) end)
+            e.GetNW2Bool = meth(function(_, k, d) if k == "gsa1_use" then return use end return d end)
+            e.GetNW2Int = meth(function(_, _, d) return d end)
+            e.GetNW2Entity = meth(function() return NULL end)
+            return e
+        end
+        local function measure(props, usable)
+            local C = new_scene()
+            local x, y, z = C.drawPos.x, C.drawPos.y, C.drawPos.z
+            local rnd = math.random
+            math.randomseed(7)
+            scene = {}
+            for i = 1, 64 do
+                local a, r = rnd() * 6.283, 400 * math.sqrt(rnd())
+                local use = (i % 8) == 0
+                scene[i] = counted(5000 + i, use and "func_door" or "prop_physics", x + math.cos(a) * r, y + math.sin(a) * r, z + (rnd() - 0.5) * 80,
+                    use and 7 or MOVETYPE_VPHYSICS, use)
+            end
+            setcv("gsa1_look_props", props)
+            setcv("gsa1_look_usable", usable)
+            for _ = 1, 60 do M.frame(1 / 60) end
+            local rounds, inner = 0, L.Scan
+            L.Scan = function(a, b, c)
+                rounds = rounds + 1
+                return inner(a, b, c)
+            end
+            count.engine, count.vec = 0, 0
+            for _ = 1, 600 do M.frame(1 / 60) end
+            L.Scan = inner
+            return count.engine / math.max(rounds, 1), count.vec / math.max(rounds, 1), rounds
+        end
+        local off, voff, r0 = measure(0, 0)
+        check(off == 88 and voff == 0, "both off: %.1f engine calls and %.1f Vectors a round over %d rounds (0.9.8's figure for this scene: 88 and 0)", off, voff, r0)
+        local on, von, r1 = measure(1, 1)
+        check(on <= off * 1.5, "both on: %.1f engine calls a round, at most 1.5 x (%d rounds)", on, r1)
+        check(von <= L.EXTRA_MAX / L.EXTRA_REFRESH + 1, "both on: %.1f Vectors a round, at most EXTRA_MAX / EXTRA_REFRESH + the target", von)
+        info("the second list: %.1f -> %.1f engine calls, %.1f Vectors a round", off, on, von)
+        setcv("gsa1_look_props", 0)
+        setcv("gsa1_look_usable", 0)
+    end
+    do  -- 10: the log (small099.md 6.1 item 10, C10): a drag writes one settings line, after it
+        new_scene()
+        scene = {}
+        local n, was = 0, GSA1.Log
+        GSA1.Log = function(kind, ...)
+            if kind == "settings" then n = n + 1 end
+            return was(kind, ...)
+        end
+        for i = 1, 30 do
+            setcv("gsa1_look_range", 120 + i)
+            M.frame(1 / 60)
+            run_timers()
+        end
+        local during = n
+        secs(1.5)
+        GSA1.Log = was
+        check(during == 0 and n == 1, "a 30-tick slider drag writes one settings line after it, none during it (during %d, after %d)", during, n)
+        setcv("gsa1_look_range", 120)
+        secs(1.5)
+    end
+    do  -- review R99.1: the question mark has no head; its looker stays, its followers go on
+        setcv("gsa1_look_super", 1)
+        local reported0 = #M.reported
+        GSA1.Remove(true)
+        scene, R.looks, R.opts = {}, {}, {}
+        GSA1.Spawn("supersonic")
+        local C = GSA1.Char
+        C.question = true           -- (cl_character.lua sets it from the entry's form, before GSA1CharacterCreated)
+        R.opts = {}
+        L.ApplySuper(C, true)
+        setcv("gsa1_look_super", 0)
+        setcv("gsa1_look_super", 1)
+        local x, y, z = C.drawPos.x, C.drawPos.y, C.drawPos.z + EYES
+        local Fo = followers_of(C, 2, 2, 100)
+        Fo.list[1].drawPos:SetUnpacked(x + 100, y, C.drawPos.z)
+        Fo.list[1].drawYaw = 0
+        Fo.list[2].drawPos:SetUnpacked(x + 100, y + 60, C.drawPos.z)
+        Fo.list[2].drawYaw = 0
+        scene = { npc(2150, x + 160, y + 30, z) }
+        frames(100)
+        check(#M.reported == reported0, "as the ?, with two followers and a person near them, 100 frames: no Lua error%s", #M.reported > reported0 and (": " .. M.reported[#M.reported]) or "")
+        check(#calls_of(Fo.list[1].id, G.LOOK_POINT) > 0 and #calls_of(Fo.list[2].id, G.LOOK_POINT) > 0, "... the followers' gsa1.Look goes on")
+        check(#calls_of(C.id) == 0, "... none for the ? itself (%d)", #calls_of(C.id))
+        check(L.byId[C.id] ~= nil and L.byId[C.id].refused ~= nil, "... its looker exists, refused, as E-102's")
+        check(#R.opts == 0, "... gsa1_look_super 1 sends nothing to its world (%d calls)", #R.opts)
+        check(table.concat(L.StatusLines(), " ") == "The ? has no head.", "the page's status line: %s", table.concat(L.StatusLines(), " "))
+        for _, F in ipairs(Fo.list) do M.run_hook("GSA1FollowerRemoved", F, "removed") end
+        GSA1.Followers = nil
+        setcv("gsa1_look_super", 0)
+        -- the character list's own entry, when it is there: cl_character.lua sets C.question before the first look round
+        if GSA1.CharacterByName and GSA1.CharacterByName("question") then
+            GSA1.Remove(true)
+            R.looks, R.opts = {}, {}
+            GSA1.Spawn("question")
+            C = GSA1.Char
+            frames(12)
+            check(C ~= nil and C.question == true and L.byId[C.id] ~= nil and L.byId[C.id].refused ~= nil and #calls_of(C.id) == 0,
+                "the list's entry \"question\": C.question, its looker refused, no gsa1.Look")
+        else
+            info("the list has no \"question\" entry yet: only the stand-in ran (099-gsa1-playable's)")
+        end
+    end
+    GSA1.Remove(true)
+    scene = {}
+    scans.by_radius = nil
+    timer.Create = keepTimer
+    check((R.badcalls or 0) == 0, "0.9.9's block: no call with a bad argument (%d)", R.badcalls or 0)
+    check(#M.reported == 0, "0.9.9's block: no Lua error%s", #M.reported > 0 and (": " .. M.reported[1]) or "")
 end
 
 return done()

@@ -27,9 +27,15 @@ const size_t kMaxEvents = 4096;
 // 0.9.3 (round 6a): Super Sonic (kind 8) with libsa1's API 0.4 (SA1_API_SUPER); his world is a Sonic world on the
 // Perfect Chaos stage, and the disc load also gives Sonic his Super forms (SA1_LOAD_SUPER_FORMS) for the transformation
 #if defined(SA1_API_SUPER)
+// 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.5): Dr. Eggman and Tikal, with libsa1's SA1_API_PLAYABLE (a libsa1 before their rows
+// answers Create with its own refusal)
 const uint32_t kPlayableMask = (1u << SA1_CHAR_SONIC) | (1u << SA1_CHAR_TAILS) | (1u << SA1_CHAR_KNUCKLES) |
                                (1u << SA1_CHAR_AMY) | (1u << SA1_CHAR_GAMMA) | (1u << SA1_CHAR_BIG) |
-                               (1u << SA1_CHAR_SUPER_SONIC);
+                               (1u << SA1_CHAR_SUPER_SONIC)
+#if defined(SA1_API_PLAYABLE)
+                               | (1u << SA1_CHAR_EGGMAN) | (1u << SA1_CHAR_TIKAL)
+#endif
+    ;
 const uint32_t kLoadSuperForms = SA1_LOAD_SUPER_FORMS;
 const uint32_t kStateSuper = SA1_STATE_SUPER;
 #else
@@ -530,8 +536,12 @@ int32_t Session::create(int32_t kind, const float pos[3], float yaw, std::string
         return 0;
     }
     if (kind < 0 || kind >= SA1_CHAR_COUNT || !((kPlayableMask >> kind) & 1u)) {
+#if defined(SA1_API_PLAYABLE)
+        err = "this character cannot be played (Sonic, Tails, Knuckles, Amy, E-102, Big, Eggman, Tikal and Super Sonic can)";
+#else
         err = kSuperApi ? "this character cannot be played (Sonic, Tails, Knuckles, Amy, E-102, Big and Super Sonic can)"
                         : "this character cannot be played (Sonic, Tails, Knuckles, Amy, E-102 and Big can)";
+#endif
         return 0;
     }
     // 0.9.3 (Super Sonic): the extra create flags and the Super flags, checked here so that a wrong one is named
@@ -540,8 +550,13 @@ int32_t Session::create(int32_t kind, const float pos[3], float yaw, std::string
         ex = *extra;
     }
     if (ex.flags & ~kCreateExtraFlags) {
+#if defined(SA1_API_QUESTION)
+        err = format("create flags 0x%X: only SUPER_CAPABLE, WATER_FLOOR and QUESTION (gsa1.SUPER) can be given",
+                     (unsigned)ex.flags);
+#else
         err = format("create flags 0x%X: only SUPER_CAPABLE and WATER_FLOOR (gsa1.SUPER) can be given",
                      (unsigned)ex.flags);
+#endif
         return 0;
     }
 #if defined(SA1_API_SUPER)
@@ -1031,7 +1046,11 @@ sa1_status Session::tick(int32_t id, float stick_x, float stick_y, float camera_
         exact_stick(clamp1(stick_x), clamp1(stick_y), in.stick_x, in.stick_y);
     }
     in.camera_yaw = std::isfinite(camera_yaw) ? camera_yaw : 0.0f;
-    in.buttons = buttons & (SA1_BUTTON_JUMP | SA1_BUTTON_ACTION | SA1_BUTTON_ACTION2 | SA1_BUTTON_L | SA1_BUTTON_R);
+    in.buttons = buttons & (SA1_BUTTON_JUMP | SA1_BUTTON_ACTION | SA1_BUTTON_ACTION2 | SA1_BUTTON_L | SA1_BUTTON_R
+#if defined(SA1_API_PLAYABLE)
+                            | SA1_BUTTON_X      // 0.9.9: Eggman's and Tikal's debug button (the addon sends it for those two only)
+#endif
+                           );
     // 0.9.2 (gsa1_090_water.md WTR-A, G-SA1 half): the host's water at the character for every pair of this tick (libsa1
     // reads it when struct_size covers host_flags: sizeof in, with this header). Without extra: 0, the game's own rule.
     uint32_t hflags = extra ? (extra->host_flags & kHostFlagsKnown) : 0u;
@@ -1502,7 +1521,13 @@ void Session::build_batches(Character &c)
         if (tris > kMaxBatchTriangles) {
             continue;
         }
+#if defined(SA1_API_QUESTION)
+        // 0.9.9: the question mark's model draws from SA1_ARCHIVE_QUESTION, which num_archives does not count on purpose
+        bool textured = d.archive >= 0 && d.texture >= 0 && ((uint32_t)d.archive < std::max(1u, c.num_archives) ||
+                        ((c.create_extra & SA1_CREATE_QUESTION) && (uint32_t)d.archive == SA1_ARCHIVE_QUESTION));
+#else
         bool textured = d.archive >= 0 && d.texture >= 0 && (uint32_t)d.archive < std::max(1u, c.num_archives);
+#endif
         uint32_t f = d.flags & kBatchKeyFlags;
         if (d.prim != SA1_PRIM_TRIANGLES) {
             f |= SA1_DRAW_DOUBLE_SIDED;

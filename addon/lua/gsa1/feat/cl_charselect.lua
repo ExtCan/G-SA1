@@ -38,8 +38,11 @@ local cv = {
         .. "in Garry's Mod)", 0, 1),
     wide   = GSA1.ConVar("gsa1_charselect_wide", 0, "Character Select on wide screens: 0 = 4:3 with the sky continued, 1 = "
         .. "stretched", 0, 1),
-    super  = GSA1.ConVar("gsa1_charselect_super", "last", "Character Select, the Super Sonic slot plays: last = the one you "
-        .. "played last, supersonic = Vs. Perfect Chaos, supersonic_general = General Gameplay"),
+    super  = GSA1.ConVar("gsa1_charselect_super", "question", "Character Select, the ? slot plays: question = the Question Mark, last = the "
+        .. "Super Sonic you played last, supersonic = Vs. Perfect Chaos, supersonic_general = General Gameplay"),
+    -- 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.9, small099.md 3.2)
+    qmark  = GSA1.ConVar("gsa1_charselect_qmark", 1, "The question mark's texture, on the menu and on the character: 1 = the gold "
+        .. "in the menu's own archive (sstx_body), 0 = as the Dreamcast draws it (the words Player Select mirrored over it)", 0, 1),
     -- the option's memory, not an option: no control (the plan's 5.9)
     super_last = GSA1.ConVar("gsa1_charselect_super_last", "", "Character Select: the Super Sonic you played last (kept by "
         .. "G-SA1)"),
@@ -49,6 +52,21 @@ S.cv = cv
 local function log(fmt, ...)
     if GSA1.Log then GSA1.Log("charselect", fmt, ...) end
 end
+
+-- 0.9.9 (sadc docs/research/gsa1_099_plan.md, addendum A4): the slot's default is the "?" now. Garry's Mod keeps ConVars, so a saved "last" (0.9.8's
+-- default) moves to "question" once per installation (a cookie, as cl_super.lua's voice move), with one log line: a later choice of "last"
+-- stays, and so does a saved choice of a Super Sonic. true when it changed the setting
+function S.MigrateSlot()
+    if not (cookie and cookie.GetNumber and cookie.Set) or cookie.GetNumber("gsa1_charselect_super_099", 0) ~= 0 then
+        return false
+    end
+    cookie.Set("gsa1_charselect_super_099", "1")
+    if cv.super:GetString() ~= "last" then return false end
+    cv.super:SetString("question")
+    log("the ? slot: a saved \"The Super Sonic you played last\" moved once to \"The Question Mark\" (0.9.9); choose it again on the Character page and it stays")
+    return true
+end
+S.MigrateSlot()
 
 S.st = nil                      -- the open panel's state (nil: closed)
 S.keyWas, S.startWas = false, false
@@ -112,7 +130,7 @@ end
 
 -- the title of a slot's button
 function S.SlotTitle(slot)
-    if slot == S.SUPER_SLOT then return "Super Sonic" end
+    if slot == S.SUPER_SLOT then return cv.super:GetString() == "question" and "?" or "Super Sonic" end
     local c = GSA1.CharacterByName and GSA1.CharacterByName(S.SLOT_ENTRY[slot])
     return c and c.title or tostring(S.SLOT_ENTRY[slot])
 end
@@ -818,6 +836,43 @@ end)
 concommand.Add("gsa1_charselect", function() S.Toggle("the command") end, nil,
     "G-SA1: open or close Character Select (bind <key> gsa1_charselect works)")
 
+-- 0.9.9: the question mark's texture (sadc docs/research/small099.md 3.2, gsa1_099_plan.md 2.3 row 1, 2.4 C1, C2). The model's
+-- material asks for texture 7 of the menu's archive (cs_ce_tx, the words "Player Select"), sphere-mapped; its UVs stay in 0..1 and its
+-- address mode clamps: nothing repeats, the normals sweep the words over every bevel. With gsa1_charselect_qmark 1 a sphere-mapped batch
+-- of THAT texture takes sstx_body of the same archive, which no draw of the screen uses. By name, never by number: a texture or an
+-- archive without those names stays as it is. Render only: the 2D "Player Select" (cl_hud.lua's H.Material) never comes here.
+S.QUESTION_TEXTURES = 11    -- AVA_CHSEL(_E) on the disc; archive 62 is not in T.Archives(8)
+local qmark_cache = {}
+function S.QuestionTexture(kind, b)
+    if band(b.flags or 0, 0x8) == 0 or not cv.qmark:GetBool() then return b.tex end     -- SA1_DRAW_ENV_MAP
+    local T = GSA1.Tex
+    local here = T.Info(kind, b.archive, b.tex)
+    if not (here and string.lower(tostring(here.name)) == "cs_ce_tx") then return b.tex end
+    local key = kind * 4096 + b.archive
+    local q = qmark_cache[key]
+    if q == nil then
+        q = false
+        local sup = gsa1.SUPER
+        local count = (kind == 8 and sup and b.archive == sup.ARCHIVE_QUESTION) and S.QUESTION_TEXTURES
+            or (T.Archives(kind)[b.archive] or {}).count or 0
+        for i = 0, count - 1 do
+            local info = T.Info(kind, b.archive, i)
+            if info and string.lower(tostring(info.name)) == "sstx_body" then q = i break end
+        end
+        if not q then log("archive %d of character %d has no sstx_body: the question mark stays as the disc draws it", b.archive, kind) end
+        qmark_cache[key] = q
+    end
+    return q or b.tex
+end
+if GSA1.Tex then GSA1.Tex.Remap = S.QuestionTexture end
+-- T.ForgetKeys reaches the menu's per-frame call; a "?" that exists keeps its materials in C.mats (small099.md 3.2's hand-over)
+cvars.AddChangeCallback("gsa1_charselect_qmark", function(_, _, new)
+    if GSA1.Tex then GSA1.Tex.ForgetKeys() end
+    local C = GSA1.Char
+    if C and C.question then C.matsDirty = true end
+    log("gsa1_charselect_qmark = %s", tostring(new))
+end, "gsa1_charselect")
+
 -- the entry points ---------------------------------------------------------------------------------------------------------------
 -- the C menu's icon: at file scope, the sandbox gamemode reads the list when it makes the menu (after the autorun). A plain icon
 -- until the disc gave Sonic's 1-up (S.IconStep)
@@ -959,6 +1014,11 @@ function S.BuildOptions(panel)
     panel:ControlHelp("Your jukebox pauses where it is and goes on afterwards. Off: no music, the jukebox goes on.")
     panel:CheckBox("Show File and Clear in the bottom bar", "gsa1_charselect_file")
     combo(panel, "Wide screens", "gsa1_charselect_wide", { { "4:3 with the sky continued", "0" }, { "stretched", "1" } })
-    combo(panel, "The Super Sonic slot plays", "gsa1_charselect_super", S.SUPER_CHOICES)
+    combo(panel, "The ? slot plays", "gsa1_charselect_super", S.SUPER_CHOICES)
+    combo(panel, "The question mark's texture", "gsa1_charselect_qmark", {
+        { "gold (the menu's sstx_body; not what the game's code picks)", "1" },
+        { "as the Dreamcast draws it (the words Player Select mirrored over it)", "0" } })
+    panel:ControlHelp("Both the question mark on this screen and the character \"?\". The texture was never tiling: the game's model "
+        .. "asks for the texture with the words Player Select and spreads them over every curved face. Your disc also has this unused gold.")
 end
 if GSA1.AddCharacterOption then GSA1.AddCharacterOption(180, "charselect", S.BuildOptions) end

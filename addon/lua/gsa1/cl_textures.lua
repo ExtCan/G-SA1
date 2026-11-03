@@ -1007,7 +1007,9 @@ function T.Material(kind, b, warm)
     local mode, lit, nocull, hl, alpha = T.MaterialState(b)
     local tex, texname = "vgui/white", "white"
     if b.archive >= 0 and b.tex >= 0 then
-        local e = T.Get(kind, b.archive, b.tex, b.wrap, not warm, not warm and "first use" or nil)
+        -- 0.9.9: another texture of the same archive for this batch (feat/cl_charselect.lua: the question mark's gold)
+        local ti = T.Remap and T.Remap(kind, b) or b.tex
+        local e = T.Get(kind, b.archive, ti, b.wrap, not warm, not warm and "first use" or nil)
         if e then
             tex = e.rt:GetName()
             texname = tex

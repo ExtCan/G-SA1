@@ -9,7 +9,7 @@
 --   GSA1.Faces.Library()              the face animations in the page's order: { name, entries = { {letter, enter, hold},
 --                                     ... }, back, hold_last }
 --   GSA1.Faces.Find(name)             that face animation or nil
---   GSA1.Faces.HasFaces(entry_name)   false for gamma, supersonic, supersonic_general (and without the module's "faces")
+--   GSA1.Faces.HasFaces(entry_name)   false for gamma, supersonic, supersonic_general, eggman, tikal, question (and without the module's "faces")
 --   GSA1.Faces.CanShow(name, entry)   true | false, why ("Big can't show b")
 --   GSA1.Faces.Play(C, name, why)     plays it on the character table C now; true | nil, reason; why = "wheel", ...
 --   GSA1.Faces.Stop(C)

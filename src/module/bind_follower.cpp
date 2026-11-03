@@ -34,12 +34,18 @@
 //       out.kind, out.leader (id, 0 host-fed), out.mode, out.smode, out.offscreen (steps), out.distance (HU), out.respawns,
 //       out.respawns_distance, out.respawns_offscreen, out.held, out.lost (the leader was lost), out.hidden (0..1, the last 300
 //       pairs), out.pairs, out.dropped, out.objects, out.sounds, out.level
+//       (feature version 2) out.speed_factor: the factor of the last step (sa1_follower_speed; 1 near its spot)
+//   gsa1.FollowerSpeed(id, m) -> true | nil, msg, code      (feature version 2, round 0.9.9, sadc docs/research/gsa1_099_plan.md 5.5, libsa1's
+//       SA1_API_FOLLOWER 2) sa1_follower_speed: how much faster than the game's own numbers it may run while it is behind its spot,
+//       m 1 (the game's own: nothing is ever written) .. gsa1.FOLLOWER.SPEED_MAX
+//   gsa1.FollowerSpot(id, x, y) -> true | nil, msg, code    (feature version 2) sa1_follower_spot: where it stands around its leader, an
+//       offset in host units in Source's axes with z 0 (two numbers: no engine Vector, the hook budget of 098 D10); 0, 0: the game's own place
 //   gsa1.FollowerThreads(n) -> workers | nil, msg, code     module-wide; 0 automatic; the pool is rebuilt between frames
 //   gsa1.FollowersStats([out]) -> out                       the last second: followers, workers, ms_tick, ms_render, ms_join,
 //       ms_wall, frames
 //   gsa1.FOLLOWER = { MAX = 112, MAX_CHARACTERS = 128, OBJECTS_NONE = 0, OBJECTS_OWN = 1, DRAW_FULL = 1, DRAW_FAR = 2,
 //       DRAW_NONE = 3, RATE_MIN = 5, RATE_MAX = 30, RATE_DEFAULT = 15, POOL_MAX = 16, LIB_PARALLEL = bool,
-//       MODE = { PLACE = 0, RESPAWN = 2, NORMAL = 4, TAKEOVER = 5, PARKED = 6 } }
+//       MODE = { PLACE = 0, RESPAWN = 2, NORMAL = 4, TAKEOVER = 5, PARKED = 6 }, SPEED_MAX (feature version 2: libsa1's 8) }
 // Valid for a follower id, unchanged: gsa1.Batches, gsa1.PrepareView, gsa1.EmitBatch, gsa1.GetState, gsa1.StateEx, gsa1.Destroy,
 // gsa1.SetGameOption, gsa1.ObjWorldMask, 0.9.5's gsa1.Board / BoardPush / BoardFree / BoardState (slot 1). gsa1.Render(followerId,
 // ...) renders nothing and answers the values of its last pool render (the pool renders followers: FollowerDraw).
@@ -375,6 +381,51 @@ GSA1_FN(gsa1_follower_FollowerRespawn)
     return 1;
 }
 
+#if SA1_API_FOLLOWER >= 2
+// gsa1.FollowerSpeed(id, m) -> true | nil, msg, code
+GSA1_FN(gsa1_follower_FollowerSpeed)
+{
+    int32_t id = 0;
+    double m = 0.0;
+    if (!arg_int(LUA, 1, id, 1, 2147483647.0) || !arg_number(LUA, 2, m)) {
+        return push_nil_msg(LUA, "FollowerSpeed(id, multiplier 1..gsa1.FOLLOWER.SPEED_MAX)", "bad_argument");
+    }
+    int ret = 0;
+    if (!follower_char(LUA, id, ret)) {
+        return ret;
+    }
+    gsa1::Session *se = session();
+    sa1_status st = sa1_follower_speed(se->ctx(), id, (float)m);
+    if (SA1_FAILED(st)) {
+        return push_lib_failure(LUA, se, st);
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+
+// gsa1.FollowerSpot(id, x, y) -> true | nil, msg, code
+GSA1_FN(gsa1_follower_FollowerSpot)
+{
+    int32_t id = 0;
+    double x = 0.0, y = 0.0;
+    if (!arg_int(LUA, 1, id, 1, 2147483647.0) || !arg_number(LUA, 2, x) || !arg_number(LUA, 3, y)) {
+        return push_nil_msg(LUA, "FollowerSpot(id, x, y): host units, Source's axes", "bad_argument");
+    }
+    int ret = 0;
+    if (!follower_char(LUA, id, ret)) {
+        return ret;
+    }
+    gsa1::Session *se = session();
+    const float offset[3] = {(float)x, (float)y, 0.0f};
+    sa1_status st = sa1_follower_spot(se->ctx(), id, offset);
+    if (SA1_FAILED(st)) {
+        return push_lib_failure(LUA, se, st);
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+#endif  // SA1_API_FOLLOWER >= 2
+
 // gsa1.FollowerDraw(id, level [, rate]) -> true | nil, msg, code
 GSA1_FN(gsa1_follower_FollowerDraw)
 {
@@ -492,6 +543,9 @@ GSA1_FN(gsa1_follower_FollowerInfo)
     raw_num(LUA, t, "objects", c->follower_objects);
     raw_bool(LUA, t, "sounds", c->follower_sounds);
     raw_num(LUA, t, "level", c->draw_level);
+#if SA1_API_FOLLOWER >= 2
+    raw_num(LUA, t, "speed_factor", std::isfinite(fi.speed_factor) ? fi.speed_factor : 1.0);
+#endif
     return 1;
 }
 
@@ -548,6 +602,9 @@ void follower_open(ILuaBase *L, int t)
     raw_num(L, c, "RATE_DEFAULT", gsa1::kFollowerRateDefault);
     raw_num(L, c, "POOL_MAX", gsa1::kPoolMaxWorkers);
     raw_bool(L, c, "LIB_PARALLEL", gsa1::kPoolLibParallel);
+#if SA1_API_FOLLOWER >= 2
+    raw_num(L, c, "SPEED_MAX", SA1_FOLLOWER_SPEED_MAX);
+#endif
     L->PushString("MODE");
     L->CreateTable();
     int m = L->Top();
@@ -568,6 +625,10 @@ const gsa1::FeatureFn k_follower_fns[] = {
     {"FollowerHostFlags", gsa1_follower_FollowerHostFlags},
     {"FollowerHold", gsa1_follower_FollowerHold},
     {"FollowerRespawn", gsa1_follower_FollowerRespawn},
+#if SA1_API_FOLLOWER >= 2
+    {"FollowerSpeed", gsa1_follower_FollowerSpeed},
+    {"FollowerSpot", gsa1_follower_FollowerSpot},
+#endif
     {"FollowerDraw", gsa1_follower_FollowerDraw},
     {"FollowersTick", gsa1_follower_FollowersTick},
     {"FollowerInfo", gsa1_follower_FollowerInfo},
@@ -577,7 +638,12 @@ const gsa1::FeatureFn k_follower_fns[] = {
 
 }  // namespace
 
-// version 1 (0.9.8): the functions above, gsa1.FOLLOWER
+// version 1 (0.9.8): the functions above, gsa1.FOLLOWER; version 2 (0.9.9, libsa1's SA1_API_FOLLOWER 2): FollowerSpeed, FollowerSpot,
+// gsa1.FOLLOWER.SPEED_MAX, FollowerInfo's speed_factor. The addon's Fo.NEEDS stays version 1: it asks for the new calls by name
+#if SA1_API_FOLLOWER >= 2
+GSA1_FEATURE(follower, 2, k_follower_fns, follower_open, nullptr, gsa1::kCloseDefault);
+#else
 GSA1_FEATURE(follower, 1, k_follower_fns, follower_open, nullptr, gsa1::kCloseDefault);
+#endif
 
 #endif  // SA1_API_FOLLOWER (a libsa1 without followers: no feature "follower"; GSA1.HasFeature("follower") is false)

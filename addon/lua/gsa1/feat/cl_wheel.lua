@@ -268,7 +268,10 @@ local function toast(fmt, ...)
 end
 W.Toast = toast
 
+W.ON_PLAYED = W.ON_PLAYED or {}     -- 0.9.9: function(C, page, slot) after the player's body emote started; page 0: a catalogue row or gsa1_emote, not a slot
+
 function W.Open(C, how)
+    if C.def and C.def.nowheel then toast("%s has no emotes", C.title or "This character") return end
     W.open, W.char, W.entry = true, C, C.name or (GSA1.CharacterByKind and GSA1.CharacterByKind(C.kind) or {}).name or "sonic"
     W.page, W.sel, W.cx, W.cy = 1, 0, 0, 0
     W.openAt, W.how, W.lastInput, W.stickAt = SysTime(), how, nil, nil
@@ -329,6 +332,7 @@ W.SlotEntry = slot_entry
 
 -- a slot's body animation on character C (entry: whose wheel; default the open wheel's): true when libsa1 took it
 function W.PlayBody(C, slot, page, s, how, face, entry)
+    if C.def and C.def.nowheel then return false end
     if not slot or not slot.body then return false end
     entry = entry or W.entry or C.name
     local title = C.title or W.Title(entry)
@@ -391,6 +395,7 @@ function W.PlayBody(C, slot, page, s, how, face, entry)
         W.playing = { id = C.id, key = e.key, name = e.name, hold = hold ~= 0, rate = rated and rate or 1 }
         W.last = { page = page, slot = s }
         W.stats.played = W.stats.played + 1
+        for _, h in ipairs(W.ON_PLAYED) do pcall(h, C, page, s) end
         local at = ""
         if rate ~= 1 then
             at = rated and (", at " .. W.SpeedText(rate)) or string.format(", at the game's rate (%s needs G-SA1 module %s)",
@@ -1392,10 +1397,10 @@ end
 -- the entry the page starts with: the current character's, else the character setting's
 local function current_entry()
     local C = GSA1.Char
-    if C and C.name and W.EntryOf(C.name) then return C.name end
+    if C and C.name and W.EntryOf(C.name) and not (C.def and C.def.nowheel) then return C.name end
     local c = GSA1.CharacterByName and GSA1.CharacterByName(GSA1.cv and GSA1.cv.character and
         GSA1.cv.character:GetString() or "sonic")
-    return c and c.name or "sonic"
+    return c and not c.nowheel and c.name or "sonic"
 end
 W.CurrentEntry = current_entry
 

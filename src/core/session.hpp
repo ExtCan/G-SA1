@@ -224,7 +224,11 @@ struct CreateExtra {
 };
 #if defined(SA1_API_SUPER)
 const bool kSuperApi = true;
+#if defined(SA1_API_QUESTION)
+const uint32_t kCreateExtraFlags = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR | SA1_CREATE_QUESTION;   // 0.9.9: the "?"
+#else
 const uint32_t kCreateExtraFlags = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR;
+#endif
 // 0.9.3a (sadc docs/research/super_general_design.md 5 / 6.2 with its Review RC1; libsa1.h "THE GENERAL FORM"): the
 // General form (SA1_SUPER_GENERAL: a Sonic world on the host's stage, never level 19), SA1_SUPER_START (Super right after
 // the first pair: the General entry when it is spawned, switched to or respawned, or re-created while Super), water while

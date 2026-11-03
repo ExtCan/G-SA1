@@ -319,7 +319,7 @@ if not (ok_load and S) then return done() end
 local k8, def8 = GSA1.KindByName("supersonic")
 local kg, defg = GSA1.KindByName("supersonic_general")
 check(k8 == 8 and def8.title == "Super Sonic (Vs. Perfect Chaos)" and kg == 0 and defg.form == "general" and
-    defg.title == "Super Sonic (General Gameplay)" and #GSA1.CHARACTERS == 8 and GSA1.KindByName("super") == 8 and
+    defg.title == "Super Sonic (General Gameplay)" and #GSA1.CHARACTERS == 11 and GSA1.KindByName("super") == 8 and
     GSA1.KindByName("Super_Sonic") == 8 and GSA1.KindByName("vspc") == 8 and select(2, GSA1.KindByName("ssg")) == defg and
     select(2, GSA1.KindByName("super_general")) == defg and GSA1.CharacterByKind(0).name == "sonic" and
     GSA1.CharacterByName("0").name == "sonic" and GSA1.CharacterByName("8").name == "supersonic",
@@ -488,7 +488,7 @@ if char_entry then
             end
         end
     end
-    check(cok and shoes == 1 and #choices == 8 and #quick == 8 and note ~= "",
+    check(cok and shoes == 1 and #choices == 11 and #quick == 11 and note ~= "",
         "the Character page: both Super Sonics in the list (%d entries) and the quick spawn buttons (%d); Sonic's upgrade "
         .. "block once (RC4: %d), \"Both Super Sonics use Sonic's upgrades\"%s", #choices, #quick, shoes,
         cok and "" or (": " .. tostring(cerr)))
@@ -1418,4 +1418,38 @@ do
 end
 check(#R.bad == 0 and #M.reported == 0, "no call the module would refuse (%s), no Lua error reported (%s)",
     table.concat(R.bad, " "), tostring(M.reported[1]))
+-- 0.9.9 (sadc docs/research/small099.md 3.3, 6.5): a slider's drag writes one log line, about a second after the last tick, not one per tick
+do
+    GSA1.LogFlush()
+    local function lines()
+        GSA1.LogFlush()
+        local n, from, s = 0, 1, M.files["gsa1/log.txt"] or ""
+        while true do
+            local a, b = string.find(s, "gsa1_super_rings = ", from, true)
+            if not a then return n end
+            n, from = n + 1, b + 1
+        end
+    end
+    local timers = {}
+    local real = timer.Create
+    timer.Create = function(name, delay, reps, fn) timers[name] = { at = M.T + delay, fn = fn } end
+    local n0 = lines()
+    for i = 1, 30 do
+        RunConsoleCommand("gsa1_super_rings", tostring(20 + i))
+        frames(1, 1 / 30)
+    end
+    check(lines() == n0, "gsa1_super_rings dragged over 30 ticks: no log line during the drag")
+    frames(70)
+    for name, t in pairs(timers) do
+        if M.T >= t.at then
+            timers[name] = nil
+            t.fn()
+        end
+    end
+    check(lines() == n0 + 1, "one line after it (%d)", lines() - n0)
+    GSA1.LogFlush()
+    check(string.find(M.files["gsa1/log.txt"] or "", "gsa1_super_rings = 50", 1, true) ~= nil, "the last value")
+    timer.Create = real
+end
+
 return done()

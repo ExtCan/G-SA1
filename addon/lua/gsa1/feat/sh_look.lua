@@ -4,6 +4,8 @@
 -- (libsa1's sa1_character_look, src/module/bind_look.cpp). What a character looks at in Garry's Mod is the host's choice, not
 -- the game's (the game's characters look at people who talk to them, upgrade items and freed animals): every rule below sits
 -- behind the options of the Head look page.
+--   Round 0.9.9 (sadc docs/research/gsa1_099_plan.md 4.1 B6, small099.md 3.1): two more categories, each its own option, both off by
+--   default: what the interact key can use (priority after items) and physics props (after that, before the leader).
 --   THE RULES (look096.md 7.2.2, measured in 5.10):
 --     * in range: people, characters and hostile NPCs gsa1_look_range, items and what was defeated 40 HU more; a follower's
 --       leader L.LEADER_RANGE (a follower that stopped near its leader stands further off than people are looked at);
@@ -26,6 +28,10 @@ GSA1.Look = L
 L.NEEDS = { feature = "look", version = 1, module = "0.9.8" }
 L.PAGE_ORDER = 287
 L.CAT_DEFEATED, L.CAT_PEOPLE, L.CAT_HOSTILE, L.CAT_ITEM = 1, 2, 3, 4
+L.CAT_USABLE, L.CAT_PROP = 5, 6     -- 0.9.9: what the interact key can use; physics props (each its own option, off by default)
+L.EXTRA_MAX = 32            -- 0.9.9: interactables and physics props a scan keeps, beyond the 64 (they never crowd out people or items)
+L.EXTRA_REFRESH = 4         -- 0.9.9: a kept one's place is read every 4th round, unless a head looks at it (one Vector each)
+L.EXTRA_KEEP_MAX = 2        -- 0.9.9: seconds a kept one stays without its looker's sphere finding it again
 L.ROUND = 0.1               -- seconds between two choices (the interaction scan's rate)
 L.HOLD, L.SWITCH = 1.0, 0.5 -- at least 1 s on a target; a new one must be the best for 0.5 s
 L.CONE_DEGREES = 100
@@ -41,11 +47,12 @@ L.DEFEATED_FOR = 5          -- the freed animal's 300 steps
 L.KILLED_MARK = 3           -- cl_interact.lua: I.killed[idx] = the kill's time + 3 s
 
 local CAT_DEFEATED, CAT_PEOPLE, CAT_HOSTILE, CAT_ITEM = L.CAT_DEFEATED, L.CAT_PEOPLE, L.CAT_HOSTILE, L.CAT_ITEM
+local CAT_USABLE, CAT_PROP = L.CAT_USABLE, L.CAT_PROP
 local HOLD, SWITCH = L.HOLD, L.SWITCH
 local COS2 = math.cos(math.rad(L.CONE_DEGREES)) ^ 2     -- (the cone's cosine is negative: only the far side needs it)
 
 -- the options as the chooser reads them (o: reused)
-function L.SetOptions(o, range, people, hostile, items, defeated)
+function L.SetOptions(o, range, people, hostile, items, defeated, props, usable)
     range = tonumber(range) or 120
     o.range = range
     o.r2 = range * range
@@ -53,6 +60,7 @@ function L.SetOptions(o, range, people, hostile, items, defeated)
     o.r2leader = L.LEADER_RANGE * L.LEADER_RANGE
     o.people, o.hostile, o.items, o.defeated = people and true or false, hostile and true or false, items and true or false,
         defeated and true or false
+    o.props, o.usable = props and true or false, usable and true or false
     return o
 end
 
@@ -102,6 +110,7 @@ function L.Choose(l, pool, n, o, now)
     local cur = l.cur
     local curE, best, bestP, bestD = nil, nil, 9, 1e30
     local r2, r2far, people, hostile, items, defeated = o.r2, o.r2far, o.people, o.hostile, o.items, o.defeated
+    local props, usable = o.props, o.usable
     for i = 1, n do
         local c = pool[i]
         local key = c.key
@@ -111,6 +120,8 @@ function L.Choose(l, pool, n, o, now)
             if cat == CAT_PEOPLE then reach, on, prio = r2, people, 2
             elseif cat == CAT_HOSTILE then reach, on, prio = r2, hostile, 2
             elseif cat == CAT_ITEM then reach, on, prio = r2far, items, 3
+            elseif cat == CAT_USABLE then reach, on, prio = r2far, usable, 4
+            elseif cat == CAT_PROP then reach, on, prio = r2far, props, 5
             else reach, on, prio = r2far, defeated, 1 end
             if on then
                 local dx, dy, dz = c.x - lx, c.y - ly, c.z - lz

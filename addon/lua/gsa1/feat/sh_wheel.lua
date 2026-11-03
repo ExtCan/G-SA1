@@ -321,9 +321,12 @@ W.COLOURS = {
     sonic = { 35, 110, 255 }, tails = { 250, 150, 30 }, knuckles = { 230, 45, 45 }, amy = { 245, 110, 180 },
     gamma = { 150, 160, 175 }, big = { 150, 90, 220 }, supersonic = { 255, 196, 40 }, supersonic_general = { 255, 196, 40 },
 }
+-- (0.9.9: Dr. Eggman, Tikal and "?" have no wheel: nowheel, sh_config.lua)
 function W.Entries()
     local out = {}
-    for _, c in ipairs(GSA1.CHARACTERS or {}) do out[#out + 1] = c end
+    for _, c in ipairs(GSA1.CHARACTERS or {}) do
+        if not c.nowheel then out[#out + 1] = c end
+    end
     return out
 end
 function W.EntryOf(name)

@@ -64,6 +64,21 @@ cv.come_along = GSA1.ConVar("gsa1_follower_come_along", 1, "Followers come along
     0, 1)
 cv.loop_guard = GSA1.ConVar("gsa1_follower_loop_guard", 1, "A follower that keeps dropping in (4 times within 10 s) waits 3 s and "
     .. "comes back behind you; one that falls below the map drops in again at once (a host rule)", 0, 1)
+-- round 0.9.9 (sadc docs/research/gsa1_099_plan.md 4.1 B3, B4, B5, 5.9; follow099.md 6.3, 7): keeping up, standing apart, emoting with you
+Fo.SPEED_MAX, Fo.SPACING_MAX, Fo.SPACING_EGG = 4, 160, 40
+cv.speed = GSA1.ConVar("gsa1_follower_speed", 1, "Followers behind you may run up to this many times their own speed until they have caught up; near you they run at the "
+    .. "game's own speed (1 = the game; Sonic 1.2, Knuckles 1.3, Tails 1.5, E-102 2.5, Big 3.5, Amy 4 stay with Sonic at full speed)", 1, Fo.SPEED_MAX)
+cv.spacing = GSA1.ConVar("gsa1_follower_spacing", 64, "Room between followers in units: with two or more, each has its own spot around the one it follows (0 = the game's own place: "
+    .. "they can stand inside each other)", 0, Fo.SPACING_MAX)
+cv.emotes = GSA1.ConVar("gsa1_follower_emotes", 1, "Your followers play the same slot of their own wheel when you play one from the emote wheel", 0, 1)
+
+-- the spot of the i-th of n followers, x, y in HU (pure: the tests call it): a sunflower in world axes. One follower: the game's own place
+function Fo.SpotOf(i, n, s)
+    if n < 2 or s <= 0 then return 0, 0 end
+    local r, a = s * math.sqrt(i), i * 2.39996323
+    return r * math.cos(a), r * math.sin(a)
+end
+
 cv.fix_view = GSA1.ConVar("gsa1_follower_fix_view", 1, "New followers: their own animations run where the game's camera cannot see "
     .. "them (not in the game)", 0, 1)
 cv.fix_respawn = GSA1.ConVar("gsa1_follower_fix_respawn", 1, "New followers: after dropping in, those other than Tails forget where "

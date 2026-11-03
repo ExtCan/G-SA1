@@ -151,7 +151,7 @@ end
 F.Const = const
 
 -- 1. the characters' faces ------------------------------------------------------------------------------------------------
-F.SHORT = { gamma = "E-102", supersonic = "Super Sonic", supersonic_general = "Super Sonic" }
+F.SHORT = { gamma = "E-102", supersonic = "Super Sonic", supersonic_general = "Super Sonic", question = "?" }
 local function entry_of(name)
     if name == nil or name == "" then return nil end
     local kind, def = GSA1.KindByName(name)
@@ -167,6 +167,9 @@ function F.NoFaceText(entry_name)
     local kind, def = entry_of(entry_name)
     if not kind then return "no such character" end
     if def.name == "gamma" or kind == 6 then return "E-102 has no face in the game" end
+    if def.name == "eggman" then return "Eggman has no face in the game" end
+    if def.name == "tikal" then return "Tikal's cutscene face is not wired up" end
+    if def.form == "question" then return "The ? has no face" end
     if kind == 8 or def.form == "general" then return "Super Sonic has no cutscene face in the game" end
     if not F.FACE_KINDS[kind] then return F.Title(entry_name) .. " has no face in G-SA1" end
     return nil

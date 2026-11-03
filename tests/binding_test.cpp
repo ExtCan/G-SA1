@@ -897,7 +897,7 @@ int main(int argc, char **argv)
     bad += is_nil_msg(L.call("Create", {Val::string("sonic"), Val::vector(0, 0, 0), Val::number(0)}));
     bad += is_nil_msg(L.call("Create", {Val::number(0), Val::number(1), Val::number(0)}));
     bad += is_nil_msg(L.call("Create", {Val::number(0.5), Val::vector(0, 0, 0), Val::number(0)}));
-    bad += is_nil_msg(L.call("Create", {Val::number(1), Val::vector(0, 0, 0), Val::number(0)}));   // Eggman
+    bad += is_nil_msg(L.call("Create", {Val::number(9), Val::vector(0, 0, 0), Val::number(0)}));   // not a character
     bad += is_nil_msg(L.call("Create", {Val::number(0), Val::vector(NAN, 0, 0), Val::number(0)}));
     bad += is_nil_msg(L.call("Tick", {Val::number(12345), Val::number(0), Val::number(0), Val::number(0), Val::number(0), Val::number(0.01)}));
     bad += is_nil_msg(L.call("Texture", {Val::number(0), Val::number(9999)}));

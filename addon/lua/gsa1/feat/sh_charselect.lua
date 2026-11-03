@@ -10,14 +10,17 @@ S.SLOTS = 7                     -- the game's ring: 0 Sonic .. 5 E-102, 6 the sp
 S.SUPER_SLOT = 6
 -- the game's slot -> G-SA1's list entry (sh_config.lua GSA1.CHARACTERS); slot 6 by S.SuperEntry
 S.SLOT_ENTRY = { [0] = "sonic", [1] = "tails", [2] = "knuckles", [3] = "amy", [4] = "big", [5] = "gamma" }
-S.ENTRY_SLOT = { sonic = 0, tails = 1, knuckles = 2, amy = 3, big = 4, gamma = 5, supersonic = 6, supersonic_general = 6 }
--- gsa1_charselect_super: "last", or one of the two entries; before any Super Sonic was played "last" is General Gameplay,
--- the one that works on every map (charsel098 6.4, owner question CS-5's default)
+-- (Dr. Eggman and Tikal are not on the game's ring: S.SlotOf gives them Sonic's slot)
+S.ENTRY_SLOT = { sonic = 0, tails = 1, knuckles = 2, amy = 3, big = 4, gamma = 5, supersonic = 6, supersonic_general = 6, question = 6 }
+-- gsa1_charselect_super: which entry the slot plays. 0.9.9 (the plan's addendum A4): its default is "question", the Question Mark as a character of
+-- its own; the other three stay a choice away. "last" only ever holds a Super Sonic (cl_charselect.lua writes those two), so it can never become
+-- the "?"; before any Super Sonic was played "last" is General Gameplay, the one that works on every map (charsel098 6.4, owner question CS-5)
 S.SUPER_FIRST = "supersonic_general"
 S.SUPER_CHOICES = {
-    { "The one you played last", "last" },
+    { "The Super Sonic you played last", "last" },
     { "Vs. Perfect Chaos", "supersonic" },
     { "General Gameplay", "supersonic_general" },
+    { "The Question Mark", "question" },
 }
 -- the game's own sphere colours (FF0000FF, the selected one FFFF0000)
 S.SPHERE = { 0, 0, 255 }
@@ -31,7 +34,7 @@ S.STICK = 0.5                   -- Design S: how far the stick counts as a press
 
 -- the list entry the "?" slot plays
 function S.SuperEntry(choice, last)
-    if choice == "supersonic" or choice == "supersonic_general" then return choice end
+    if choice == "supersonic" or choice == "supersonic_general" or choice == "question" then return choice end
     if last == "supersonic" or last == "supersonic_general" then return last end
     return S.SUPER_FIRST
 end

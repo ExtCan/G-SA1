@@ -249,7 +249,8 @@ end
 -- extras, feat/cl_super.lua); nil = the kind's own entry
 local function create_character(kind, pos, yaw, how, old, rings, def)
     def = def or GSA1.CharacterByKind(kind)
-    local ups = GSA1.UpgradeNames(kind)
+    -- 0.9.9: "?" is kind 8 but has no upgrades of Sonic's (noUpgrades, sh_config.lua)
+    local ups = (def and def.noUpgrades) and {} or GSA1.UpgradeNames(kind)
     local t0 = SysTime()
     -- seam (0.9.3): a feature's extras for the module's Create (Super Sonic's world, feat/cl_super.lua); an error in it is
     -- logged and the character is made without them. 0.9.3a: also the entry and the character before (its form)
@@ -264,14 +265,15 @@ local function create_character(kind, pos, yaw, how, old, rings, def)
     GSA1.DrainLog()
     if not id then return nil, err end
     local tt = SysTime()
-    GSA1.Tex.Prepare(kind)
+    -- 0.9.9: not for "?": its one texture comes from T.Material (archive 62); Prepare would paint all of Super Sonic's archives
+    if not (def and def.form == "question") then GSA1.Tex.Prepare(kind) end
     local tex_ms = (SysTime() - tt) * 1000
     prof("Textures", tt)
     local ent = ents.CreateClientside("gsa1_render")
     ent:Spawn()
     local C = {
         id = id, kind = kind, name = def and def.name or tostring(kind), title = def and def.title or tostring(kind),
-        def = def, form = def and def.form or nil,
+        def = def, form = def and def.form or nil, question = (def and def.form == "question") or nil,
         info = gsa1.CharacterInfo(kind) or {}, state = {}, batches = { count = 0 }, batchGen = -1, mats = {},
         static = {}, matsDirty = true, last = SysTime(), spawnPos = pos, spawnYaw = yaw, ent = ent, nextNet = 0,
         nextActive = 0, drawPos = Vector(pos), upgrades = ups, startRings = rings, extras = extras,
@@ -340,7 +342,7 @@ function GSA1.Spawn(name)
     if not name or name == "" then name = GSA1.cv.character:GetString() end
     local kind, def = GSA1.KindByName(name)
     if not kind then
-        GSA1.Chat("unknown character '%s' (sonic, tails, knuckles, amy, gamma, big, supersonic, supersonic_general)", tostring(name))
+        GSA1.Chat("unknown character '%s' (sonic, tails, knuckles, amy, gamma, big, eggman, tikal, supersonic, supersonic_general, question)", tostring(name))
         return
     end
     GSA1.pendingSpawn = nil
@@ -456,7 +458,8 @@ function GSA1.Recreate(reason, at, at_yaw)
     local pos = Vector(at or C.drawPos)
     pos.z = pos.z + 1
     local yaw = at_yaw or C.drawYaw or C.spawnYaw
-    local rings = GSA1.CharacterRings(C)       -- read while its world is still there
+    -- read while its world is still there; 0.9.9: C.ringsOnRecreate: a feature's own number instead (the "?"'s rings slider)
+    local rings = C.ringsOnRecreate or GSA1.CharacterRings(C)
     destroy_character(C, "re-created")
     GSA1.Char = nil
     local NC, err = create_character(C.kind, pos, yaw, "re-created", C, nil, C.def)
@@ -567,7 +570,7 @@ local recreate_at = nil
 for _, u in ipairs(GSA1.UPGRADES) do
     cvars.AddChangeCallback("gsa1_upgrade_" .. u.name, function()
         local C = GSA1.Char
-        if C and GSA1.UpgradeKind(C.kind) == u.kind then recreate_at = SysTime() + 0.25 end
+        if C and GSA1.UpgradeKind(C.kind) == u.kind and not (C.def and C.def.noUpgrades) then recreate_at = SysTime() + 0.25 end
     end, "gsa1_upgrades")
 end
 
@@ -602,6 +605,14 @@ local function on_event(C, e, now)
     local dbg = GSA1.cv.debug:GetBool()
     now = now or SysTime()
     if e.type == EV.DEATH then
+        -- 0.9.9 (sadc docs/research/gsa1_099_plan.md 4.1 B8, 4.2 D12, its review R99.6): the air timer's end on Dr. Eggman or Tikal. Their
+        -- own code has no drown: they stand where they are. libsa1 reports it as one; G-SA1 adds nothing of its own (no death, no fallback).
+        -- The game's own restart request comes about 4 s later (MEASURED, libsa1 tests/playable_test.c P5b) and is answered below, as for anyone
+        if (tonumber(e.arg) or 0) == 3 and C.def and C.def.airEndsNothing and not C.death then
+            game_log("%s: the air ran out (step %d): no drown in the game's code for this character, it stands there until the game asks for its restart",
+                C.title, e.step or 0)
+            return
+        end
         -- libsa1 reports a world's first death only (its later restart requests are no new death)
         if not C.death then
             local cause = tonumber(e.arg) or 0
@@ -1158,7 +1169,7 @@ end
 
 concommand.Add("gsa1_spawn", function(ply, cmd, args)
     GSA1.Spawn(args[1])
-end, complete_names, "G-SA1: become a character (sonic, tails, knuckles, amy, gamma, big, supersonic, supersonic_general) where you stand")
+end, complete_names, "G-SA1: become a character (sonic, tails, knuckles, amy, gamma, big, eggman, tikal, supersonic, supersonic_general, question) where you stand")
 
 concommand.Add("gsa1_remove", function()
     GSA1.Remove(false)
@@ -1179,6 +1190,7 @@ end, nil, "G-SA1: gsa1_give_rings <n>: give your character n rings through the g
 
 concommand.Add("gsa1_upgrades_apply", function()
     if not GSA1.Char then GSA1.Msg("no character") return end
+    if GSA1.Char.def and GSA1.Char.def.noUpgrades then GSA1.Msg("%s has no upgrades", GSA1.Char.title) return end
     GSA1.Recreate("gsa1_upgrades_apply")
 end, nil, "G-SA1: re-create the character where it stands with the ticked upgrades")
 
@@ -1189,7 +1201,7 @@ concommand.Add("gsa1_upgrades_all", function(ply, cmd, args)
     if args[2] then
         kind = GSA1.KindByName(args[2])
         if not kind then
-            GSA1.Msg("unknown character '%s' (sonic, tails, knuckles, amy, gamma, big, supersonic, supersonic_general)", tostring(args[2]))
+            GSA1.Msg("unknown character '%s' (sonic, tails, knuckles, amy, gamma, big, eggman, tikal, supersonic, supersonic_general, question)", tostring(args[2]))
             return
         end
     end

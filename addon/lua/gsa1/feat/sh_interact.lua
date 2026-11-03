@@ -70,6 +70,8 @@ GSA1.CHAR_SIZE = {
     [5] = { radius = 14, height = 40, eyes = 28, center = 20 },        -- Amy
     [6] = { radius = 16, height = 84, eyes = 80, center = 56 },        -- E-102
     [7] = { radius = 38, height = 68, eyes = 60, center = 32 },        -- Big
+    [1] = { radius = 34, height = 72, eyes = 28, center = 21.2 },      -- Dr. Eggman (0.9.9)
+    [4] = { radius = 16, height = 40, eyes = 28, center = 20 },        -- Tikal (0.9.9)
 }
 -- a kind without its own row (Super Sonic, kind 8, until the round that adds him measures it) has Sonic's
 function I.CharSize(kind)

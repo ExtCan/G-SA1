@@ -83,14 +83,14 @@ int main(int argc, char **argv)
     std::string addon = gsa1::join_path(gsa1::join_path(gsa1::join_path(gsa1::join_path(root, "addon"), "lua"), "gsa1"),
                                         gsa1::join_path("feat", "sh_interact.lua"));
     std::map<int, Size> table = addon_sizes(addon);
-    static const int kKinds[] = {0, 2, 3, 5, 6, 7};
+    static const int kKinds[] = {0, 1, 2, 3, 4, 5, 6, 7};       // 0.9.9: Dr. Eggman (1) and Tikal (4)
     int rows = 0;
     for (int k : kKinds) {
         auto it = table.find(k);
         rows += it != table.end() && it->second.radius > 0 && it->second.height > 0 && it->second.eyes > 0 &&
                 it->second.center > 0;
     }
-    CHECK(rows == 6 && table.size() == 6, "GSA1.CHAR_SIZE in sh_interact.lua: %d of the six kinds (0 2 3 5 6 7) with "
+    CHECK(rows == 8 && table.size() == 8, "GSA1.CHAR_SIZE in sh_interact.lua: %d of the eight kinds (0 1 2 3 4 5 6 7) with "
           "radius, height, eyes and center (%d rows)", rows, (int)table.size());
 
     MockLua L;
@@ -157,8 +157,8 @@ int main(int argc, char **argv)
         diff += line;
         if (g_verbose) std::printf("  info %s\n", line);
     }
-    CHECK(same == 6, "GSA1.CHAR_SIZE = gsa1.CharacterInfo(kind) within 0.05 units (radius / height / eyes / center) for "
-          "%d of 6 kinds:%s", same, diff.c_str());
+    CHECK(same == 8, "GSA1.CHAR_SIZE = gsa1.CharacterInfo(kind) within 0.05 units (radius / height / eyes / center) for "
+          "%d of 8 kinds:%s", same, diff.c_str());
     gmod13_close(&state);
     std::printf("\n%d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

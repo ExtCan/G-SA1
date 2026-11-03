@@ -269,7 +269,7 @@ GSA1 = nil
 local BATCHES = { { 0, 0, 0x20, 1, 0, 3, 0, 500, 1 }, { 0, 1, 0x60, 1, 1, 3, 1, 20, 1 }, { 0, 2, 0x860, 1, 0, 3, 0, 4, 1 },
                   { 0, 3, 0x1020, 1, 0, 3, 0, 8, 1 }, { 0, 4, 0x4060, 1, 0, 3, 0, 44, 1 }, { 0, 5, 0x4860, 1, 0, 3, 0, 4, 1 } }
 local IDX = { body = 1, effect = 2, shadow = 3, object = 4, board = 5, boardshadow = 6 }
-local G = M.module({ features = { follower = 1, board = 1, emote = 3, preview = 2 }, host_camera = true,
+local G = M.module({ features = { follower = 2, board = 1, emote = 3, preview = 2 }, host_camera = true,
                      batches = function() return BATCHES end })
 local FM = { calls = {}, chars = {}, order = {}, bad = {}, ticks = 0, kinds = { [0] = true, [2] = true, [3] = true, [6] = true,
              [5] = "Amy cannot follow yet: her bird", [7] = "Big cannot follow yet: fishing" }, threads = {}, mem_low = false,
@@ -381,7 +381,34 @@ function G.FollowerInfo(id, out)
     out.distance, out.respawns, out.respawns_distance, out.respawns_offscreen = 40, f.respawns, 0, 0
     out.held, out.lost, out.hidden, out.pairs, out.dropped = f.held, false, 0, 0, 0
     out.objects, out.sounds, out.level = f.opts.objects or 1, f.opts.sounds ~= false, f.level
+    out.speed_factor = 1
     return out
+end
+-- round 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.5): the two calls, as src/module/bind_follower.cpp checks them
+function G.FollowerSpeed(id, m)
+    fcall("FollowerSpeed", id, m)
+    if type(id) ~= "number" or type(m) ~= "number" or m ~= m then
+        FM.bad[#FM.bad + 1] = "FollowerSpeed arguments"
+        return nil, "FollowerSpeed(id, multiplier)", "bad_argument"
+    end
+    if not FM.chars[id] then return nil, "this character is not a follower", "bad_argument" end
+    if FM.spot_refuse then return nil, FM.spot_refuse, "unsupported" end
+    if m < 1 or m > G.FOLLOWER.SPEED_MAX then return nil, "speed must be finite, 1 .. 8", "bad_argument" end
+    FM.speed = FM.speed or {}
+    FM.speed[id] = m
+    return true
+end
+function G.FollowerSpot(id, x, y, ...)
+    fcall("FollowerSpot", id, x, y)
+    if type(id) ~= "number" or type(x) ~= "number" or type(y) ~= "number" or x ~= x or y ~= y or select("#", ...) ~= 0 then
+        FM.bad[#FM.bad + 1] = "FollowerSpot arguments"
+        return nil, "FollowerSpot(id, x, y)", "bad_argument"
+    end
+    if not FM.chars[id] then return nil, "this character is not a follower", "bad_argument" end
+    if FM.spot_refuse then return nil, FM.spot_refuse, "unsupported" end
+    FM.spots = FM.spots or {}
+    FM.spots[id] = { x, y }
+    return true
 end
 function G.FollowerThreads(n)
     FM.threads[#FM.threads + 1] = n
@@ -393,7 +420,7 @@ function G.FollowersStats(out)
     return out
 end
 G.FOLLOWER = { MAX = 112, MAX_CHARACTERS = 128, OBJECTS_NONE = 0, OBJECTS_OWN = 1, DRAW_FULL = 1, DRAW_FAR = 2, DRAW_NONE = 3, RATE_MIN = 5,
-               RATE_MAX = 30, RATE_DEFAULT = 15, POOL_MAX = 16, LIB_PARALLEL = false,
+               RATE_MAX = 30, RATE_DEFAULT = 15, POOL_MAX = 16, LIB_PARALLEL = false, SPEED_MAX = 8,
                MODE = { PLACE = 0, RESPAWN = 2, NORMAL = 4, TAKEOVER = 5, PARKED = 6 } }
 -- the board's model (feat_board_test.lua's): an order at the next pair, a kept board that settles
 local BM = { calls = {}, chars = {}, refuse = nil, hurt = -1 }
@@ -567,10 +594,21 @@ G.INTERACT = { ENEMY = 1, TARGET = 2, BREAKABLE = 3, HAZARD = 4, HOLDABLE = 5, B
 G.EMOTE = { LOOP = 0x100, IN_AIR = 4, KEEP_INPUT = 8, NO_PROPS = 0x10, NO_TRAIL = 2, CHAIN = 1, STOP_NOW = 0, STOP_BLEND = 1, STATE_NONE = 0,
             STATE_PLAYING = 1, STATE_ENDING = 2, ROW = 0, EXTRA = 1, FORM_NORMAL = 0, FORM_SUPER = 1, HOLD = 0x20, STATE_HOLDING = 3,
             SPEED_MIN = 1 / 64, SPEED_MAX = 16 }
-function G.EmoteList() return { n = 0 } end
-function G.Emote() return true end
-function G.EmoteStop() return true end
-function G.EmoteState() return 0, nil, -1, 0 end
+FM.elists, FM.estate, FM.erefuse = {}, {}, {}
+function G.EmoteList(kind) return FM.elists[kind] or { n = 0 } end
+function G.Emote(id, key, flags, rate)
+    fcall("Emote", id, key, flags, rate)
+    local r = FM.erefuse[id]
+    if r then return nil, r, "unsupported" end
+    if not FM.elatch then FM.estate[id] = 1 end
+    return true
+end
+function G.EmoteStop(id, how)
+    fcall("EmoteStop", id, how)
+    FM.estate[id] = 0
+    return true
+end
+function G.EmoteState(id) return FM.estate[id] or 0, nil, -1, 0 end
 
 M.included = {}
 local ok_c, err_c = pcall(M.load, "autorun/gsa1_autorun.lua")
@@ -655,6 +693,7 @@ do
         gsa1_follower_fix_respawn = { "1", 0, 1 }, gsa1_follower_full_detail = { "8", 0, 99 }, gsa1_follower_far_rate = { "15", 5, 30 },
         gsa1_follower_draw_dist = { "4800", 500, 12000 }, gsa1_follower_other_views = { "0", 0, 1 }, gsa1_follower_threads = { "0", 0, 16 },
         gsa1_follower_call_key = { "16", 0, 511 }, gsa1_follower_call_pad = { "64", 0, 0x30000 },
+        gsa1_follower_speed = { "1", 1, 4 }, gsa1_follower_spacing = { "64", 0, 160 }, gsa1_follower_emotes = { "1", 0, 1 },
     }
     local bad = {}
     for name, w in pairs(WANT) do
@@ -665,7 +704,7 @@ do
     if not (sc and sc.v == "1" and GSA1.CONVARS.gsa1_sv_follower_icons and GSA1.CONVARS.gsa1_sv_follower_icons.server and
             bit.band(sc.flags or 0, 8192) ~= 0) then bad[#bad + 1] = "gsa1_sv_follower_icons" end
     table.sort(bad)
-    check(#bad == 0, "every ConVar of 5.9 marked followlua with its default and range (%d client, 1 replicated server)%s", 20,
+    check(#bad == 0, "every ConVar of 5.9 marked followlua with its default and range (%d client, 1 replicated server)%s", 23,
         #bad > 0 and (": wrong " .. table.concat(bad, " ")) or "")
     -- a panel that records every control
     local made = {}
@@ -714,6 +753,16 @@ do
         string.find(tostring(bound.gsa1_follower_other_views), "other addons' views", 1, true) ~= nil and
         string.find(table.concat(texts, " "), "Known limits", 1, true) ~= nil,
         "the page's words: the cap's cost, the other views' row (D4), the known limits")
+    -- round 0.9.9 (gsa1_099_plan.md 5.9, review R99.18)
+    local alltext = table.concat(texts, " ")
+    check(bound.gsa1_follower_speed == "Speed when catching up (1 = the game's own, 2 = up to twice its speed)" and
+        bound.gsa1_follower_spacing == "Room between followers (0 = the game's own: they can stand inside each other)" and
+        bound.gsa1_follower_emotes == "Followers play the same slot of their own wheel when you play one from the emote wheel",
+        "the three rows of 0.9.9 on the page, with their words")
+    check(string.find(alltext, "Sonic 1.2, Knuckles 1.3, Tails 1.5, E-102 2.5, Big 3.5, Amy 4", 1, true) ~= nil, "the speed row's help names each kind's value")
+    check(string.find(alltext, "Dr. Eggman, Tikal and ? have no wheel: use the button Call them back to me, or gsa1_follower_call", 1, true) ~= nil,
+        "the call-back help says what to use with no wheel (review R99.18)")
+    check(string.find(alltext, "a follower's emote also pauses", 1, true) ~= nil, "the fix's help says what it does to a follower's emote (5.9)")
     -- the buttons
     local buttons = {}
     for _, Q in ipairs(made) do
@@ -2224,7 +2273,7 @@ do
             local reads = { ["FollowersTick[i]"] = { id = 1, pairs = 1, ok = 1, code = 1, msg = 1, rendered = 1, restructured = 1, x = 1, y = 1, z = 1,
                                                      yaw = 1, interpolated = 1, alpha = 1, tris = 1 },
                             FollowersTick = { count = 1, workers = 1, ms = 1, ms_join = 1 },
-                            FollowerInfo = { mode = 1, smode = 1, distance = 1, respawns = 1, held = 1 },
+                            FollowerInfo = { mode = 1, smode = 1, distance = 1, respawns = 1, held = 1, speed_factor = 1 },
                             FollowersStats = { workers = 1, ms_tick = 1, ms_render = 1, ms_join = 1 } }
             local seen = {}
             for line in string.gmatch(api, "[^\r\n]+") do
@@ -2261,13 +2310,409 @@ do
                     end
                 end
             end
-            if n["function"] < 12 then wrong[#wrong + 1] = "too few functions" end
+            if n["function"] < 14 then wrong[#wrong + 1] = "too few functions" end
+            if G.FollowerSpeed == nil or G.FollowerSpot == nil or G.FOLLOWER.SPEED_MAX ~= 8 then wrong[#wrong + 1] = "0.9.9's calls" end
             -- the words the egg's and the page's tests take from the mock are the module's
             if not seen["reason.not enough free memory"] then wrong[#wrong + 1] = "the memory guard's words" end
         end
         check(#wrong == 0, "this test's mock module matches build/x86_64-windows/follower_api.txt (%d functions, %d constants, %d fields)%s",
             n["function"], n.const, n.field, #wrong > 0 and (": " .. table.concat(wrong, "; ")) or "")
     end
+end
+
+-- 16b. round 0.9.9: keeping up and standing apart (gsa1_099_plan.md 4.1 B3, B4, 5.9; follow099.md 6.3, 9) ------------------------------------------
+do
+    reset()
+    local function run_timers()
+        for name, t in pairs(timers) do
+            timers[name] = nil
+            t.fn()
+        end
+    end
+    -- speed
+    local C = me("sonic")
+    set("gsa1_follower_speed", 2)
+    fclear()
+    local F1 = spawn("tails")
+    local sp = fcalls("FollowerSpeed", F1.id)
+    check(#sp == 1 and sp[1][3] == 2, "gsa1.FollowerSpeed: the ConVar's value at creation, before its first tick (%s)", tostring(sp[1] and sp[1][3]))
+    set("gsa1_follower_speed", 3.5)
+    check(FM.speed[F1.id] == 3.5, "... and on the slider's change (%s)", tostring(FM.speed[F1.id]))
+    fclear()
+    local NF = Fo.Recreate(F1, "a test")
+    sp = NF and fcalls("FollowerSpeed", NF.id) or {}
+    check(NF ~= nil and #sp == 1 and sp[1][3] == 3.5, "... and again after Fo.Recreate")
+    Fo.Remove(NF, "removed")
+    set("gsa1_follower_speed", 1)
+    -- the slider's line: one after a drag (timer.Create with one name: C10)
+    do
+        local n, was = 0, GSA1.Log
+        GSA1.Log = function(kind, ...)
+            if kind == "settings" then n = n + 1 end
+            return was(kind, ...)
+        end
+        for k, _ in pairs(timers) do timers[k] = nil end
+        for i = 1, 30 do set("gsa1_follower_speed", 1 + i / 30) end
+        for i = 1, 30 do set("gsa1_follower_spacing", 64 + i) end
+        local during = n
+        run_timers()
+        check(during == 0 and n == 2, "a 30-tick drag of each slider writes no settings line during it (%d) and one each after it (%d)", during, n)
+        set("gsa1_follower_speed", 1)
+        set("gsa1_follower_spacing", 64)
+        for k, _ in pairs(timers) do timers[k] = nil end
+        GSA1.Log = was
+    end
+    -- the settings line of the first follower names the three
+    local logged = logtext()
+    check(string.find(logged, "catch-up speed", 1, true) ~= nil and string.find(logged, "room between them", 1, true) ~= nil and string.find(logged, "emote with you", 1, true) ~= nil,
+        "the followers' settings line gains speed, spacing and emotes")
+
+    -- the spot's pure rule
+    local sx, sy = Fo.SpotOf(1, 1, 64)
+    local zx, zy = Fo.SpotOf(3, 8, 0)
+    check(sx == 0 and sy == 0 and zx == 0 and zy == 0, "Fo.SpotOf: one follower alone, or room 0: the game's own place")
+    do
+        local least = 1e9
+        for n = 2, 8 do
+            for i = 1, n do
+                for j = i + 1, n do
+                    local ax, ay = Fo.SpotOf(i, n, 64)
+                    local bx, by = Fo.SpotOf(j, n, 64)
+                    least = math.min(least, math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2))
+                end
+            end
+        end
+        check(least >= 1.5 * 64, "Fo.SpotOf: any 8 stand at least 1.5 x the room apart (%.1f HU at 64)", least)
+    end
+
+    -- the calls
+    reset()
+    C = me("sonic")
+    set("gsa1_follower_max", 8)
+    set("gsa1_follower_spacing", 64)
+    FM.spots = {}
+    fclear()
+    local A = spawn("tails")
+    check(#fcalls("FollowerSpot") == 0 and FM.spots[A.id] == nil, "one follower alone: no gsa1.FollowerSpot at all (the game's own place)")
+    local Bf = spawn("knuckles")
+    local Cf = spawn("sonic")
+    local function at_spot(F, i, n, s)
+        local want_x, want_y = Fo.SpotOf(i, n, s)
+        local got = FM.spots[F.id]
+        return got ~= nil and math.abs(got[1] - want_x) < 1e-3 and math.abs(got[2] - want_y) < 1e-3
+    end
+    check(at_spot(A, 1, 3, 64) and at_spot(Bf, 2, 3, 64) and at_spot(Cf, 3, 3, 64), "after a spawn: each of the three has its own spot, by its place in the list")
+    fclear()
+    Fo.Remove(A, "removed")
+    check(at_spot(Bf, 1, 2, 64) and at_spot(Cf, 2, 2, 64), "after a removal: the two left have the spots of a list of two")
+    Fo.Remove(Cf, "removed")
+    check(FM.spots[Bf.id][1] == 0 and FM.spots[Bf.id][2] == 0, "the last one left goes back to the game's own place")
+    Cf = spawn("sonic")
+    local NB = Fo.Recreate(Bf, "a test")
+    check(NB == Fo.list[1] and at_spot(NB, 1, 2, 64) and at_spot(Cf, 2, 2, 64), "after Fo.Recreate: it has its spot again, at its place in the list")
+    -- a walk to a box's board
+    fclear()
+    Fo.WalkTo(NB, Vector(10, 0, 0), 0)
+    local w = fcalls("FollowerSpot", NB.id)
+    check(#w == 1 and w[1][3] == 0 and w[1][4] == 0, "Fo.WalkTo: gsa1.FollowerSpot(id, 0, 0) for the walker (or the AI stops off the board)")
+    check(at_spot(Cf, 2, 2, 64), "... the other keeps its spot")
+    Fo.WalkEnd(NB)
+    check(at_spot(NB, 1, 2, 64), "Fo.WalkEnd: its spot again")
+    Fo.WalkTo(NB, Vector(10, 0, 0), 0)
+    Fo.Relink(C)
+    check(NB.walkFeed == nil and at_spot(NB, 1, 2, 64), "a walk that Fo.Relink ends: its spot again")
+    -- the slider, at once; 0 is the game's own place for all
+    set("gsa1_follower_spacing", 100)
+    check(at_spot(NB, 1, 2, 100) and at_spot(Cf, 2, 2, 100), "the slider acts at once on the followers there are")
+    set("gsa1_follower_spacing", 0)
+    check(FM.spots[NB.id][1] == 0 and FM.spots[Cf.id][2] == 0, "room 0: all at the game's own place")
+    set("gsa1_follower_spacing", 64)
+    -- the secret's
+    local eggF = spawn("knuckles", { ignore_cap = true })
+    check(eggF ~= nil and at_spot(eggF, 3, 3, Fo.SPACING_EGG) and at_spot(NB, 1, 3, Fo.SPACING_EGG), "the secret's followers there: all use %d HU", Fo.SPACING_EGG)
+    Fo.Remove(eggF, "removed")
+    check(at_spot(NB, 1, 2, 64), "the secret's gone: the slider's value again")
+    -- a library that answers "not built yet": one log line, nothing breaks
+    FM.spot_refuse = "follower speed and spots are not built yet"
+    Fo.refusedNotes = {}
+    local before = select(2, string.gsub(logtext(), "not built yet", ""))
+    set("gsa1_follower_spacing", 80)
+    set("gsa1_follower_spacing", 90)
+    local after = select(2, string.gsub(logtext(), "not built yet", ""))
+    FM.spot_refuse = nil
+    check(after == before + 1, "a refusal: one log line (%d), no error", after - before)
+    set("gsa1_follower_spacing", 64)
+    reset()
+    Fo.refusedNotes = {}
+end
+
+-- 16c. round 0.9.9: they emote with you (gsa1_099_plan.md 2.4 C3, 4.1 B5, 5.6, 5.10, reviews R99.16, R99.18; follow099.md 5, 9) -------------------------
+do
+    reset()
+    set("gsa1_follower_max", 8)
+    local keepData, keepLists = W.data, W.lists
+    FM.elists[0] = { n = 2, { key = "a75", name = "s_kimepose0", play = "once", flags = 0, dup = 0 }, { key = "a3", name = "s_wait3", play = "loop", flags = 0, dup = 0 } }
+    FM.elists[2] = { n = 3, { key = "a54", name = "m_kimepose0", play = "once", flags = 0, dup = 0 }, { key = "a56", name = "m_losepose0", play = "loop", flags = 0, dup = 0 },
+                     { key = "a60", name = "m_board", play = "once", flags = 0, dup = 0 } }
+    FM.elists[3] = { n = 1, { key = "a40", name = "k_kimepose1", play = "once", flags = 0, dup = 0 } }
+    local function wheel(slots)
+        local wh = W.EmptyWheel()
+        for k, v in pairs(slots) do wh.pages[k[1]][k[2]] = v end
+        return wh
+    end
+    local TOP, SECOND, EMPTY = { 1, 1 }, { 1, 2 }, { 1, 3 }
+    W.lists = {}
+    W.data = {
+        sonic = wheel({ [TOP] = { body = "a75", name = "s_kimepose0" }, [SECOND] = { body = "a3", name = "s_wait3" }, [EMPTY] = { body = "a75", name = "s_kimepose0" },
+                        [{ 2, 4 }] = { body = "a75", name = "s_kimepose0" } }),
+        tails = wheel({ [TOP] = { body = "a54", name = "m_kimepose0" }, [SECOND] = { body = "a56", name = "m_losepose0", loop = true, speed = 2 },
+                        [{ 2, 4 }] = { body = "a54", name = "m_kimepose0" } }),
+        knuckles = wheel({ [TOP] = { body = "a40", name = "k_kimepose1" } }),
+    }
+    local me_slot = function(page, s) return W.data.sonic.pages[page][s] end
+    local C = me("sonic")
+    local T = spawn("tails")
+    local K = spawn("knuckles")
+    local function play(page, s)
+        FM.estate[C.id] = 0
+        return W.PlayBody(C, me_slot(page, s), page, s, "the wheel", nil, "sonic")
+    end
+    check(#W.ON_PLAYED == 1 and W.ON_PLAYED[1] == Fo.emoteHook, "W.ON_PLAYED holds the followers' hook, once")
+    local function emotes(F) return fcalls("Emote", F and F.id) end
+
+    -- the top of the wheel -> the top of each follower's own menu
+    fclear()
+    check(play(1, 1) == true, "the player's slot plays")
+    frames(1)
+    local et, ek = emotes(T), emotes(K)
+    check(#et == 1 and et[1][3] == "a54" and #ek == 1 and ek[1][3] == "a40", "page 1 slot 1 -> each plays the top of its own wheel (%s, %s), never the player's key",
+        tostring(et[1] and et[1][3]), tostring(ek[1] and ek[1][3]))
+    check(bit.band(et[1][4], G.EMOTE.IN_AIR) == 0 and bit.band(ek[1][4], G.EMOTE.IN_AIR) == 0, "never SA1_EMOTE_IN_AIR")
+    check(bit.band(et[1][4], G.EMOTE.HOLD) ~= 0, "the slot's own hold: a once row holds its last pose")
+    check(W.playing and W.playing.id == C.id and W.playing.key == "a75", "W.playing stays the player's")
+    check(Fo.emote ~= nil and Fo.emote.started[T] and Fo.emote.started[K], "both are in the record's started")
+    fclear()
+    frames(30)
+    check(#emotes() == 0, "taken: not asked again")
+    -- your emote ends: theirs end, by the rule
+    FM.estate[C.id] = 0
+    fclear()
+    frames(1)
+    local st, sk = fcalls("EmoteStop", T.id), fcalls("EmoteStop", K.id)
+    check(#st == 1 and st[1][3] == G.EMOTE.STOP_BLEND and #sk == 1 and Fo.emote == nil, "your state NONE, standing: gsa1.EmoteStop(id, STOP_BLEND) for each, the record goes")
+    -- moving: STOP_NOW
+    local gs = G.GetState
+    play(1, 1)
+    frames(2)
+    G.GetState = function(id, out)
+        out = gs(id, out)
+        if out and id == C.id then out.vx = 300 end
+        return out
+    end
+    FM.estate[C.id] = 0
+    fclear()
+    frames(2)
+    G.GetState = gs
+    st = fcalls("EmoteStop", T.id)
+    check(#st == 1 and st[1][3] == G.EMOTE.STOP_NOW, "your state NONE, moving: STOP_NOW")
+    frames(2)
+
+    -- its own rate and loop, another slot
+    fclear()
+    play(1, 2)
+    frames(1)
+    et = emotes(T)
+    check(#et == 1 and et[1][3] == "a56" and bit.band(et[1][4], G.EMOTE.LOOP) ~= 0 and et[1][5] == W.PlayRate(W.data.tails.pages[1][2], W.cv.speed:GetFloat()) and et[1][5] == 2,
+        "the slot's own loop and rate on the follower's wheel (%s)", tostring(et[1] and et[1][5]))
+    -- Knuckles' second slot is empty: a plain skip, no call, no toast, and the player's slot goes on
+    check(#emotes(K) == 0, "an empty slot on the follower's wheel: no call")
+    check(Fo.emote ~= nil and Fo.emote.pending[K] == nil, "... and it is not asked again")
+    local toast = W.toastText
+    fclear()
+    frames(12)
+    check(#emotes(K) == 0 and W.toastText == toast, "... no toast")
+    FM.estate[C.id] = 0
+    frames(2)
+
+    -- going on to another slot: who has an empty slot there stops
+    play(1, 1)
+    frames(1)
+    fclear()
+    local prevT = Fo.emote.started[T]
+    FM.estate[K.id] = 1
+    play(1, 2)
+    frames(1)
+    check(prevT and #fcalls("EmoteStop", K.id) == 1 and #fcalls("EmoteStop", T.id) == 0, "on to another slot: the one whose new slot is empty stops, the other takes the new one")
+    FM.estate[C.id] = 0
+    frames(2)
+
+    -- the empty slot from the top: nothing on any follower
+    fclear()
+    play(1, 3)
+    frames(2)
+    check(#emotes(T) == 0 and #emotes(K) == 0, "page 1 slot 3, empty on both followers: no call")
+    FM.estate[C.id] = 0
+    frames(2)
+
+    -- the option off
+    set("gsa1_follower_emotes", 0)
+    fclear()
+    play(1, 1)
+    frames(3)
+    check(#emotes(T) == 0 and Fo.emote == nil, "gsa1_follower_emotes 0: no call, no record")
+    FM.estate[C.id] = 0
+    set("gsa1_follower_emotes", 1)
+    frames(2)
+    play(1, 1)
+    frames(1)
+    fclear()
+    set("gsa1_follower_emotes", 0)
+    check(#fcalls("EmoteStop", T.id) == 1 and Fo.emote == nil, "the option going off during an emote stops theirs, the record goes")
+    set("gsa1_follower_emotes", 1)
+    FM.estate[C.id] = 0
+    frames(2)
+
+    -- a refusal of the moment: 5 Hz, no toast, one log line
+    FM.erefuse[T.id] = "on the way"
+    local n0 = select(2, string.gsub(logtext(), "on the way", ""))
+    fclear()
+    play(1, 1)
+    toast = W.toastText
+    frames(60)
+    local tries = #emotes(T)
+    check(tries >= 4 and tries <= 7, "a refusal (\"on the way\"): asked again at 5 Hz (%d in 1 s)", tries)
+    check(W.toastText == toast, "... no toast")
+    check(select(2, string.gsub(logtext(), "on the way", "")) == n0 + 1, "... one log line")
+    FM.erefuse[T.id] = nil
+    frames(15)
+    check(Fo.emote ~= nil and Fo.emote.started[T] == true, "when it arrives, it joins")
+    FM.estate[C.id] = 0
+    frames(2)
+
+    -- your own emote has not shown yet: nobody is asked; it never shows: the record goes
+    FM.elatch = true
+    fclear()
+    play(1, 1)
+    FM.estate[C.id] = 0
+    frames(10)
+    check(Fo.emote ~= nil and #emotes(T) == 0, "your emote is latched until your next pair: the record waits, nobody is asked")
+    FM.estate[C.id] = 1
+    frames(1)
+    check(#emotes(T) == 1, "it shows: they are asked")
+    FM.elatch = false
+    FM.estate[C.id] = 0
+    frames(2)
+    FM.elatch = true
+    fclear()
+    play(1, 1)
+    frames(90)
+    check(Fo.emote == nil and #emotes(T) == 0, "your emote never shows (the world refused it at the pair): the record goes in about a second, nobody was asked")
+    FM.elatch = false
+
+    -- who takes part: a held one, one of someone else: no call; a chain: yes
+    K.held = true
+    fclear()
+    play(1, 1)
+    frames(1)
+    check(#emotes(K) == 0 and #emotes(T) == 1, "a held follower: no call")
+    K.held = false
+    FM.estate[C.id] = 0
+    frames(2)
+    local Other = spawn("tails", { target = "stay" })
+    fclear()
+    play(1, 1)
+    frames(1)
+    check(#emotes(Other) == 0, "a follower that is not yours (it stays, or follows someone else): no call")
+    FM.estate[C.id] = 0
+    frames(2)
+    Fo.Remove(Other, "removed")
+    local Chain = spawn("knuckles", { target = "follower" })
+    fclear()
+    play(1, 1)
+    frames(1)
+    check(Chain ~= nil and #emotes(Chain) == 1, "a follower of your follower: it plays too")
+    -- a follower goes during the emote; its new world plays nothing and is not asked
+    local NC = Fo.Recreate(Chain, "a test")
+    fclear()
+    frames(15)
+    check(NC ~= nil and #emotes(NC) == 0, "made again during the emote: not asked again")
+    Fo.Remove(T, "removed")
+    check(Fo.emote == nil or (Fo.emote.started[T] == nil and Fo.emote.pending[T] == nil), "removed: out of the record")
+    FM.estate[C.id] = 0
+    frames(2)
+    if NC then Fo.Remove(NC, "removed") end
+    T = spawn("tails")
+
+    -- a gate's refusal is a plain skip, and it reads the follower (review R99.16)
+    local keepGates = W.PLAY_GATES
+    local seen
+    W.PLAY_GATES = { { name = "test", gate = function(who, e)
+        if who == T then
+            seen = who
+            return "a board is lying here"
+        end
+    end } }
+    toast = nil
+    fclear()
+    play(1, 1)
+    toast = W.toastText
+    frames(15)
+    W.PLAY_GATES = keepGates
+    check(seen == T and #emotes(T) == 0 and #emotes(K) == 1 and W.toastText == toast, "W.PLAY_GATES with the follower in place of C: a refusal is a plain skip, no toast")
+    FM.estate[C.id] = 0
+    frames(2)
+
+    -- 2.4 C3: gsa1_emote and a catalogue row are page 0: nothing maps; the page's Play is a slot
+    fclear()
+    RunConsoleCommand("gsa1_emote", "a75")
+    frames(2)
+    local played = #fcalls("Emote", C.id)
+    check(played == 1 and #emotes(T) == 0 and Fo.emote == nil, "gsa1_emote (page 0, slot 0): the player plays it, no follower is asked")
+    FM.estate[C.id] = 0
+    frames(2)
+    fclear()
+    check(W.PlayBody(C, me_slot(2, 4), 2, 4, "the page's Play", nil, "sonic") == true, "the page's Play")
+    frames(1)
+    et = emotes(T)
+    check(#et == 1 and et[1][3] == "a54", "the page's Play counts as playing that slot: page 2 slot 4 of Tails' wheel")
+    -- your character leaves
+    M.run_hook("GSA1CharacterLeaving", C, "removed")
+    check(Fo.emote == nil, "GSA1CharacterLeaving: the record goes")
+    Fo.ReleaseHeld()
+    FM.estate[C.id] = 0
+    frames(2)
+
+    -- review R99.18, 2.3 row 6: a leader with no wheel. W.Open refuses, nothing starts, no follower is asked. Real entries when the character list has them
+    local names = {}
+    for _, nm in ipairs({ "eggman", "tikal", "question" }) do
+        local d = GSA1.CharacterByName and GSA1.CharacterByName(nm)
+        if d and d.nowheel then names[#names + 1] = nm end
+    end
+    local function nowheel_case(what, X)
+        W.open = false
+        fclear()
+        W.Open(X, "a test")
+        local opened = W.open
+        local pb = W.PlayBody(X, { body = "a75", name = "s_kimepose0" }, 1, 1, "a test", nil, "sonic")
+        frames(15)
+        check(opened == false and pb == false and #emotes(T) == 0 and #emotes(K) == 0 and #fcalls("Emote", X.id) == 0 and Fo.emote == nil,
+            "as %s: W.Open refuses, W.PlayBody refuses, no follower is asked", what)
+    end
+    do
+        local keepDef = C.def
+        C.def = { nowheel = true }
+        nowheel_case("a character with no wheel", C)
+        C.def = keepDef
+    end
+    for _, nm in ipairs(names) do
+        GSA1.Spawn(nm)
+        local X = GSA1.Char
+        if X and X.def and X.def.nowheel then nowheel_case(nm, X) end
+    end
+    if #names == 0 then info("the three entries are not in the character list yet: only the stand-in ran (099-gsa1-playable's)") end
+    W.data, W.lists = keepData, keepLists
+    FM.elists = {}
+    reset()
 end
 
 -- 17. nothing went wrong -----------------------------------------------------------------------------------------------------------------------

@@ -25,6 +25,8 @@
 -- (M.gamefiles[path] = its bytes as a string; Read / Seek / Tell / Size / Close; M.fileReads = { bytes of each Read }).
 -- 0.9.8 (098-gsa1-followlua, this file's only editor): an entity's SetNoDraw (e.nodraw), the local player's GetVelocity
 -- (M.player.vel) and OnGround (M.player.on_ground: false = in the air).
+-- 0.9.9 (099-gsa1-playable, this file's only editor): gsa1.BUTTON_X (opts.button_x = false: a module without it); a render target remembers its
+-- size mode and flags (M.rts[name].flags: the clamp bits).
 -- No GMod code or data is used; the mock only follows the documented function signatures.
 local M = {
     T = 1000.0, frameNo = 0, dt = 1 / 60, paused = false, ui = false, focus = true,
@@ -350,11 +352,11 @@ function CreateMaterial(name, shader, params)
     M.materials[name] = m
     return m
 end
-function GetRenderTargetEx(name, w, h)
+function GetRenderTargetEx(name, w, h, size_mode, depth_mode, flags)
     count("GetRenderTargetEx")
     local rt = M.rts[name]
     if not rt then
-        rt = setmetatable({ name = name, w = w, h = h }, MATMT)
+        rt = setmetatable({ name = name, w = w, h = h, size_mode = size_mode, flags = flags }, MATMT)
         M.rts[name] = rt
         M.nrts = M.nrts + 1
     end
@@ -456,7 +458,7 @@ function M.module(opts)
     opts = opts or {}
     local G = {
         VERSION = "0.6.0", API_VERSION = 6, LIBSA1_VERSION = "0.2.0", SCALE = 4.0,
-        BUTTON_JUMP = 1, BUTTON_ACTION = 2, BUTTON_ACTION2 = 4,
+        BUTTON_JUMP = 1, BUTTON_ACTION = 2, BUTTON_ACTION2 = 4, BUTTON_X = opts.button_x ~= false and 0x40 or nil,
         FEATURES = opts.features or {}, FEATURE_ERRORS = opts.feature_errors or {},
         -- 0.9.2: the tick's host flags and host camera, the start rings
         TICK_HOST_FLAGS = opts.host_flags ~= false, TICK_HOST_CAMERA = opts.host_camera == true,

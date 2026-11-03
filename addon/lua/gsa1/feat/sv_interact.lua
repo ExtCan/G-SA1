@@ -357,6 +357,8 @@ local function tag(ent)
     end
 end
 
+local tag_use     -- 0.9.9 (below scripted_use): the NW2 gsa1_use
+
 local next_scan = 0
 local function scan_around()
     local now = CurTime()
@@ -376,8 +378,10 @@ local function scan_around()
                         ply.GSA1Rel[idx] = r
                         changes[#changes + 1] = { idx, r }
                     end
-                elseif e:GetMoveType() == MOVETYPE_VPHYSICS or I.BREAKABLES[e:GetClass()] then
-                    tag(e)
+                else
+                    if e:GetMoveType() == MOVETYPE_VPHYSICS or I.BREAKABLES[e:GetClass()] then tag(e) end
+                    -- (a NextBot is a person to the head look, never a thing to use: the client leaves it out by its class)
+                    if not (e.IsNextBot ~= nil and e:IsNextBot()) then tag_use(e) end
                 end
             end
             if #changes > 0 then
@@ -616,6 +620,24 @@ local function scripted_use(cls)
         sent_use[cls] = v
     end
     return v
+end
+
+-- 0.9.9 (sadc docs/research/gsa1_099_plan.md 4.2 D8, small099.md 4.1): the head look's "things you can use". A door's spawn flags and a
+-- scripted entity's Use live here, so the server tags with the interact key's own rule (I.UseKind), on the entity itself; NW2 only sends a
+-- change. No game state. One info table and one function, no allocation per entity. gsa1_sv_interact 0: false again.
+local use_info, use_ent = {}, nil
+local function use_has(f) return use_ent:HasSpawnFlags(f) end
+function tag_use(e)
+    local cls = e:GetClass()
+    local veh = e:IsVehicle()
+    local on = false
+    if SV.interact:GetBool() and (I.USE_CLASSES[cls] or veh or e:IsScripted()) then
+        use_ent = e
+        use_info.class, use_info.vehicle, use_info.player, use_info.npc = cls, veh, false, false
+        use_info.weapon, use_info.sent_use, use_info.spawnflags = e:IsWeapon(), e:IsScripted() and scripted_use(cls), use_has
+        on = I.UseKind(use_info) ~= nil
+    end
+    if e:GetNW2Bool("gsa1_use", false) ~= on then e:SetNW2Bool("gsa1_use", on) end
 end
 
 -- the player's own entities are never used: itself, its hands, its view model, what it owns in the engine's sense

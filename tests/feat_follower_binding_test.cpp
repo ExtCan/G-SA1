@@ -7,12 +7,15 @@
 //   feat_follower_binding_test [--gdi GAME.gdi] [--bsp gm_construct.bsp]
 //
 // Two parts:
-//   * THE API PART runs whenever libsa1.h has SA1_API_FOLLOWER: gsa1.FEATURES.follower == 1, every 5.5 function registered with its
+//   * THE API PART runs whenever libsa1.h has SA1_API_FOLLOWER: gsa1.FEATURES.follower == 1 (2 with SA1_API_FOLLOWER 2), every 5.5 function registered with its
 //     arguments checked ("bad_argument" before anything else), the codes (no disc: "not_ready"), gsa1.FOLLOWER's constants - and
 //     writes them to build/<target>/follower_api.txt next to this test (098-gsa1-followlua checks its mock module against it).
 //   * THE BEHAVIOUR PART prints exactly one line "SKIP behaviour: follower is not built yet" and passes while libsa1 answers that
 //     (sa1_follower_kinds() is 0: the contract snapshot); otherwise it runs in full (096 6.4 task 6). The final gates fail when the
 //     SKIP line appears.
+//   * ROUND 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.3 item 4, 5.5; follow099.md 9), SA1_API_FOLLOWER 2: gsa1.FollowerSpeed, gsa1.FollowerSpot,
+//     gsa1.FOLLOWER.SPEED_MAX, FollowerInfo's speed_factor. Their arguments in the API part; their behaviour and the emotes on a follower id in
+//     behaviour099, which prints exactly one line "SKIP behaviour: follower speed is not built yet" while libsa1 answers that (the contract snapshots).
 //
 // API NOTES (098-gsa1-followmod's report, also in r098/lanes/followmod_contract.txt): the Lua API is the header of
 // src/module/bind_follower.cpp. follower_api.txt's records, one per line, tab-separated:
@@ -301,6 +304,138 @@ struct Tap {
         t->from_char.push_back(d);
     }
 };
+
+#if SA1_API_FOLLOWER >= 2
+// ---- round 0.9.9: the catch-up, the spots, the emotes on a follower id, through the module's functions (the deep cases: libsa1's tests/follower_test.c) --------
+void behaviour099(MockLua &L, Rig &R)
+{
+    auto is_code = [&](const std::vector<Val> &r, const char *code) { return is_nil_msg(r) && str_of(r, 2) == code; };
+    double sonic = R.create_char(SA1_CHAR_SONIC, 0.0f, 0.0f);
+    double tails = R.follower(SA1_CHAR_TAILS, 0.0f, 0.0f, sonic);
+    CHECK(sonic > 0 && tails > 0, "0.9.9: Sonic and a Tails follower made (%s)", R.msg.c_str());
+    // what is checked before the gate
+    {
+        int bad = 0;
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(sonic), Val::number(2)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(99999), Val::number(2)}), "not_found");
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(tails), Val::number(0.5)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(tails), Val::number(8.5)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpot", {Val::number(sonic), Val::number(1), Val::number(1)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpot", {Val::number(99999), Val::number(1), Val::number(1)}), "not_found");
+        CHECK(bad == 0, "FollowerSpeed, FollowerSpot: a character that is not a follower and a speed out of range -> bad_argument, no such id -> not_found (%d wrong)", bad);
+    }
+    std::vector<Val> sp = L.call("FollowerSpeed", {Val::number(tails), Val::number(1)});
+    std::vector<Val> em = L.call("Emote", {Val::number(tails), Val::string("a54")});
+    bool speed_gated = is_nil_msg(sp) && str_of(sp, 1).find("not built yet") != std::string::npos;
+    bool emote_gated = is_nil_msg(em) && str_of(em, 1).find("followers do not take emotes") != std::string::npos;
+    if (speed_gated || emote_gated) {
+        std::printf("SKIP behaviour: follower speed is not built yet\n");
+        CHECK(!speed_gated || str_of(sp, 2) == "unsupported", "the contract's answer: %s (%s)", str_of(sp, 1).c_str(), str_of(sp, 2).c_str());
+        R.clear();
+        return;
+    }
+    CHECK(is_true(sp), "FollowerSpeed(id, 1) -> true");
+    if (is_true(em)) {
+        L.call("EmoteStop", {Val::number(tails), Val::number(SA1_EMOTE_STOP_NOW)});
+    }
+    R.clear();
+
+    // the catch-up: a Tails at 3 stays with a running Sonic, its factor above 1 while it is behind, 1 near its spot
+    {
+        double s = R.create_char(SA1_CHAR_SONIC, 0.0f, 0.0f);
+        double t3 = R.follower(SA1_CHAR_TAILS, 0.0f, 0.0f, s);
+        std::vector<Val> ok = L.call("FollowerSpeed", {Val::number(t3), Val::number(3)});
+        CHECK(is_true(ok), "FollowerSpeed(id, 3) -> true (%s)", str_of(ok, 1).c_str());
+        for (int t = 0; t < 60; t++) {
+            R.pair(s);
+            R.ftick();
+        }
+        double f_near = R.info_num(t3, "speed_factor");
+        double f_max = 0.0, d_max = 0.0;
+        int faulted = 0;
+        for (int t = 0; t < 300; t++) {
+            R.pair(s, 0.0, 1.0);
+            std::vector<Val> r = R.ftick();
+            Val row = r.size() == 1 && r[0].type == Type::Table ? r[0].tab->at(1) : Val();
+            faulted += !(row.type == Type::Table && field_bool(row, "ok"));
+            f_max = std::max(f_max, R.info_num(t3, "speed_factor"));
+            d_max = std::max(d_max, R.dist(s, t3));
+        }
+        double resp = R.info_num(t3, "respawns");
+        INFO("Tails at 3 behind a running Sonic, 300 pairs: factor %.2f at most, farthest %.0f HU, %g drop-ins", f_max, d_max, resp);
+        CHECK(faulted == 0 && resp == 0.0 && f_max > 1.0 && f_max <= 3.0, "the catch-up: no drop-in in 300 pairs of running (the factor up to %.2f, at most 3)", f_max);
+        for (int t = 0; t < 180; t++) {
+            R.pair(s);
+            R.ftick();
+        }
+        double f_stop = R.info_num(t3, "speed_factor");
+        CHECK(f_near == 1.0 && f_stop == 1.0 && R.dist(s, t3) < 240.0, "near its spot the factor is 1 (standing %.2f, after the stop %.2f, %.0f HU away)", f_near, f_stop, R.dist(s, t3));
+        CHECK(is_true(L.call("FollowerSpeed", {Val::number(t3), Val::number(1)})), "FollowerSpeed(id, 1): back to the game's own");
+        R.clear();
+    }
+
+    // the spots: two followers stand where they are told, on Source's axes
+    {
+        double s = R.create_char(SA1_CHAR_SONIC, 0.0f, 0.0f);
+        double a = R.follower(SA1_CHAR_TAILS, 0.0f, 0.0f, s);
+        double b = R.follower(SA1_CHAR_TAILS, 0.0f, 0.0f, s);
+        for (int t = 0; t < 120; t++) {
+            R.pair(s);
+            R.ftick();
+        }
+        double together = R.dist(a, b);
+        CHECK(is_true(L.call("FollowerSpot", {Val::number(a), Val::number(160), Val::number(0)})) &&
+                  is_true(L.call("FollowerSpot", {Val::number(b), Val::number(-160), Val::number(0)})), "FollowerSpot(id, x, y) -> true");
+        for (int t = 0; t < 240; t++) {
+            R.pair(s);
+            R.ftick();
+        }
+        gsa1::Character *ca = R.ch(a), *cb = R.ch(b), *cs = R.ch(s);
+        double apart = R.dist(a, b);
+        CHECK(ca && cb && cs && ca->st.position[0] > cs->st.position[0] && cb->st.position[0] < cs->st.position[0],
+              "the offset's x is Source's x: %.0f and %.0f either side of the leader's %.0f", ca ? ca->st.position[0] : 0.0f, cb ? cb->st.position[0] : 0.0f,
+              cs ? cs->st.position[0] : 0.0f);
+        CHECK(apart > together + 100.0, "two followers given spots stand apart: %.0f HU (%.0f without)", apart, together);
+        CHECK(is_true(L.call("FollowerSpot", {Val::number(a), Val::number(0), Val::number(0)})), "FollowerSpot(id, 0, 0): the game's own place again");
+        R.clear();
+    }
+
+    // the emote on a follower id
+    {
+        double s = R.create_char(SA1_CHAR_SONIC, 0.0f, 0.0f);
+        double t = R.follower(SA1_CHAR_TAILS, 0.0f, 0.0f, s);
+        for (int i = 0; i < 240; i++) {
+            R.pair(s);
+            R.ftick();
+        }
+        CHECK(is_code(L.call("Emote", {Val::number(t), Val::string("a54"), Val::number(SA1_EMOTE_IN_AIR)}), "bad_argument"), "SA1_EMOTE_IN_AIR on a follower id is refused");
+        std::vector<Val> ok = L.call("Emote", {Val::number(t), Val::string("a54"), Val::number(SA1_EMOTE_HOLD)});
+        CHECK(is_true(ok), "gsa1.Emote on a follower near its spot -> true (%s)", str_of(ok, 1).c_str());
+        gsa1::Character *c = R.ch(t);
+        float x0 = c ? c->st.position[0] : 0.0f, y0 = c ? c->st.position[1] : 0.0f;
+        double state = 0.0;
+        for (int i = 0; i < 90; i++) {
+            R.pair(s);
+            R.ftick();
+            std::vector<Val> es = L.call("EmoteState", {Val::number(t)});
+            if (!es.empty() && es[0].type == Type::Number) {
+                state = es[0].num;
+            }
+        }
+        double moved = c ? std::hypot(c->st.position[0] - x0, c->st.position[1] - y0) : 1e9;
+        CHECK(state != SA1_EMOTE_STATE_NONE && moved < 1.0, "it plays: state %.0f after 90 pairs, moved %.2f HU, its AI's output dropped", state, moved);
+        std::vector<Val> st = L.call("EmoteStop", {Val::number(t), Val::number(SA1_EMOTE_STOP_NOW)});
+        CHECK(is_true(st), "gsa1.EmoteStop on a follower id -> true (%s)", str_of(st, 1).c_str());
+        R.pair(s);
+        R.ftick();
+        R.pair(s);
+        R.ftick();
+        std::vector<Val> es = L.call("EmoteState", {Val::number(t)});
+        CHECK(!es.empty() && es[0].type == Type::Number && es[0].num == SA1_EMOTE_STATE_NONE, "... it ended");
+        R.clear();
+    }
+}
+#endif  // SA1_API_FOLLOWER >= 2
 
 // ---- the behaviour part (096 6.4 task 6) -----------------------------------------------------------------------------------------
 void behaviour(MockLua &L, Rig &R)
@@ -847,6 +982,10 @@ int main(int argc, char **argv)
         {"FollowerHostFlags", "id, flags", "true | nil, message, code", "not_ready,bad_argument,not_found"},
         {"FollowerHold", "id, on", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
         {"FollowerRespawn", "id", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
+#if SA1_API_FOLLOWER >= 2
+        {"FollowerSpeed", "id, m", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
+        {"FollowerSpot", "id, x, y", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
+#endif
         {"FollowerDraw", "id, level [, rate]", "true | nil, message, code", "not_ready,bad_argument,not_found"},
         {"FollowersTick", "dt, viewYawDeg, camOrigin | nil, camTarget | nil, out [, interpolate]", "out | nil, message, code", "not_ready,bad_argument"},
         {"FollowerInfo", "id [, out]", "out | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
@@ -859,7 +998,7 @@ int main(int argc, char **argv)
         rec(gsa1::format("function\t%s\t%s\t%s\t%s", f.name, f.args, f.rets, f.codes));
     }
     rec(gsa1::format("feature\tfollower\t%s", fmt_num(fv).c_str()));
-    CHECK(fv == 1.0 && missing.empty(), "gsa1.FEATURES.follower = %g; every function of 5.5 registered%s", fv, missing.c_str());
+    CHECK(fv == (SA1_API_FOLLOWER >= 2 ? 2.0 : 1.0) && missing.empty(), "gsa1.FEATURES.follower = %g; every function of 5.5 registered%s", fv, missing.c_str());
     rec("option\tFollowerCreate\tupgrades\ttable\tupgrade names of the kind (gsa1.Upgrades(kind)), at most 32");
     rec("option\tFollowerCreate\tobjects\tnumber\t0,1 (gsa1.FOLLOWER.OBJECTS_*; default 1)");
     rec("option\tFollowerCreate\tsounds\tboolean\tdefault true");
@@ -871,6 +1010,9 @@ int main(int argc, char **argv)
     static const struct { const char *name; double v; } consts[] = {
         {"MAX", 112}, {"MAX_CHARACTERS", 128}, {"OBJECTS_NONE", 0}, {"OBJECTS_OWN", 1}, {"DRAW_FULL", 1}, {"DRAW_FAR", 2}, {"DRAW_NONE", 3},
         {"RATE_MIN", 5}, {"RATE_MAX", 30}, {"RATE_DEFAULT", 15}, {"POOL_MAX", 16},
+#if SA1_API_FOLLOWER >= 2
+        {"SPEED_MAX", SA1_FOLLOWER_SPEED_MAX},
+#endif
     };
     static const struct { const char *name; double v; } modes[] = {{"PLACE", 0}, {"RESPAWN", 2}, {"NORMAL", 4}, {"TAKEOVER", 5}, {"PARKED", 6}};
     std::string wrong;
@@ -896,6 +1038,9 @@ int main(int argc, char **argv)
         {"distance", Type::Number}, {"respawns", Type::Number}, {"respawns_distance", Type::Number}, {"respawns_offscreen", Type::Number},
         {"held", Type::Bool}, {"lost", Type::Bool}, {"hidden", Type::Number}, {"pairs", Type::Number}, {"dropped", Type::Number},
         {"objects", Type::Number}, {"sounds", Type::Bool}, {"level", Type::Number},
+#if SA1_API_FOLLOWER >= 2
+        {"speed_factor", Type::Number},
+#endif
     };
     for (const auto &f : info_fields) rec(gsa1::format("field\tFollowerInfo\t%s\t%s", f.k, type_word(f.type)));
     for (const char *k : {"count", "workers", "ms", "ms_join"}) rec(gsa1::format("field\tFollowersTick\t%s\tnumber", k));
@@ -952,6 +1097,18 @@ int main(int argc, char **argv)
         bad += !is_code(L.call("FollowerInfo", {Val::string("x")}), "bad_argument");
         bad += !is_code(L.call("FollowerInfo", {Val::number(1)}), "not_ready");
         bad += !is_code(L.call("FollowerThreads", {Val::number(17)}), "bad_argument");
+#if SA1_API_FOLLOWER >= 2
+        bad += !is_code(L.call("FollowerSpeed", {Val::string("x"), Val::number(2)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(1)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(1), Val::string("fast")}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(1), Val::number(std::nan(""))}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpeed", {Val::number(1), Val::number(2)}), "not_ready");
+        bad += !is_code(L.call("FollowerSpot", {Val::string("x"), Val::number(0), Val::number(0)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpot", {Val::number(1), Val::number(0)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpot", {Val::number(1), Val::vector(0, 0, 0)}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpot", {Val::number(1), Val::number(0), Val::number(std::nan(""))}), "bad_argument");
+        bad += !is_code(L.call("FollowerSpot", {Val::number(1), Val::number(0), Val::number(0)}), "not_ready");
+#endif
         std::vector<Val> k = L.call("FollowerKinds", {});
         std::vector<Val> s = L.call("FollowersStats", {});
         bool shapes = k.size() == 1 && k[0].type == Type::Table && s.size() == 1 && s[0].type == Type::Table &&
@@ -1020,6 +1177,9 @@ int main(int argc, char **argv)
             behaviour_line = "RAN\tfollower";
             write_api();
             behaviour(L, R);
+#if SA1_API_FOLLOWER >= 2
+            behaviour099(L, R);
+#endif
         }
     }
     (void)exit_at;

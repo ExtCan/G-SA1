@@ -1668,7 +1668,7 @@ else
         end
     end
     local unresolved, notplayed, total = {}, {}, 0
-    for _, c in ipairs(GSA1.CHARACTERS) do
+    for _, c in ipairs(W.Entries()) do      -- (0.9.9: Dr. Eggman, Tikal and "?" have no wheel)
         local l = disc[c.name]
         local d = W.DEFAULTS[c.name]
         for s = 1, 8 do
@@ -1690,7 +1690,7 @@ else
         #notplayed > 0 and ("; did not play: " .. table.concat(notplayed, ", ")) or "")
     -- the greyed rows are exactly the table rows the disc's catalogue leaves out
     local wrong = {}
-    for _, c in ipairs(GSA1.CHARACTERS) do
+    for _, c in ipairs(W.Entries()) do
         local l = disc[c.name]
         local rows = {}
         for i = 1, l and l.n or 0 do
