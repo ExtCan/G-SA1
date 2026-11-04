@@ -40,6 +40,50 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.9b changes: far followers through the faster drawing
+
+The owner said yes to extending the faster drawing to far followers. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod, and the engine's numbers were read from the game's DLLs as bytes. Two independent checks ran: the first found 4 fails, all fixed, and the second found them fixed.
+
+* **Far followers can use the module's own mesh path.** Before, only near followers did, and most of the 99 are far. Near followers' depth pass goes the same way.
+* **The honest gain: about 25 fps going to around 31 to 38 with all 99, not 60.** That's an estimate, and only the game can confirm it.
+* **It sits under its own box.** Rendering > "Far followers too", on by default, does nothing while "Draw with the module's own mesh path" is off. With that path off, everything draws as in 0.9.9a: 407030 recorded calls compared equal.
+* **The same crash guard, with a part for far followers.** If the game ends on the far path, the next start turns off only "Far followers too" (or the whole path, if the near part was at fault). "Try again" on the Rendering page turns it back on.
+* **A limit of 20 MiB per frame.** The engine's queue writes to address 0 when it overflows, and nothing can catch that, so far followers past the limit take the old path for that frame.
+* **The log can read an A/B by itself.** The drawing path and the stage times go in every 10 seconds, so no note is needed. A new box, Disc and status > Diagnostics > "Measure in the log how far the graphics thread is behind", is on by default and only measures with 9 or more followers.
+
+**Known limits:**
+
+* Far followers still make one draw each. Drawing them together is stage 2, and it waits for this test's log.
+* A crash that comes after the guard's first 300 frames at unchanged sizes leaves no marker, so the guard can't blame the far path for it.
+* A burst of a new, larger vertex size could pass the limit for one frame. UNVERIFIED whether the game's real sizes can do it.
+* Two screen views in one frame swap a shared buffer more often. Far Amy's warp can leave see-through copies away from her centre, because the far view test uses one radius for everyone.
+
+### The owner checklist
+
+If you already have "Draw with the module's own mesh path" ticked, **far followers switch to the new path the moment you start 0.9.9b.** It could end the game once. If it does, start again and read the Rendering page.
+
+1. Q menu > Options > G-SA1 > Rendering: tick "Draw with the module's own mesh path". Say the secret. Stay 30 seconds, moving around.
+2. Untick it. 30 seconds. Tick it. 30 seconds. Then, with it ticked, untick only "Far followers too". 30 seconds. Tick it. 30 seconds. Don't note anything: the log says which was which. Send the log.
+3. Look at the crowd with it on. Do the far ones stand on the ground, and run smoothly as before? Same size? Any flicker, any in the wrong place, any missing?
+4. Walk the crowd from sunlight into shade. Do the far ones get darker about as before?
+5. Swing the camera fast. Do the far ones stay put, or trail? Does one pop in at the edge of the screen?
+6. Stand so that one follower crosses between near and far. Does it jump, or change brightness?
+7. Put the camera under water with followers above it, and go into a map with mirrors or another addon's screens if you have one.
+8. Press Escape and come back. Alt-Tab out and back. Change map with followers alive. Take an F12 screenshot.
+9. The slider "Far followers: pictures per second": 5, then 30. Does the look change as it did before?
+10. If the game ends by itself: start it again, read the Rendering page, send the log, then press "Try again" once if you like.
+11. Optional: run once with `mat_vsync 0`, and once at a much smaller window size. If the fps jumps at the small size, the GPU was the limit.
+12. **Needed once, nothing else can give this number:** with no followers, stand still, and type `fps_max 0`, then `mat_vsync 0`. 20 seconds. Then put them back: `fps_max 60.19`, `mat_vsync 1`.
+13. Optional, the crowd's share: with the 99 around you, `sv_cheats 1`, then `r_drawentities 0`. 20 seconds (you'll see no characters). Then `r_drawentities 1`, `sv_cheats 0`. If it says unknown, skip this.
+14. **Depth effects:** turn on whatever you use that reads depth (sun shafts, depth of field, GShader). Stand where you can see your character and the near followers against something behind them. Untick the mesh path, look, tick it, look. Do those effects look the same both ways? Any halo, cut-out edge, or a character the effect treats as not there?
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_native_far` | 1 | Rendering: "Far followers too" (no effect while `gsa1_native_mesh` is 0) |
+| `gsa1_log_behind` | 1 | Disc and status > Diagnostics: "Measure in the log how far the graphics thread is behind" |
+
 ## What 0.9.9a changes: models that stay whole, followers that go to idle, screenshots that aren't black
 
 From the owner's test of 0.9.9. **None of this has been seen in the real game yet**: the tests run against a stand-in for Garry's Mod and against the Dreamcast's own code. An independent check passed with no fails.

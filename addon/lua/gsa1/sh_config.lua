@@ -1,7 +1,7 @@
 -- G-SA1 shared configuration: constants, character names, ConVars, network strings.
 GSA1 = GSA1 or {}
 
-GSA1.VERSION = "0.9.9a"
+GSA1.VERSION = "0.9.9b"
 GSA1.REQUIRED_API = 6          -- gsa1.API_VERSION the addon is written for
 GSA1.SCALE = 4.0               -- Hammer units per SA1 unit (libsa1's Source preset)
 GSA1.MODULE = "gsa1"           -- require("gsa1") -> garrysmod/lua/bin/gmcl_gsa1_<platform>.dll
@@ -221,6 +221,7 @@ if CLIENT then
         hitch_ms     = cv("gsa1_hitch_ms", "100", "Frame time in milliseconds above which gsa1_hitch_log prints", 20, 2000),
         log          = cv("gsa1_log", "1", "Keep a session log in garrysmod/data/gsa1/log.txt (versions, messages, slow frames, stutters, performance, a summary) for bug reports", 0, 1),
         log_hitch_ms = cv("gsa1_log_hitch_ms", "50", "Frames longer than this (ms) go into the session log with a breakdown", 20, 2000),
+        log_behind   = cv("gsa1_log_behind", "1", "With 9 or more followers, the session log measures every 10 s how far the graphics thread is behind: one long frame in that time, left out of the log's figures. 0 = no such measurement", 0, 1),
     }
     for _, u in ipairs(GSA1.UPGRADES) do
         local who = GSA1.CharacterByKind(u.kind)

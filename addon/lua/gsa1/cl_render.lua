@@ -99,6 +99,17 @@
 --   * level 3: not drawn (the entity is SetNoDraw too);
 --   * never counted as your character's view (GSA1.ViewInfo, GSA1.ViewsLine, cl_log.lua's views); its time is the hitch
 --     section "FollowerDraw"; one EyePos / EyeAngles per frame for all followers on the screen, not one per follower (D10).
+--
+-- fardraw stage 1 (sadc docs/research/fardraw.md 4.1 with its review): the faster drawing (feat/cl_nativemesh.lua, GSA1.NativeMesh looked up at each call: this file loads before
+-- gsa1/feat/*) also for far followers and the depth pass. With gsa1_native_mesh 0, or "Far followers too" (gsa1_native_far) off for what concerns far followers, or no such file at all,
+-- everything draws as it did:
+--   * draw_batches: a far follower with room in the budget (N.FarRoom) streams its batches through gsa1.DrawBatchNative every frame; its static meshes are freed once. One refused stays on
+--     its static meshes for 2 s;
+--   * draw_depth: its streamed batches through gsa1.DrawBatchNative (the static branch of gsa1_interpolate 0 stays);
+--   * prepare_frame: no gsa1.PrepareView for a far follower with no new picture, no new origin and no changed option: a dynamic mesh reads the arrays every frame, but the arrays only change
+--     with a picture (READ Session::tick_followers: r.pos is c.r_pos; render_copy clears view_ready, which DrawBatchNative also obeys);
+--   * GSA1.DrawCharacter: no blended pass for a far follower with nothing to blend (C.farPass1) and, droppable, no draw at all for one outside the view by its real size (far_in_view);
+--   * GSA1.DrawCounts: plain integers for the session log's drawpath line, in every state (cl_log.lua).
 GSA1 = GSA1 or {}
 
 local band = bit.band
@@ -118,6 +129,12 @@ local RT_KINDS = { _rt_waterrefraction = "water", _rt_waterreflection = "water",
                    _rt_shadowdummy = "shadowdepth" }
 local DEPTH_KINDS = { ssao = true, shadowdepth = true }
 local LATE_DEPTH_RANGE = 0.99999    -- R1b: z x 0.99999 (about 0.03 units nearer at 150 units, 1.4 at 1,000)
+
+-- the session log's counts (cl_log.lua's drawpath line reads and clears them every 10 s): draws by route (static, stream by Lua, native; depth by Lua, depth native) and by whom, far followers
+-- drawn, far pictures, meshes built, far followers over the budget (feat/cl_nativemesh.lua) and left out by their size. Plain numbers, no garbage
+local DC = { static = 0, lua = 0, native = 0, depthStatic = 0, depthLua = 0, depthNative = 0, farStatic = 0, farLua = 0, farNative = 0, nearColour = 0, nearDepth = 0, you = 0,
+             farDrawn = 0, farPictures = 0, rebuilt = 0, farOver = 0, farLeftOut = 0 }
+GSA1.DrawCounts = DC
 
 local ENT = {}
 ENT.Type = "anim"
@@ -334,6 +351,7 @@ local function follower_batch(C, f)
     return true
 end
 GSA1.FollowerBatch = follower_batch
+local FAR_LEVEL = { lod = 2 }       -- (fardraw 4.1 step 4: C.farPass1 is counted as level 2 whatever C.lod is at that moment: it does not go stale at a level change)
 
 -- the Objects page's switch (feat/cl_objects.lua; on without that feature)
 local function objects_on()
@@ -389,7 +407,12 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
     local effects = cv.effects:GetBool()
     local shadows = not cv.shadow or cv.shadow:GetBool()
     local objects = objects_on()
-    local static = not C.interp
+    -- (fardraw 4.1 step 1: a far follower with room in the budget streams through the module; the file loads after this one, so N is looked up here)
+    local NM = GSA1.NativeMesh
+    local native = NM ~= nil and NM.Ready()
+    local far = C.follower and C.lod == 2
+    local static = not C.interp and not (native and far and NM.FarRoom(C, pass))
+    if far and not static and next(C.static) ~= nil then free_static(C) end
     local tex = GSA1.Tex
     -- the material pre-warm: a few of the character's materials drawn once in this pass (invisible), in the main view
     if GSA1.Warm and main and not C.follower then
@@ -400,8 +423,8 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
     local O = C.relOrigin
     local ox, oy, oz = 0, 0, 0
     if O then ox, oy, oz = O.x, O.y, O.z end
-    local native = GSA1.NativeMesh ~= nil and GSA1.NativeMesh.Ready()
     local hidden = C.hidden or NONE
+    local nStatic, nLua, nNative, nBuilt = 0, 0, 0, 0
     -- (0.9.4, review R.1: in first person only the game's objects; 0.9.3a drew nothing there; 0.9.5: and the board)
     for i = 1, ((first_person and (C.objectBatches or 0) == 0 and (C.boardBatches or 0) == 0) and 0 or B.count) do
         local b = B[i]
@@ -426,8 +449,10 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
                     if sm and sm.imesh and sm.gen == C.renderGen and sm.tris == b.tris and sm.ox == ox and sm.oy == oy and
                        sm.oz == oz then
                         sm.imesh:Draw()
+                        nStatic = nStatic + 1
                     else
                         native = stream_batch(C, i, b.tris, native)
+                        if native then nNative = nNative + 1 else nLua = nLua + 1 end
                     end
                 elseif static then
                     local sm = C.static[i]
@@ -440,10 +465,13 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
                         mesh.End()
                         sm = { imesh = im, gen = C.renderGen, mat = mat, tris = b.tris, ox = ox, oy = oy, oz = oz }
                         C.static[i] = sm
+                        nBuilt = nBuilt + 1
                     end
                     sm.imesh:Draw()
+                    nStatic = nStatic + 1
                 else
                     native = stream_batch(C, i, b.tris, native)
+                    if native then nNative = nNative + 1 else nLua = nLua + 1 end
                 end
                 if tone then render.SetToneMappingScaleLinear(tone) end
                 if pass == 1 then
@@ -454,6 +482,16 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
     end
     if lit then
         render.SuppressEngineLighting(false)
+    end
+    DC.static, DC.lua, DC.native, DC.rebuilt = DC.static + nStatic, DC.lua + nLua, DC.native + nNative, DC.rebuilt + nBuilt
+    if far then
+        DC.farStatic, DC.farLua, DC.farNative = DC.farStatic + nStatic, DC.farLua + nLua, DC.farNative + nNative
+        -- (the budget's step, feat/cl_nativemesh.lua: a far follower's own colour lock has now happened in this session; a sun silhouette's material is not one)
+        if nNative > 0 and not override and not NM.farLockFrame then NM.farLockFrame = FrameNumber() end
+    elseif C.follower then
+        DC.nearColour = DC.nearColour + nStatic + nLua + nNative
+    else
+        DC.you = DC.you + nStatic + nLua + nNative
     end
     return te
 end
@@ -477,6 +515,10 @@ local function draw_depth(C, color, first_person, te)
     local ox, oy, oz = 0, 0, 0
     if O then ox, oy, oz = O.x, O.y, O.z end
     local hidden = C.hidden or NONE
+    -- (fardraw 4.1 step 2: the streaming branch through the module; new for the game there: DepthWrite materials, so N.DepthArm)
+    local NM = GSA1.NativeMesh
+    local native = NM ~= nil and NM.Ready()
+    local nStatic, nLua, nNative = 0, 0, 0
     for i = 1, B.count do
         local b = B[i]
         if b and b.pass == 0 and b.tris > 0 and not hidden[i] and batch_on(b.flags, effects, shadows, objects, first_person) and
@@ -488,12 +530,19 @@ local function draw_depth(C, color, first_person, te)
             if sm and sm.imesh and sm.gen == C.renderGen and sm.tris == b.tris and sm.ox == ox and sm.oy == oy and
                sm.oz == oz then
                 sm.imesh:Draw()
+                nStatic = nStatic + 1
             else
-                mesh.Begin(MATERIAL_TRIANGLES, b.tris)
-                emit(C, i)
-                mesh.End()
+                if native then NM.DepthArm() end
+                native = stream_batch(C, i, b.tris, native)
+                if native then nNative = nNative + 1 else nLua = nLua + 1 end
             end
         end
+    end
+    DC.depthStatic, DC.depthLua, DC.depthNative = DC.depthStatic + nStatic, DC.depthLua + nLua, DC.depthNative + nNative
+    if C.follower then
+        DC.nearDepth = DC.nearDepth + nStatic + nLua + nNative
+    else
+        DC.you = DC.you + nStatic + nLua + nNative
     end
     return te
 end
@@ -521,14 +570,45 @@ local function rel_origin(C, fn)
     end
 end
 
+-- what a follower's PrepareView takes that its vertices depend on: a generation that goes up when one of them changes, read once per frame for all followers (fardraw 4.1 step 3)
+local foOpt = { frame = -1, gen = 0 }
+local function follower_opt_gen(cv, fn)
+    local o = foOpt
+    if o.frame ~= fn then
+        o.frame = fn
+        local flip, vcolor, width, lighting = cv.flip:GetBool(), cv.vcolor:GetBool(), cv.line_width:GetFloat(), cv.lighting:GetBool()
+        if flip ~= o.flip or vcolor ~= o.vcolor or width ~= o.width or lighting ~= o.lighting then
+            o.flip, o.vcolor, o.width, o.lighting = flip, vcolor, width, lighting
+            o.gen = o.gen + 1
+        end
+    end
+    return o.gen
+end
+
 -- the frame's view of the character, once per frame: PrepareView with the main view's eye (the sprites face it, the
 -- coverage figure), the draw time's frame (C.viewFrame: GSA1.DrawCharacterView draws only in such a frame)
+-- (fardraw 4.1 step 3: a far follower's arrays change only with a picture, so with the faster drawing on for far followers no PrepareView without one; the same frame, the same C.viewFrame.
+-- A new origin, the eye under water, a changed option: again in that very frame. Sphere maps and lines stay frozen between pictures, as they do on a static mesh)
 function prepare_frame(C, fn)
     rel_origin(C, fn)
     local cv = GSA1.cv
     C.viewFrame = fn
     C.drawMs, C.drawMsFrame = C.drawMsNext or 0, nil
     C.drawMsNext = 0
+    local follower = C.follower
+    local px, py, pz, pg
+    if follower then
+        local PO = C.relOrigin
+        if PO then px, py, pz = PO.x, PO.y, PO.z end
+        pg = follower_opt_gen(cv, fn)
+        if C.lod == 2 then
+            DC.farDrawn = DC.farDrawn + 1
+            local fresh = C.prepGen == C.renderGen
+            if not fresh then DC.farPictures = DC.farPictures + 1 end
+            local NM = GSA1.NativeMesh
+            if fresh and NM and NM.FarWanted() and C.prepX == px and C.prepY == py and C.prepZ == pz and C.prepOptGen == pg then return end
+        end
+    end
     -- R2b: the main view's eye, whichever view comes first (the water reflection's is mirrored under the water)
     local eye, ang
     if C.follower then eye, ang = follower_main_eye() else eye, ang = main_eye() end
@@ -542,7 +622,54 @@ function prepare_frame(C, fn)
     GSA1.AngleAxes(ang, nil, C.viewR, C.viewU)
     gsa1.PrepareView(C.id, eye, C.viewR, C.viewU, cv.flip:GetBool(), cv.vcolor:GetBool(),
         cv.line_width:GetFloat(), cv.lighting:GetBool(), fov, ScrW(), ScrH(), C.relOrigin)
+    if follower then C.prepGen, C.prepX, C.prepY, C.prepZ, C.prepOptGen = C.renderGen, px, py, pz, pg end
     if GSA1.HitchAdd then GSA1.HitchAdd("PrepareView", SysTime() - tv) end
+end
+
+-- fardraw 4.1 step 6, droppable (review RF.19): is a far follower in the view by its real size? The engine's own cull uses the render bounds above, 640 units for every character; a far follower
+-- draws no effects, so it is far smaller than that. GSA1.FAR_RADIUS is measured, not guessed: the largest distance of a vertex a far follower draws from its centre over the walk of
+-- tests/feat_nativemesh_binding_test.cpp (every form, without and with its upgrades, running, jumping, each button, standing long), plus 20 %; that test fails when the walk exceeds it. One number for
+-- all kinds: Knuckles' own worst is 41, so 99 Knuckles keep a little more than they need at the screen's edge, and no unmeasured pose of a kind with a short worst can pop. The 4 side planes once per
+-- frame, from CalcView's view of this frame by Source's Hor+ (as Session::prepare_view computes tan_h, tan_v). No fresh view of ours, or the screen's eye is not that view (another addon's camera):
+-- everyone is in view.
+GSA1.FAR_RADIUS = 140       -- MEASURED: 116.3 (Big, 27 ticks after B on the run: a plain opaque part), x 1.2, rounded up
+local farPlanes = { frame = -1, ok = false }
+local function far_planes(fn)
+    local P = farPlanes
+    P.frame, P.ok = fn, false
+    local v = GSA1.view
+    if not (v and v.frame == fn and v.origin and v.angles and v.fov and v.fov > 1 and v.fov < 179) then return end
+    local se, sa = follower_screen_eye()
+    local e = v.origin
+    if math.abs(se.x - e.x) > 1 or math.abs(se.y - e.y) > 1 or math.abs(se.z - e.z) > 1 or math.abs(math.NormalizeAngle(sa.p - v.angles.p)) > 1 or
+       math.abs(math.NormalizeAngle(sa.y - v.angles.y)) > 1 then
+        return
+    end
+    P.f, P.r, P.u = P.f or Vector(), P.r or Vector(), P.u or Vector()
+    GSA1.AngleAxes(v.angles, P.f, P.r, P.u)
+    local t43 = math.tan(math.rad(v.fov) / 2)
+    local th, tv = t43 * (ScrW() / ScrH()) / (4 / 3), t43 * 0.75
+    local nh, nv = 1 / math.sqrt(1 + th * th), 1 / math.sqrt(1 + tv * tv)
+    local f, r, u = P.f, P.r, P.u
+    P.ex, P.ey, P.ez = e.x, e.y, e.z
+    -- the inward normals: tan x forward -+ side, of length 1
+    P.fhx, P.fhy, P.fhz = f.x * th * nh, f.y * th * nh, f.z * th * nh
+    P.rx, P.ry, P.rz = r.x * nh, r.y * nh, r.z * nh
+    P.fvx, P.fvy, P.fvz = f.x * tv * nv, f.y * tv * nv, f.z * tv * nv
+    P.ux, P.uy, P.uz = u.x * nv, u.y * nv, u.z * nv
+    P.ok = true
+end
+local function far_in_view(C, fn)
+    local P = farPlanes
+    if P.frame ~= fn then far_planes(fn) end
+    if not P.ok then return true end
+    local p = C.drawPos
+    local x, y, z = p.x - P.ex, p.y - P.ey, p.z + (C.info and C.info.center or 20) - P.ez
+    local R = GSA1.FAR_RADIUS
+    local front, side = x * P.fhx + y * P.fhy + z * P.fhz, x * P.rx + y * P.ry + z * P.rz
+    if front - side < -R or front + side < -R then return false end
+    front, side = x * P.fvx + y * P.fvy + z * P.fvz, x * P.ux + y * P.uy + z * P.uz
+    return not (front - side < -R or front + side < -R)
 end
 
 -- pass 0: opaque batches, 1: blended batches (in the game's order); flags: the STUDIO flags of ENT:Draw /
@@ -585,6 +712,21 @@ function GSA1.DrawCharacter(C, pass, flags)
         local screen = kind == "main" and rtname == nil
         if (C.lod or 1) == 2 then
             if not screen then return end
+            -- (fardraw 4.1 steps 4, 6: looked up at the call; off, or "Far followers too" off: nothing of this)
+            local NM = GSA1.NativeMesh
+            if NM and NM.FarWanted() then
+                if pass == 1 then
+                    if C.matsDirty then GSA1.ResolveMaterials(C) end
+                    if (C.farPass1 or 0) == 0 then return end
+                end
+                if not far_in_view(C, fn) then
+                    if pass == 0 then
+                        DC.farLeftOut = DC.farLeftOut + 1
+                        C.drawMs, C.drawMsNext = 0, 0     -- (the followers line's draw figure sums C.drawMs)
+                    end
+                    return
+                end
+            end
         elseif kind == "main" and not screen then
             local ov = cv.follower_other_views
             if not (ov and ov:GetBool()) then return end
@@ -829,7 +971,7 @@ function GSA1.ResolveMaterials(C)
     local mats = C.mats or {}
     local hidden = C.hidden or {}
     local n = C.batches.count or 0
-    local shadow, after, nhidden, objects, boards = 0, 0, 0, 0, 0
+    local shadow, after, nhidden, objects, boards, far1 = 0, 0, 0, 0, 0, 0
     for i = 1, n do
         local b = C.batches[i]
         mats[i] = GSA1.Tex.Material(C.kind, b)
@@ -843,7 +985,9 @@ function GSA1.ResolveMaterials(C)
         else
             hidden[i] = nil
         end
+        if b.pass == 1 and (b.tris or 0) > 0 and not hidden[i] and follower_batch(FAR_LEVEL, b.flags) then far1 = far1 + 1 end
     end
+    C.farPass1 = far1                                    -- (fardraw 4.1 step 4: what a far follower's blended pass would draw, whatever C.lod is now)
     for i = #mats, n + 1, -1 do mats[i] = nil end
     for i in pairs(hidden) do
         if i > n then hidden[i] = nil end

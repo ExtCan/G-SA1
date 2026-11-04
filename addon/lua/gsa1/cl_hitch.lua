@@ -25,11 +25,14 @@
 -- time (GSA1.Hitch.tickPaused, read by cl_character.lua): 0.6.0 ticked 0.25 s at once there, 7-8 game pairs the player
 -- never saw (gsa1_060_pops.md R.4). UNVERIFIED in game: that PostRender runs while single player is paused (inferred
 -- from the pause frames' EmitBatch sums).
+-- fardraw stage 1 (sadc docs/research/fardraw.md 4.4): H.sum, all sections so far, for the session log's stages line (cl_log.lua: G-SA1's part of the views); H.sample, the seconds of the log's read-back
+-- in the frame that ended: it is left out of that frame's time, so it is the log's sample and not a hitch, a stutter or a slower fps.
 GSA1 = GSA1 or {}
 GSA1.Hitch = GSA1.Hitch or { cur = {}, spare = {}, last = nil, quiet = 0, count = 0, worst = 0, gc = nil }
 local H = GSA1.Hitch
 H.spare = H.spare or {}
 H.drawn, H.uiSeen, H.unfocusedSeen, H.tickPaused = H.drawn or 0, false, false, false
+H.sum, H.sample = H.sum or 0, H.sample or 0
 local PAUSE_DRAWN = 3            -- more frames than this drawn without a Think, in a frame of over PAUSE_S: a pause
 local PAUSE_S = 0.25
 
@@ -50,6 +53,7 @@ for _, name in ipairs(ORDER) do IN_ORDER[name] = true end
 function GSA1.HitchAdd(name, seconds)
     local cur = H.cur
     cur[name] = (cur[name] or 0) + seconds
+    H.sum = H.sum + seconds
 end
 
 -- "Tick 4.2, EmitBatch 2.1, ..." (sections of at least 0.5 ms) and their sum in seconds
@@ -92,6 +96,9 @@ function GSA1.HitchFrame(now)
     local drawn, ui, unfocused = H.drawn, H.uiSeen, H.unfocusedSeen
     H.drawn, H.uiSeen, H.unfocusedSeen = 0, false, false
     local dt = last and (now - last) or 0
+    local sample = H.sample
+    H.sample = 0
+    if sample > 0 then dt = math.max(dt - sample, 0) end
     local long = dt > PAUSE_S
     local paused = ui or unfocused or (long and drawn > PAUSE_DRAWN)
     -- the game itself stood still (the character's tick runs no time): a long frame drawn without Thinks or spent in
@@ -100,6 +107,7 @@ function GSA1.HitchFrame(now)
         (ui and game.SinglePlayer())
     if not last or not GSA1.cv then return end
     local counted = focused and was and not paused
+    if GSA1.LogStages then GSA1.LogStages(now, last, cur, counted, sample) end
     if paused and dt >= 1 and GSA1.LogPause then GSA1.LogPause(dt, drawn, ui, unfocused or not focused or not was) end
     if GSA1.LogFrame then GSA1.LogFrame(dt, cur, counted, gc) end
     -- 0.9.5 (sadc docs/research/board095_perf.md P2): the garbage meter's frame (cl_gcmeter.lua)
@@ -109,6 +117,7 @@ function GSA1.HitchFrame(now)
     local console = GSA1.cv.hitch:GetBool() and dt * 1000 >= GSA1.cv.hitch_ms:GetFloat()
     if dt * 1000 < logms and not console then return end
     local parts, total = breakdown(cur)
+    if sample > 0 then parts = string.format("%s%sthe log's sample %.1f left out", parts, parts ~= "" and ", " or "", sample * 1000) end
     if dt * 1000 >= logms and GSA1.LogHitch then
         GSA1.LogHitch(dt * 1000, total * 1000, parts, math.max(0, dt - total) * 1000, gc)
     end

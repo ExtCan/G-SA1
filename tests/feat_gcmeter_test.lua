@@ -320,6 +320,13 @@ do
     check(built and box and after and d and d.default == "1" and M.convars.gsa1_log_garbage.client and
         M.convars.gsa1_log_garbage.save, "Options > G-SA1 > Disc and status: \"%s\" under the slow-frame threshold "
         .. "(gsa1_log_garbage, on)", box and box[2] or "-")
+    -- (fardraw stage 1, sadc docs/research/fardraw.md 4.4, review RF.10: the log's sample has its own box on the same page, beside the log's)
+    local behind = nil
+    for _, c in ipairs(calls) do
+        if c[1] == "CheckBox" and c[3] == "gsa1_log_behind" then behind = c end
+    end
+    local db = GSA1.cv.log_behind
+    check(behind and db and db:GetBool() and M.convars.gsa1_log_behind.save, "the same page: \"%s\" (gsa1_log_behind, on)", behind and behind[2] or "-")
 end
 check(#M.reported == 0, "no Lua error reported (%s)", tostring(M.reported[1]))
 print(string.format("\n%d checks, %d failed", M.checks, M.fails))

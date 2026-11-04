@@ -3,6 +3,8 @@
 -- DATA folder, ConVars, hooks, a controllable SysTime.
 --   lua_host tests/log_test.lua <tests dir> <addon/lua dir>
 -- Returns true when every check passes (sadc docs/research/gsa1_lsd_lag.md 6.5 and its review R.4.4; round 4c).
+-- fardraw stage 1 (sadc docs/research/fardraw.md 4.4): the last block: the drawpath and stages lines, the log's read-back: only with gsa1_log, gsa1_log_behind and 9 or more followers, its time in no stage and
+-- in no frame's figure, not a hitch, the bound target as found. This file runs without the withheld native files.
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
 local M = host_load(host_read(tests .. "/lua_mock.lua"), "lua_mock.lua")()
 M.root = root
@@ -473,6 +475,154 @@ check(string.find(log, "summary +the player: 1 deaths while a character; dead wh
     string.find(log, "summary +the game: [^\n]*1 player deaths %(npc_drg_fnaf1_bonnie x1%)") ~= nil,
     "the summary counts the player's deaths and the time dead while a character")
 GSA1.Char = nil
+
+-- fardraw stage 1 (sadc docs/research/fardraw.md 1.8, 4.4 with its review RF.10): the drawpath and stages lines, the log's sample -------------------------------------------------------------------------
+do
+    local real_log = GSA1.Log
+    local got = {}
+    GSA1.Log = function(kind, fmt, ...)
+        local okf, text = pcall(string.format, fmt, ...)
+        got[#got + 1] = { kind = kind, text = okf and text or tostring(fmt) }
+        return real_log(kind, fmt, ...)
+    end
+    local function lines(kind)
+        local out = {}
+        for _, l in ipairs(got) do if l.kind == kind then out[#out + 1] = l.text end end
+        return out
+    end
+    local captures, flush = 0, 0
+    local stack = {}
+    local capture0 = render.CapturePixels
+    render.CapturePixels = function()
+        -- (cl_textures.lua's texture check reads back too, from its own target)
+        if M.render_target and M.render_target.name == "gsa1_log_behind" then
+            captures = captures + 1
+            M.T = M.T + flush       -- (the read-back waits for the queue: READ, fardraw.md 1.8)
+        end
+        return capture0()
+    end
+    local push0, pop0 = render.PushRenderTarget, render.PopRenderTarget
+    render.PushRenderTarget = function(rt)
+        stack[#stack + 1] = M.render_target or false
+        M.render_target = rt
+        return push0(rt)
+    end
+    render.PopRenderTarget = function()
+        M.render_target = table.remove(stack) or nil
+        return pop0()
+    end
+    -- one frame: the frame before ends after after_ms; before the views 2 ms, the views 10 ms of which G-SA1's sections 4 ms, then PostRender with the given target bound
+    local left, bound_late = 0, nil
+    local function stage_frame(after_ms, target)
+        think(after_ms / 1000)
+        M.T = M.T + 0.002
+        M.run_hook("PreRender")
+        M.T = M.T + 0.010
+        GSA1.HitchAdd("FollowerDraw", 0.003)
+        GSA1.HitchAdd("PrepareView", 0.001)
+        if GSA1.DrawCounts then
+            GSA1.DrawCounts.farStatic = (GSA1.DrawCounts.farStatic or 0) + 18
+            GSA1.DrawCounts.farDrawn = (GSA1.DrawCounts.farDrawn or 0) + 1
+        end
+        M.render_target = target
+        M.run_hook("PostRender")
+        if M.render_target ~= target then left = left + 1 end
+        M.render_target = nil
+    end
+    local function run(seconds, after_ms, target)
+        for _ = 1, math.floor(seconds / (0.012 + after_ms / 1000)) do stage_frame(after_ms, target) end
+    end
+    local behind = GSA1.cv.log_behind
+    check(behind ~= nil and behind:GetBool() and M.convars.gsa1_log_behind.client, "gsa1_log_behind: a client setting, on by default")
+    GSA1.Followers = nil
+    GSA1.DrawCounts = {}
+    run(12, 4)
+    check(#lines("drawpath") == 0 and #lines("stages") == 0 and captures == 0, "no followers and no faster drawing: no such lines, no read-back")
+    local function followers(n)
+        local list = {}
+        for i = 1, n do list[i] = { lod = i <= 7 and 1 or (i <= 8 and 3 or 2) } end
+        GSA1.Followers = { list = list }
+    end
+    followers(8)
+    run(23, 4)
+    local dp, st = lines("drawpath"), lines("stages")
+    check(#dp == 2 and #st == 2, "with followers: both lines every 10 s (%d, %d)", #dp, #st)
+    check(string.match(dp[#dp] or "", "^faster drawing off %(mat_queue_mode %-1, mat_vsync 1%); levels 7 full, 0 far, 1 not drawn; per frame: 1%.0 far on screen, 0%.0 far pictures; draw calls 18 %(far through the "
+        .. "module 0, far static 18, far by Lua 0, near colour 0, near depth 0, you 0%); far over the budget 0%.0; far left out by their size 0%.0; Lua vertex calls %d+; native vertices 0$") ~= nil,
+        "the drawpath line, with no module path: %s", dp[#dp] or "-")
+    check((st[#st] or "") == "before the views 2.0 ms, views 10.0 ms (G-SA1's part 4.0), after the views 4.0 ms; no sample (gsa1_log_behind off, or under 9 followers); FollowerDraw 3.0 ms, PrepareView 1.0 ms a frame",
+        "the stages line, under 9 followers: %s", st[#st] or "-")
+    check(captures == 0, "under 9 followers: no read-back (%d)", captures)
+    -- 9 or more: the sample, every 10 s; its time is the log's, not the frame's
+    got = {}
+    followers(9)
+    flush = 0.030
+    local hitch0, stutter0 = count(" hitch +"), GSA1.LogState.stutters
+    GSA1.cv.log_hitch_ms:SetString("40")
+    GSA1.LogFlush()
+    hitch0 = count(" hitch +")
+    run(23, 4)
+    GSA1.LogFlush()
+    dp, st = lines("drawpath"), lines("stages")
+    check(captures == 2 or captures == 3, "9 followers: the read-back every 10 s (%d in 23 s)", captures)
+    check((st[#st] or "") == "before the views 2.0 ms, views 10.0 ms (G-SA1's part 4.0), after the views 4.0 ms; the render thread and the GPU were 30.0 ms behind at the sample; FollowerDraw 3.0 ms, PrepareView 1.0 ms a frame",
+        "its time is left out of the stages: %s", st[#st] or "-")
+    check(count(" hitch +") == hitch0 and GSA1.LogState.stutters == stutter0, "a frame of 46 ms with its sample of 30 ms over a threshold of 40 ms: the log's sample, no hitch line (%d), no stutter (%d)", count(" hitch +") - hitch0,
+        GSA1.LogState.stutters - stutter0)
+    -- in long frames a sample's 30 ms would show in a window's mean: it is in no stage
+    got = {}
+    run(23, 200)
+    st = lines("stages")
+    check((st[#st] or "") == "before the views 2.0 ms, views 10.0 ms (G-SA1's part 4.0), after the views 200.0 ms; the render thread and the GPU were 30.0 ms behind at the sample; FollowerDraw 3.0 ms, PrepareView 1.0 ms a frame",
+        "47 frames in the window, one sample: the views and after the views are as they were: %s", st[#st] or "-")
+    -- a real hitch in such a frame is one, and it says what it left out
+    got = {}
+    GSA1.LogState.dp.nextSample = 0
+    stage_frame(4)
+    M.T = M.T + 0.070       -- this frame's own slowness, on top of the sample's flush
+    stage_frame(4)
+    local hl = lines("hitch")
+    check(#hl == 1 and string.find(hl[1], "a frame took 86 ms", 1, true) ~= nil and string.find(hl[1], "the log's sample 30.0 left out", 1, true) ~= nil, "a frame slow without its sample still is a hitch, and says what it left out: %s", hl[1] or "-")
+    GSA1.cv.log_hitch_ms:SetString("50")
+    -- the bound target as found, with the sample in the frame (the rule of 0.9.9a's L3: the owner's black screenshots)
+    left, flush = 0, 0
+    local n0 = captures
+    local other = { GetName = function() return "_rt_another_addons" end }
+    GSA1.LogState.dp.nextSample = 0
+    stage_frame(4)
+    stage_frame(4, other)
+    GSA1.LogState.dp.nextSample = 0
+    stage_frame(4, other)
+    check(captures >= n0 + 1 and left == 0 and #stack == 0, "at the end of PostRender the bound target is what it was at its start: %d frames left another, %d pushes not popped, %d samples", left, #stack, captures - n0)
+    -- the read-back fails: popped all the same, one error line
+    local ce = render.CapturePixels
+    render.CapturePixels = function() error("a test's capture error") end
+    GSA1.LogState.dp.nextSample = 0
+    left = 0
+    stage_frame(4, other)
+    render.CapturePixels = ce
+    local errs = lines("error")
+    check(left == 0 and #stack == 0 and #errs >= 1 and string.find(errs[#errs], "a test's capture error", 1, true) ~= nil, "a read-back that fails: the target popped all the same, one error line (%s)", errs[#errs] or "-")
+    -- its box, and the log's
+    local c0 = captures
+    behind:SetString("0")
+    got = {}
+    run(23, 4)
+    check(captures == c0, "gsa1_log_behind 0: no read-back (%d)", captures - c0)
+    st = lines("stages")
+    check(string.find(st[#st] or "", "no sample", 1, true) ~= nil and #lines("drawpath") >= 1, "the lines stay, the stages line says so: %s", st[#st] or "-")
+    behind:SetString("1")
+    GSA1.cv.log:SetString("0")
+    got = {}
+    GSA1.LogState.dp.nextSample = 0
+    run(12, 4)
+    check(captures == c0, "gsa1_log 0: no read-back (%d)", captures - c0)
+    GSA1.cv.log:SetString("1")
+    GSA1.Followers = nil
+    GSA1.DrawCounts = nil
+    render.CapturePixels, render.PushRenderTarget, render.PopRenderTarget = capture0, push0, pop0
+    GSA1.Log = real_log
+end
 
 print(string.format("\n%d checks, %d failed", M.checks, M.fails))
 if arg[3] == "dump" then

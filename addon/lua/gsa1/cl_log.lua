@@ -538,6 +538,146 @@ function GSA1.LogCamera(passed)
     end
 end
 
+-- fardraw stage 1 (sadc docs/research/fardraw.md 1.8, 4.4 with its review RF.10): two lines every PERF_EVERY seconds while there are followers or the faster drawing is on, so that one window of an A/B reads
+-- alone, with no note of what was on at that moment:
+--   drawpath  what draws what: the option, the far box, the context and the queue (GSA1.DrawPathExtra, feat/cl_nativemesh.lua, where there is such a file), the levels, per drawn frame the far followers on the
+--             screen, their pictures, the draw calls by whom (GSA1.DrawCounts, cl_render.lua) and the far part's bytes
+--   stages    where a frame's time goes, from three SysTime() stamps a frame and no garbage: before the views (the Think that GSA1.HitchFrame runs in to PreRender: your tick, the followers' tick, the client's
+--             simulation), the views (PreRender to PostRender: Source's views on the game thread and all of G-SA1's drawing, with G-SA1's part of it), after the views (PostRender to the next Think: present, display
+--             wait, fps_max, a wait for the render thread if the queue is threaded), the sections FollowerDraw and PrepareView of the same window, and "behind": a read-back of a pushed 1 x 1 target every
+--             PERF_EVERY seconds, only with gsa1_log, gsa1_log_behind and 9 or more followers. READ materialsystem.dll as bytes: a queued context's read-back runs a full flush, so the sample holds all the queued work
+--             of this frame and what the render thread and the GPU had left: one long frame in 250. It is left out of the stages and of the frame's time (cl_hitch.lua). It leaves the bound target as it found it.
+-- Reading them: after the views large and behind by about a frame or more: the render thread or the GPU limits. Views minus G-SA1's part large, after the views small: Source or other addons on the game thread.
+-- Behind by well under a frame and after the views small: the game thread alone limits. A change of the option or of the far box starts the window again (GSA1.LogDrawPathCut).
+L.dp = L.dp or { t0 = nil, drawn = 0, frames = 0, before = 0, views = 0, after = 0, part = 0, fd = 0, pv = 0, nextSample = 0 }
+
+local function follower_count()
+    local Fo = GSA1.Followers
+    return Fo and Fo.list and #Fo.list or 0
+end
+
+local function capture_one_pixel()
+    render.CapturePixels()
+    render.ReadPixel(0, 0)
+end
+
+local function behind_sample(S)
+    S.rt = S.rt or GetRenderTargetEx("gsa1_log_behind", 1, 1, RT_SIZE_LITERAL or 5, MATERIAL_RT_DEPTH_NONE or 2, 0, 0, IMAGE_FORMAT_BGRA8888 or 12)
+    local t0 = SysTime()
+    render.PushRenderTarget(S.rt)
+    local ok, err = pcall(capture_one_pixel)
+    render.PopRenderTarget()
+    local dt = SysTime() - t0
+    GSA1.Hitch.sample = GSA1.Hitch.sample + dt
+    S.sampleSum = (S.sampleSum or 0) + dt
+    S.behind = dt * 1000
+    if not ok then GSA1.Log("error", "the log's read-back: %s", tostring(err)) end
+end
+
+hook.Add("PreRender", "gsa1_log_stages", function()
+    local S = L.dp
+    if not S.pre and GSA1.Hitch then S.pre, S.part0 = SysTime(), GSA1.Hitch.sum end
+end)
+
+hook.Add("PostRender", "gsa1_log_stages", function()
+    local S = L.dp
+    local H = GSA1.Hitch
+    if not H then return end
+    S.drawn = S.drawn + 1
+    if S.t0 and enabled() and follower_count() >= 9 then
+        local cv = GSA1.cv and GSA1.cv.log_behind
+        local now = SysTime()
+        if cv and cv:GetBool() and (now >= S.nextSample or now < S.nextSample - PERF_EVERY) then
+            S.nextSample = now + PERF_EVERY
+            behind_sample(S)
+        end
+    end
+    S.post, S.part1 = SysTime(), H.sum
+end)
+
+local function draw_path_start(S, now)
+    S.t0, S.drawn, S.frames, S.before, S.views, S.after, S.part, S.fd, S.pv, S.behind = now, 0, 0, 0, 0, 0, 0, 0, 0, nil
+    local DC = GSA1.DrawCounts
+    if DC then
+        for k in pairs(DC) do DC[k] = 0 end
+    end
+    S.mesh0 = nil
+    if GSA1.mod and gsa1.Status then
+        local ok, s = pcall(gsa1.Status)
+        if ok and type(s) == "table" then S.mesh0 = s.mesh_calls end
+    end
+    if GSA1.DrawPathExtra then pcall(GSA1.DrawPathExtra, false) end
+end
+
+local function draw_path_lines(S)
+    local n = math.max(S.drawn, 1)
+    local DC = GSA1.DrawCounts or {}
+    local function per(k) return (DC[k] or 0) / n end
+    local lv1, lv2, lv3 = 0, 0, 0
+    local Fo = GSA1.Followers
+    for _, F in ipairs(Fo and Fo.list or {}) do
+        local l = F.lod
+        if l == 1 then lv1 = lv1 + 1 elseif l == 2 then lv2 = lv2 + 1 else lv3 = lv3 + 1 end
+    end
+    local head, context, tail, native = "faster drawing off", "", "", 0
+    if GSA1.DrawPathExtra then
+        local ok, a, b, c, d = pcall(GSA1.DrawPathExtra, n)
+        if ok then
+            head, context, tail, native = a, b, c, d
+        else
+            tail = "(" .. tostring(a) .. "); "
+        end
+    end
+    local luaCalls = 0
+    if GSA1.mod and gsa1.Status then
+        local ok, s = pcall(gsa1.Status)
+        if ok and type(s) == "table" and s.mesh_calls and S.mesh0 then luaCalls = (s.mesh_calls - S.mesh0) / n end
+    end
+    GSA1.Log("drawpath", "%s (%smat_queue_mode %s, mat_vsync %s); levels %d full, %d far, %d not drawn; per frame: %.1f far on screen, %.1f far pictures; draw calls %.0f (far through the module %.0f, far "
+        .. "static %.0f, far by Lua %.0f, near colour %.0f, near depth %.0f, you %.0f); far over the budget %.1f; far left out by their size %.1f; %sLua vertex calls %.0f; native vertices %.0f", head, context,
+        cvstr("mat_queue_mode"), cvstr("mat_vsync"), lv1, lv2, lv3, per("farDrawn"), per("farPictures"), per("farNative") + per("farStatic") + per("farLua") + per("nearColour") + per("nearDepth") + per("you"),
+        per("farNative"), per("farStatic"), per("farLua"), per("nearColour"), per("nearDepth"), per("you"), per("farOver"), per("farLeftOut"), tail, luaCalls, native)
+    local f = math.max(S.frames, 1)
+    GSA1.Log("stages", "before the views %.1f ms, views %.1f ms (G-SA1's part %.1f), after the views %.1f ms; %s; FollowerDraw %.1f ms, PrepareView %.1f ms a frame", S.before * 1000 / f, S.views * 1000 / f,
+        S.part * 1000 / f, S.after * 1000 / f, S.behind and string.format("the render thread and the GPU were %.1f ms behind at the sample", S.behind) or "no sample (gsa1_log_behind off, or under 9 followers)",
+        S.fd * 1000 / f, S.pv * 1000 / f)
+end
+
+-- from cl_hitch.lua at the start of every frame: now, the frame's start (the Think before), its sections, whether it counts (no pause, no menu), the seconds of its sample
+function GSA1.LogStages(now, last, sections, counted, sample)
+    local S = L.dp
+    local pre, post, part0, part1 = S.pre, S.post, S.part0, S.part1
+    S.pre, S.post = nil, nil
+    if not enabled() then
+        S.t0 = nil
+        return
+    end
+    local N = GSA1.NativeMesh
+    if follower_count() == 0 and not (N and N.cv and N.cv:GetBool()) then
+        S.t0 = nil
+        return
+    end
+    if not S.t0 then return draw_path_start(S, now) end
+    if counted and pre and post then
+        S.frames = S.frames + 1
+        S.before = S.before + (pre - last)
+        S.views = S.views + (post - pre - sample)
+        S.after = S.after + (now - post)
+        S.part = S.part + (part1 - part0)
+        S.fd = S.fd + (sections.FollowerDraw or 0)
+        S.pv = S.pv + (sections.PrepareView or 0)
+    end
+    if now - S.t0 >= PERF_EVERY then
+        draw_path_lines(S)
+        draw_path_start(S, now)
+    end
+end
+
+-- the option or the far box changed: what was drawn so far in this window is not what is drawn now, so a new one starts
+function GSA1.LogDrawPathCut()
+    L.dp.t0 = nil
+end
+
 -- a slow frame (from cl_hitch.lua): every frame over gsa1_log_hitch_ms goes into the file, with its sections
 function GSA1.LogHitch(ms, gsa1ms, parts, elsewhere, gc)
     L.hitches = L.hitches + 1

@@ -22,6 +22,7 @@
 -- BOARD | SHADOW batch by gsa1_shadow; GSA1.DrawCharacterView draws exactly the batches one colour view draws (both passes,
 -- the effects / shadow / objects switches, the hidden batches), never in a frame the main view did not draw, counted as its
 -- own kind and never as "main". The sun shadow (its own test, feat_liveshadow_test.lua) is off in these worlds.
+-- fardraw stage 1 (sadc docs/research/fardraw.md 4.3): section 4 - with no GSA1.NativeMesh at all, a far follower and your character draw by exactly the old calls, and GSA1.DrawCounts keeps the log's counts.
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
 -- (GMod's own print goes to the engine console, which lua_host does not have: the mock's print writes through host_write;
 -- before the first mock is loaded host_write is used directly)
@@ -633,6 +634,59 @@ do
             GSA1.DrawFlagText(0x40C0))
     end
     finish(M3)
+end
+
+-- 4 (fardraw stage 1, sadc docs/research/fardraw.md 4.3): with no GSA1.NativeMesh at all (the public build, without the withheld files): a far follower draws by exactly the old calls, your character too, and the
+-- log's counts are kept all the same
+do
+    host_write("4  a far follower with no GSA1.NativeMesh\n")
+    local E4 = world("as_doc")
+    local M4 = E4.M
+    local check4 = M4.check
+    check4(E4.C ~= nil and GSA1.DrawCounts ~= nil, "the world is up; GSA1.DrawCounts: the log's counts exist in every build")
+    if E4.C and GSA1.DrawCounts then
+        GSA1.NativeMesh = nil
+        local MAIN = { { name = "main", viewid = V_MAIN } }
+        local SSAO_VIEW = { { name = "ssao", viewid = V_SSAO, rt = "_rt_ResolvedFullFrameDepth", flags = F_RENDER + F_SSAO, depth = true }, { name = "main", viewid = V_MAIN } }
+        local C = E4.C
+        local DC = GSA1.DrawCounts
+        -- your character: dynamic meshes through Lua, the depth pass too
+        for k in pairs(DC) do DC[k] = 0 end
+        local D = E4.frame(SSAO_VIEW)
+        check4(D.ssao and #D.ssao.batches == 2 and D.ssao.imesh == 0 and DC.depthLua == 2 and DC.depthNative == 0, "your character's depth view: through Lua (%d batches, %d counted by Lua)", #D.ssao.batches, DC.depthLua)
+        check4(DC.lua == 4 and DC.native == 0 and DC.you == 6, "its colour pass: through Lua; counted (%d, %d, %d)", DC.lua, DC.native, DC.you)
+        -- a far follower (its render entity and table as cl_follower.lua makes them): the old calls, per frame
+        local id = gsa1.Create(0, Vector(900, 132, -143), 0, nil, 0)
+        local F = { id = id, kind = 0, title = "far", uid = 1, follower = true, lod = 2, interp = false, renderGen = 1, batchGen = 0, batches = {}, static = {}, matsDirty = true,
+                    drawPos = Vector(900, 132, -143), drawYaw = 0, info = C.info, state = {} }
+        gsa1.Batches(id, F.batches)
+        F.triangles = F.batches.triangles
+        local fe = ents.CreateClientside("gsa1_render")
+        fe.char = F
+        E4.ent = fe
+        C = F
+        local prepares = 0
+        local prep1 = gsa1.PrepareView
+        gsa1.PrepareView = function(...)
+            prepares = prepares + 1
+            return prep1(...)
+        end
+        E4.frame(MAIN)
+        for k in pairs(DC) do DC[k] = 0 end
+        prepares = 0
+        local F1 = E4.frame(MAIN)
+        check4(F1.main.start3d == 2 and F1.main.imesh == 2 and #F1.main.batches == 0, "no new picture: 2 cameras, the 2 static meshes drawn again, nothing streamed (%d, %d, %d)", F1.main.start3d, F1.main.imesh, #F1.main.batches)
+        check4(prepares == 1, "PrepareView every frame (%d)", prepares)
+        check4(DC.farStatic == 2 and DC.farNative == 0 and DC.farLua == 0 and DC.farDrawn == 1 and DC.farPictures == 0 and DC.rebuilt == 0, "the counts: 2 far static, 1 far follower drawn, no picture, nothing rebuilt")
+        F.renderGen = F.renderGen + 1
+        local F2 = E4.frame(MAIN)
+        check4(F2.main.start3d == 2 and F2.main.imesh == 2 and #F2.main.batches == 2 and DC.rebuilt == 2 and DC.farPictures == 1, "a new picture: its static meshes built again (%d rebuilt)", DC.rebuilt)
+        check4(F.farPass1 == 0, "(its blended pass has nothing to draw here, C.farPass1 says so, and it still runs, as before)")
+        local D2 = E4.frame(SSAO_VIEW)
+        check4(#D2.ssao.batches == 0 and D2.ssao.imesh == 0 and D2.ssao.start3d == 0, "not in the depth view")
+        gsa1.PrepareView = prep1
+    end
+    finish(M4)
 end
 
 print(string.format("\n%d checks, %d failed", TOTAL, FAILED))
