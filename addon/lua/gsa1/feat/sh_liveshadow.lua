@@ -8,6 +8,8 @@
 --   gsa1_sunshadow_fp    0  also in first person (you see your own shadow on the ground)
 --   gsa1_sunshadow_dark  0  its darkness in percent (0 = the map's own shadow colour: shadow_control's "color")
 --   gsa1_sunshadow_rate  0  its picture's rate a second; 0 = every frame, so it moves as smoothly as the character (0.9.5b)
+--   gsa1_sunshadow_followers 3  how many followers have one too: the nearest in full detail, not held; 0 = none, 8 at most (0.9.9a; the
+--                               owner's note: "Followers don't have sun shadows")
 GSA1 = GSA1 or {}
 GSA1.SunShadow = GSA1.SunShadow or {}
 local S = GSA1.SunShadow
@@ -22,3 +24,5 @@ S.cv.dark = GSA1.ConVar("gsa1_sunshadow_dark", 0, "The sun shadow's darkness in 
     .. "1-100 = this darkness instead", 0, 100)
 S.cv.rate = GSA1.ConVar("gsa1_sunshadow_rate", 0, "How many times a second the sun shadow's picture is made: 0 = every "
     .. "frame, so it moves as smoothly as the character; 10-60 = fewer, a little cheaper", 0, 60)
+S.cv.followers = GSA1.ConVar("gsa1_sunshadow_followers", 3, "How many followers have a sun shadow too: the nearest ones drawn in full "
+    .. "detail; 0 = none. Each one costs a picture and traces of the ground every frame, so the others have none", 0, 8)

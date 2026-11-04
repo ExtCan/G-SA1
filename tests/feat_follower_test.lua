@@ -384,6 +384,19 @@ function G.FollowerInfo(id, out)
     out.speed_factor = 1
     return out
 end
+-- round 0.9.9a (sadc build/research/r099a/stop/diagnosis.md): as src/module/bind_follower.cpp checks it
+function G.FollowerStand(id, on)
+    fcall("FollowerStand", id, on)
+    if type(id) ~= "number" or type(on) ~= "boolean" then
+        FM.bad[#FM.bad + 1] = "FollowerStand arguments"
+        return nil, "FollowerStand(id, on)", "bad_argument"
+    end
+    if not FM.chars[id] then return nil, "this character is not a follower", "bad_argument" end
+    if FM.stand_refuse then return nil, FM.stand_refuse, "unsupported" end
+    FM.stand = FM.stand or {}
+    FM.stand[id] = on
+    return true
+end
 -- round 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.5): the two calls, as src/module/bind_follower.cpp checks them
 function G.FollowerSpeed(id, m)
     fcall("FollowerSpeed", id, m)
@@ -694,6 +707,7 @@ do
         gsa1_follower_draw_dist = { "4800", 500, 12000 }, gsa1_follower_other_views = { "0", 0, 1 }, gsa1_follower_threads = { "0", 0, 16 },
         gsa1_follower_call_key = { "16", 0, 511 }, gsa1_follower_call_pad = { "64", 0, 0x30000 },
         gsa1_follower_speed = { "1", 1, 4 }, gsa1_follower_spacing = { "64", 0, 160 }, gsa1_follower_emotes = { "1", 0, 1 },
+        gsa1_follower_fix_stand = { "1", 0, 1 },
     }
     local bad = {}
     for name, w in pairs(WANT) do
@@ -757,7 +771,8 @@ do
     local alltext = table.concat(texts, " ")
     check(bound.gsa1_follower_speed == "Speed when catching up (1 = the game's own, 2 = up to twice its speed)" and
         bound.gsa1_follower_spacing == "Room between followers (0 = the game's own: they can stand inside each other)" and
-        bound.gsa1_follower_emotes == "Followers play the same slot of their own wheel when you play one from the emote wheel",
+        bound.gsa1_follower_emotes == "Followers play the same slot of their own wheel when you play one from the emote wheel" and
+        bound.gsa1_follower_fix_stand == "Followers that stop go to their stand and idle",
         "the three rows of 0.9.9 on the page, with their words")
     check(string.find(alltext, "Sonic 1.2, Knuckles 1.3, Tails 1.5, E-102 2.5, Big 3.5, Amy 4", 1, true) ~= nil, "the speed row's help names each kind's value")
     check(string.find(alltext, "Dr. Eggman, Tikal and ? have no wheel: use the button Call them back to me, or gsa1_follower_call", 1, true) ~= nil,
@@ -2312,12 +2327,45 @@ do
             end
             if n["function"] < 14 then wrong[#wrong + 1] = "too few functions" end
             if G.FollowerSpeed == nil or G.FollowerSpot == nil or G.FOLLOWER.SPEED_MAX ~= 8 then wrong[#wrong + 1] = "0.9.9's calls" end
+            if G.FollowerStand == nil then wrong[#wrong + 1] = "0.9.9a's call" end
             -- the words the egg's and the page's tests take from the mock are the module's
             if not seen["reason.not enough free memory"] then wrong[#wrong + 1] = "the memory guard's words" end
         end
         check(#wrong == 0, "this test's mock module matches build/x86_64-windows/follower_api.txt (%d functions, %d constants, %d fields)%s",
             n["function"], n.const, n.field, #wrong > 0 and (": " .. table.concat(wrong, "; ")) or "")
     end
+end
+
+-- 16a. round 0.9.9a: a stopped follower goes to its stand and idle (N7, sadc build/research/r099a/stop/diagnosis.md): the default is on, the option reaches every follower at once --------------------
+do
+    reset()
+    me("sonic")
+    check(GSA1.CONVARS.gsa1_follower_fix_stand ~= nil and Fo.cv.fix_stand:GetBool() == true, "gsa1_follower_fix_stand: on by default")
+    fclear()
+    local F1 = spawn("sonic")
+    local st = fcalls("FollowerStand", F1.id)
+    check(#st == 1 and st[1][3] == true, "gsa1.FollowerStand(id, true) at creation, before its first tick (%d calls)", #st)
+    local F2 = spawn("tails")
+    set("gsa1_follower_fix_stand", 0)
+    check(FM.stand[F1.id] == false and FM.stand[F2.id] == false, "off: every follower gets it at once: the game's own")
+    fclear()
+    local NF = Fo.Recreate(F2, "a test")
+    st = NF and fcalls("FollowerStand", NF.id) or {}
+    check(NF ~= nil and #st == 1 and st[1][3] == false, "... and a follower made again gets the option as it is")
+    set("gsa1_follower_fix_stand", 1)
+    check(FM.stand[F1.id] == true and (NF == nil or FM.stand[NF.id] == true), "on again: every follower gets it at once")
+    -- a module without the call: nothing breaks
+    local fs0 = G.FollowerStand
+    G.FollowerStand = nil
+    check(Fo.ApplyStand(F1) == false, "a module without gsa1.FollowerStand: no call, no error")
+    G.FollowerStand = fs0
+    FM.stand_refuse = "no"
+    Fo.refusedNotes = {}
+    check(Fo.ApplyStand(F1) == false and Fo.refusedNotes["its stand"] == true, "a refusal is noted once, nothing raises")
+    FM.stand_refuse = nil
+    Fo.refusedNotes = {}
+    Fo.Remove(F1, "removed")
+    if NF then Fo.Remove(NF, "removed") end
 end
 
 -- 16b. round 0.9.9: keeping up and standing apart (gsa1_099_plan.md 4.1 B3, B4, 5.9; follow099.md 6.3, 9) ------------------------------------------

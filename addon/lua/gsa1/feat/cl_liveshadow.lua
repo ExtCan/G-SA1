@@ -25,7 +25,7 @@
 --     the character's height) into a 256 x 256 render target (its own depth, cl_textures.lua's probed format), white on
 --     black: one flat white UnlitGeneric for every batch drawn (colour modulation 1, fog off, the tone-mapping scale 1, all
 --     restored), only the opaque body and board batches (no effects, no game objects, no blob shadow); then
---     render.BlurRenderTarget once. The first picture shows from the frame after it, so the picture on screen is 1 frame
+--     render.BlurRenderTarget once, before the target is popped. The first picture shows from the frame after it, so the picture on screen is 1 frame
 --     old (older with gsa1_sunshadow_rate above 0). Only its pose lags, not its place: see below.
 --   * THE RECEIVERS: a 9 x 9 grid over the silhouette's footprint, each point traced along the light (util.TraceLine,
 --     MASK_SOLID: props count; the local player filtered) at most the light's distance past the character's feet; the hit
@@ -65,6 +65,13 @@
 --     pass - came after a render target, a clear, an orthographic cam.Start and a blur, and in a frame without one it did
 --     not: about 30 times a second. cam.Start3D takes what it leaves out from the last render operation (wiki), and
 --     cl_render.lua's camera-relative draw of the blended batches passes only an eye and angles.
+--   * WHY THE BLUR IS INSIDE THE PAIR (0.9.9a; the owner: "screenshots are completely black", then with the sun shadow off: "The sun
+--     shadows were the cause"; every .tga of theirs is black with it on, normal with it off): 0.9.5b to 0.9.9 blurred after
+--     render.PopRenderTarget. render.BlurRenderTarget is Lua, garrysmod/lua/includes/extensions/client/render.lua:84-103, and it ends with
+--     render.SetRenderTarget(rt): this picture's target stayed bound at every frame's end (halo.lua:102-105 sets the scene's target again
+--     right after it; bloom.lua:38-45 has it inside a push and a pop, as here). So the pop comes after the blur and is the picture's last
+--     target call: it restores the target and the viewport whatever the blur left, also when the blur fails. That a screenshot reads what
+--     is bound at the frame's end, so that this is the exact step, is UNVERIFIED here: only a screenshot in the game can show it.
 --   * NOT DRAWN, WHY: PostRender looks at every frame (no garbage: constant strings); a frame without quads has a reason
 --     (S.WHY) and one that lasts S.WHY_AFTER (5 s) goes into the session log, "sun shadow: not drawn for 5 s: <reason>", at
 --     most once per reason per map ("no character" only on the page); GSA1.SunShadowLine shows it from S.WHY_SHOW (1 s).
@@ -74,7 +81,25 @@
 --     after its first picture). An error: one log line, the sun shadow stops for this session (the page says so).
 --   * Cost: the hitch section "SunShadow" and the perf line's "sun shadow N ms per frame" (cl_log.lua), both hooks' time;
 --     S.stats.
--- Q menu > Options > G-SA1 > Rendering: the three switches and a status line (GSA1.SunShadowLine).
+--   * THE FOLLOWERS (0.9.9a; the owner's note on 0.9.9: "Followers don't have sun shadows"; the owner's word on the method above: "The
+--     shadows work perfectly"): the same method, nothing of your character's shadow changed. gsa1_sunshadow_followers (default 3, 0..8)
+--     says how many: the nearest of cl_follower.lua's list by distance (Fo.order, 10 times a second, never a held one) that are in full
+--     detail (level 1): the far levels and a held one have none, at once, and the place goes to the next one within S.CHOOSE_EVERY. One
+--     that fell behind keeps its place until another is clearly nearer (S.CHOOSE_NEARER), so two about as near do not swap to and fro.
+--     Each place has a target of its own from a pool that only grows (a target is made when its place first draws), not cells of one
+--     target: the same calls as your character's, which the owner has seen working, no texture coordinates running into a neighbour
+--     (SADC/build/research/r099a/misc/diagnosis.md section 1). Its picture is S.FOLLOWER_RT 128 x 128 with NO BLUR, on purpose: the
+--     texture's own filter over the larger texel softens its edges, a little less than your blur does. render.BlurRenderTarget sets the
+--     $basetexture of one shared material (render.lua:86) and the draws that read it may run later on the render thread when
+--     mat_queue_mode -1 means the threaded queue (UNVERIFIED): a second target's blur in a frame could make every blur of that frame read
+--     the last target, and your character's shadow would show a follower's pose. What is shared: the light,
+--     its axes, the view's table, the flat white, one tone-mapping scale around all their quads. Cheaper than yours in the part the
+--     ground costs: S.FOLLOWER_GRID 7 x 7 (the ledge rule scaled with the cell, so the same slopes and the same lowest sun count); at most
+--     S.PICTURES_PER_FRAME pictures a frame, by turns above that, so 8 followers get one every other frame; gsa1_sunshadow_rate holds
+--     for them too. First person is about your character (GSA1.FirstPersonFor): a follower stays whole there, and so does its shadow. Their
+--     time is the hitch section "FollowerShadow" (the perf line's "sun shadow" stays yours), the page's line has it too; an error in their
+--     part stops only them.
+-- Q menu > Options > G-SA1 > Rendering: the switches, the followers' slider and a status line (GSA1.SunShadowLine).
 GSA1 = GSA1 or {}
 local S = GSA1.SunShadow
 if not (S and S.cv and S.cv.on) then error("gsa1/feat/sh_liveshadow.lua did not load: the sun shadow needs it") end
@@ -300,7 +325,8 @@ local function step_light()
         return
     end
     S.light, S.lightMap, S.job = L, map, nil
-    log("sun shadow: %s; pictures: %s", L.text, cv.rate:GetFloat() > 0 and cv.rate:GetString() .. " a second" or "every frame")
+    log("sun shadow: %s; pictures: %s; followers with one: %s", L.text, cv.rate:GetFloat() > 0 and cv.rate:GetString() .. " a second" or
+        "every frame", cv.followers:GetString())
 end
 S.StepLight = step_light
 
@@ -320,42 +346,55 @@ local VIEW = { kind = "sunshadow", hitch = false, opaque = true, x = 0, y = 0, w
                zfar = 4 * S.BOX_MIN, filter = silhouette_batch, ortho = ORTHO, eye = Vector(), ang = Angle() }
 S.view = VIEW
 local FWD, RIGHT, UP = Vector(), Vector(), Vector()
-local N = S.GRID
-local NN = N * N
--- wx, wy, wz: the hit points in the world (lifted towards the light); u, v, fade: their texture coordinates and fade of this
--- frame; depth: along the light below the root at the grid's time (only the ledge rule's differences use it)
-local G = { hit = {}, wx = {}, wy = {}, wz = {}, fade = {}, depth = {}, u = {}, v = {}, cells = {}, ncells = 0, box = 48 }
-S.grid = G
-for k = 1, NN do
-    G.hit[k], G.wx[k], G.wy[k], G.wz[k], G.fade[k], G.depth[k], G.u[k], G.v[k] = false, 0, 0, 0, 0, 0, 0, 0
+S.stats = { refreshes = 0, refreshMs = 0, traces = 0, frames = 0, frameMs = 0 }
+-- one shadow's grid of n x n points. wx, wy, wz: the hit points in the world (lifted towards the light); u, v, fade: their texture
+-- coordinates and fade of this frame; depth: along the light below the root at the grid's time (only the ledge rule's differences
+-- use it); stats: whose traces these are
+local function new_grid(n, stats)
+    local g = { n = n, stats = stats, hit = {}, wx = {}, wy = {}, wz = {}, fade = {}, depth = {}, u = {}, v = {}, cells = {}, ncells = 0,
+                box = 48 }
+    for k = 1, n * n do
+        g.hit[k], g.wx[k], g.wy[k], g.wz[k], g.fade[k], g.depth[k], g.u[k], g.v[k] = false, 0, 0, 0, 0, 0, 0, 0
+    end
+    for c = 1, (n - 1) * (n - 1) do g.cells[c] = 0 end
+    return g
 end
+local G = new_grid(S.GRID, S.stats)
+S.grid = G
 S.basis = { fwd = FWD, right = RIGHT, up = UP }
-for c = 1, (N - 1) * (N - 1) do G.cells[c] = 0 end
 local TR = { start = Vector(), endpos = Vector(), mask = MASK, output = {} }
 local POS = Vector()
 local TONE_ONE = Vector(1, 1, 1)
-S.stats = { refreshes = 0, refreshMs = 0, traces = 0, frames = 0, frameMs = 0 }
 
--- the render target and the two materials (made at the first silhouette)
-local function targets()
-    if S.rt then return S.rt end
+-- one shadow's render target and its receivers' material: the silhouette as a decal (polygon offset), no depth writes, no fog (it
+-- would pull the darkening towards the fog colour: the blob's mask material, cl_textures.lua)
+local function new_target(prefix, size)
     local Tx = GSA1.Tex
     local fmt = Tx and Tx.format or { name = "BGRA8888", fmt = IMAGE_FORMAT_BGRA8888 or 12 }
-    S.rt = GetRenderTargetEx("gsa1_sunshadow_" .. fmt.name, S.RT_SIZE, S.RT_SIZE, RT_SIZE_LITERAL or 5,
+    local rt = GetRenderTargetEx(prefix .. fmt.name, size, size, RT_SIZE_LITERAL or 5,
         MATERIAL_RT_DEPTH_SEPARATE or 1, bit.bor(TEXTUREFLAGS_CLAMPS or 4, TEXTUREFLAGS_CLAMPT or 8), 0, fmt.fmt)
+    return rt, CreateMaterial(prefix .. fmt.name, "UnlitGeneric", { ["$basetexture"] = rt:GetName(),
+        ["$vertexcolor"] = 1, ["$translucent"] = 1, ["$nofog"] = 1, ["$decal"] = 1, ["$nocull"] = 1 })
+end
+
+-- your character's render target and the two materials (made at the first silhouette)
+local function targets()
+    if S.rt then return S.rt end
+    S.rt, S.recv = new_target("gsa1_sunshadow_", S.RT_SIZE)
     -- the flat white of the silhouette (opaque: the view depth Source writes into the alpha of opaque draws stays out)
     S.white = CreateMaterial("gsa1_sunshadow_white", "UnlitGeneric", { ["$basetexture"] = "vgui/white",
         ["$nocull"] = 1, ["$ignorez"] = 1 })
-    -- the receivers: the silhouette as a decal (polygon offset), no depth writes, no fog (it would pull the darkening
-    -- towards the fog colour: the blob's mask material, cl_textures.lua)
-    S.recv = CreateMaterial("gsa1_sunshadow_" .. fmt.name, "UnlitGeneric", { ["$basetexture"] = S.rt:GetName(),
-        ["$vertexcolor"] = 1, ["$translucent"] = 1, ["$nofog"] = 1, ["$decal"] = 1, ["$nocull"] = 1 })
     VIEW.material = S.white
     return S.rt
 end
 
--- the 9 x 9 grid along the light from the box's light side, at most the light's distance past the feet
-local function trace_grid(C, L, cx, cy, cz, box)
+-- the grid along the light from the box's light side, at most the light's distance past the feet. Its ledge rule goes with the cell:
+-- S.STEP_DEPTH is for S.GRID's cell, so a coarser grid keeps the same slopes and the same lowest sun
+local function trace_grid(g, C, L, cx, cy, cz, box)
+    local N = g.n
+    local NN = N * N
+    local step = S.STEP_DEPTH * (S.GRID - 1) / (N - 1)
+    local stats = g.stats
     local p = C.drawPos
     local px, py, pz = p.x, p.y, p.z
     local dx, dy, dz = L.dx, L.dy, L.dz
@@ -364,7 +403,7 @@ local function trace_grid(C, L, cx, cy, cz, box)
     local dist = L.distance
     TR.filter = LocalPlayer()
     local st, en = TR.start, TR.endpos
-    local hit, wx, wy, wz, dep = G.hit, G.wx, G.wy, G.wz, G.depth
+    local hit, wx, wy, wz, dep = g.hit, g.wx, g.wy, g.wz, g.depth
     local lift = S.LIFT
     local any = false
     for k = 1, NN do
@@ -381,7 +420,7 @@ local function trace_grid(C, L, cx, cy, cz, box)
             en:SetUnpacked(gx + dx * len, gy + dy * len, gz + dz * len)
             local r = util.TraceLine(TR)
             if r == nil then r = TR.output end
-            S.stats.traces = S.stats.traces + 1
+            stats.traces = stats.traces + 1
             if r and r.Hit and not r.StartSolid and r.HitPos then
                 local hp = r.HitPos
                 local hx, hy, hz = hp.x - px, hp.y - py, hp.z - pz
@@ -401,16 +440,16 @@ local function trace_grid(C, L, cx, cy, cz, box)
                 local k = j * N + i + 1
                 if hit[k] and hit[k + 1] and hit[k + N] and hit[k + N + 1] then
                     local a, b, c, d = dep[k], dep[k + 1], dep[k + N], dep[k + N + 1]
-                    if math.max(a, b, c, d) - math.min(a, b, c, d) <= S.STEP_DEPTH then
+                    if math.max(a, b, c, d) - math.min(a, b, c, d) <= step then
                         nc = nc + 1
-                        G.cells[nc] = k
+                        g.cells[nc] = k
                     end
                 end
             end
         end
     end
-    G.ncells = nc
-    G.px, G.py, G.pz, G.at, G.C, G.box = px, py, pz, SysTime(), C, box
+    g.ncells = nc
+    g.px, g.py, g.pz, g.at, g.C, g.box = px, py, pz, SysTime(), C, box
 end
 
 -- the silhouette box of a character this frame: its half size, its centre (the drawn root, up by the character's centre)
@@ -420,10 +459,10 @@ local function box_of(C)
     return math.max(S.BOX_MIN, 0.75 * (tonumber(info.height) or 40) + 16), p.x, p.y, p.z + (tonumber(info.center) or 20)
 end
 
--- one silhouette, in PostRender - never inside a view (the top of this file): true when it was made. Also the light's axes
--- that the grid and the texture coordinates use
-local function refresh(C, L, now)
-    S.refreshAt, S.refreshC = now, C
+-- one silhouette, in PostRender - never inside a view (the top of this file): true when it was made. Also the light's axes that the
+-- grid and the texture coordinates use. s: a follower's place (the followers' part below), else your character's
+local function refresh(C, L, now, s)
+    if s then s.refreshAt = now else S.refreshAt, S.refreshC = now, C end
     local dx, dy, dz = L.dx, L.dy, L.dz
     local ang = VIEW.ang
     ang.p, ang.y, ang.r = math.deg(math.atan2(-dz, math.sqrt(dx * dx + dy * dy))), math.deg(math.atan2(dy, dx)), 0
@@ -432,7 +471,9 @@ local function refresh(C, L, now)
     ORTHO.left, ORTHO.right, ORTHO.top, ORTHO.bottom = -box, box, -box, box
     VIEW.eye:SetUnpacked(cx - dx * 2 * box, cy - dy * 2 * box, cz - dz * 2 * box)
     VIEW.znear, VIEW.zfar = 1, 4 * box
-    local rt = targets()
+    local size = s and S.FOLLOWER_RT or S.RT_SIZE
+    VIEW.w, VIEW.h = size, size
+    local rt = s and s.rt or targets()
     render.PushRenderTarget(rt)
     render.Clear(0, 0, 0, 255, true, true)
     local fog = render.GetFogMode and render.GetFogMode()
@@ -448,60 +489,70 @@ local function refresh(C, L, now)
     local ok, drawn, why = pcall(GSA1.DrawCharacterView, C, VIEW)
     if mr then render.SetColorModulation(mr, mg, mb) end
     if fog and render.FogMode then render.FogMode(fog) end
-    render.PopRenderTarget()
-    if ok and drawn and render.BlurRenderTarget then render.BlurRenderTarget(rt, S.BLUR, S.BLUR, 1) end
+    -- (0.9.9a: inside the pair, and the pop last, whatever the blur does: WHY THE BLUR IS INSIDE THE PAIR at the top of this file. Yours
+    -- only: a follower's picture has none, THE FOLLOWERS there say why)
+    local blurred, blurErr = true, nil
+    if ok and drawn and not s and render.BlurRenderTarget then
+        blurred, blurErr = pcall(render.BlurRenderTarget, rt, S.BLUR, S.BLUR, 1)
+    end
     if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(tone) end
+    render.PopRenderTarget()
     if not ok then error(drawn, 0) end
+    if not blurred then error(blurErr, 0) end
     if not drawn then return false, why end
-    S.picture, S.pictureC = true, C
-    S.stats.refreshes = S.stats.refreshes + 1
+    if s then
+        s.picture = true
+        s.stats.pictures = s.stats.pictures + 1
+    else
+        S.picture, S.pictureC = true, C
+        S.stats.refreshes = S.stats.refreshes + 1
+    end
     return true
 end
 
-local function vertex(k, cr, cg, cb)
-    local f = G.fade[k]
-    POS:SetUnpacked(G.wx[k], G.wy[k], G.wz[k])
+local function vertex(g, k, cr, cg, cb)
+    local f = g.fade[k]
+    POS:SetUnpacked(g.wx[k], g.wy[k], g.wz[k])
     mesh.Position(POS)
-    mesh.TexCoord(0, G.u[k], G.v[k])
+    mesh.TexCoord(0, g.u[k], g.v[k])
     mesh.Color(cr * f, cg * f, cb * f, 255)
     mesh.AdvanceVertex()
 end
 
 -- the cells' two triangles each (in pcall: mesh.End must follow mesh.Begin)
-local function emit_cells(nc, cr, cg, cb)
-    local cells = G.cells
+local function emit_cells(g, nc, cr, cg, cb)
+    local cells, N = g.cells, g.n
     for c = 1, nc do
         local k = cells[c]
-        vertex(k, cr, cg, cb)
-        vertex(k + N, cr, cg, cb)
-        vertex(k + 1, cr, cg, cb)
-        vertex(k + 1, cr, cg, cb)
-        vertex(k + N, cr, cg, cb)
-        vertex(k + N + 1, cr, cg, cb)
+        vertex(g, k, cr, cg, cb)
+        vertex(g, k + N, cr, cg, cb)
+        vertex(g, k + 1, cr, cg, cb)
+        vertex(g, k + 1, cr, cg, cb)
+        vertex(g, k + N, cr, cg, cb)
+        vertex(g, k + N + 1, cr, cg, cb)
     end
 end
 
--- the receiver quads, the picture placed at the drawn root of THIS frame: first the grid again when due (the top of this file),
--- then each hit point's texture coordinates, its place in the light's view around the character's centre now (the picture's
--- orientation: u along the view's right, v down its up, as in a perspective view), and its fade, its depth along the light
--- below the feet now (from the hit point: the lift taken off). The picture itself was finished in an earlier frame's PostRender
-local function draw_receivers(C, L, fn, now)
-    if not S.picture or S.pictureC ~= C then return end
+-- a shadow's grid, placed at the drawn root of THIS frame: first the grid again when due (the top of this file), then each hit point's
+-- texture coordinates, its place in the light's view around the character's centre now (the picture's orientation: u along the view's
+-- right, v down its up, as in a perspective view), and its fade, its depth along the light below the feet now (from the hit point: the
+-- lift taken off). The cells to draw. The picture itself was finished in an earlier frame's PostRender
+local function place_grid(g, C, L, now)
     local box, cx, cy, cz = box_of(C)
     local p = C.drawPos
     local px, py, pz = p.x, p.y, p.z
-    if G.C ~= C or not G.at or now - G.at >= S.RETRACE_EVERY - 1e-6 or
-       math.abs(px - G.px) + math.abs(py - G.py) + math.abs(pz - G.pz) >= S.RETRACE_MOVE then
-        trace_grid(C, L, cx, cy, cz, box)
+    if g.C ~= C or not g.at or now - g.at >= S.RETRACE_EVERY - 1e-6 or
+       math.abs(px - g.px) + math.abs(py - g.py) + math.abs(pz - g.pz) >= S.RETRACE_MOVE then
+        trace_grid(g, C, L, cx, cy, cz, box)
     end
-    local nc = G.ncells
-    if nc == 0 then return end
+    local nc = g.ncells
+    if nc == 0 then return 0 end
     local rx, ry, rz, ux, uy, uz = RIGHT.x, RIGHT.y, RIGHT.z, UP.x, UP.y, UP.z
     local dx, dy, dz = L.dx, L.dy, L.dz
     local k2 = 0.5 / box
     local over, lift = 1 / math.max(L.distance, 1), S.LIFT
-    local hit, wx, wy, wz, U, V, fade = G.hit, G.wx, G.wy, G.wz, G.u, G.v, G.fade
-    for k = 1, NN do
+    local hit, wx, wy, wz, U, V, fade = g.hit, g.wx, g.wy, g.wz, g.u, g.v, g.fade
+    for k = 1, g.n * g.n do
         if hit[k] then
             local x, y, z = wx[k], wy[k], wz[k]
             local ex, ey, ez = x - cx, y - cy, z - cz
@@ -510,23 +561,40 @@ local function draw_receivers(C, L, fn, now)
             fade[k] = 1 - math.min(math.max(((x - px) * dx + (y - py) * dy + (z - pz) * dz + lift) * over, 0), 1)
         end
     end
+    return nc
+end
+
+-- the receivers' colour: the darkness option, else the map's shadow colour
+local function quad_colour(L)
     local dark = cv.dark and cv.dark:GetFloat() or 0
-    local cr, cg, cb
     if dark > 0 then
-        cr = 255 * math.min(dark, 100) / 100
-        cg, cb = cr, cr
-    else
-        local col = L.color
-        cr, cg, cb = 255 - (col[1] or 128), 255 - (col[2] or 128), 255 - (col[3] or 128)
+        local c = 255 * math.min(dark, 100) / 100
+        return c, c, c
     end
-    local tone = render.GetToneMappingScaleLinear and render.GetToneMappingScaleLinear()
-    if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(TONE_ONE) end
-    render.SetMaterial(S.recv)
+    local col = L.color
+    return 255 - (col[1] or 128), 255 - (col[2] or 128), 255 - (col[3] or 128)
+end
+
+-- one shadow's quads
+local function draw_cells(g, recv, nc, cr, cg, cb)
+    render.SetMaterial(recv)
     render.OverrideBlend(true, B_ZERO, B_ONE_MINUS_SRC_COLOR, B_FUNC_ADD)
     mesh.Begin(MATERIAL_TRIANGLES, 2 * nc)
-    local ok, err = pcall(emit_cells, nc, cr, cg, cb)
+    local ok, err = pcall(emit_cells, g, nc, cr, cg, cb)
     mesh.End()
     render.OverrideBlend(false)
+    return ok, err
+end
+
+-- your character's receiver quads
+local function draw_receivers(C, L, fn, now)
+    if not S.picture or S.pictureC ~= C then return end
+    local nc = place_grid(G, C, L, now)
+    if nc == 0 then return end
+    local cr, cg, cb = quad_colour(L)
+    local tone = render.GetToneMappingScaleLinear and render.GetToneMappingScaleLinear()
+    if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(TONE_ONE) end
+    local ok, err = draw_cells(G, S.recv, nc, cr, cg, cb)
     if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(tone) end
     if not ok then error(err, 0) end
     S.quadsFrame = fn
@@ -535,6 +603,176 @@ end
 local function stop(err)
     S.broken = tostring(err)
     log("sun shadow: stopped for this session: %s", S.broken)
+end
+
+-- ---- the followers' shadows (0.9.9a; the top of this file) ----------------------------------------------------------------
+S.FOLLOWER_GRID = 7                 -- 49 traces and 36 cells for your character's 81 and 64
+S.FOLLOWER_RT = 128                 -- its picture's size, no blur (your character's: S.RT_SIZE 256, blurred)
+S.PICTURES_PER_FRAME = 4            -- at most so many followers' pictures a frame: 8 followers each get one every other frame
+S.CHOOSE_EVERY = 0.1                -- s: who has one, as often as cl_follower.lua sorts them
+S.CHOOSE_NEARER = 0.81              -- a follower takes the place of one with a shadow when its squared distance is below this share
+                                    -- of that one's (10 % nearer): two about as near do not swap to and fro
+S.FOLLOWERS_MAX = 8
+local FS = { slots = {}, stats = { pictures = 0, traces = 0, frames = 0, ms = 0 }, nextChoose = 0, turn = 1 }
+S.followers = FS
+
+local function fo_can(F)
+    return F.lod == 1 and not F.held and not F.removed and F.batches ~= nil and F.drawPos ~= nil
+end
+
+local function fo_release(s)
+    s.F, s.picture, s.seen, s.refreshAt = nil, false, nil, nil
+    s.g.C, s.g.at, s.g.ncells = nil, nil, 0
+end
+
+local function fo_stop(err)
+    FS.broken = tostring(err)
+    log("sun shadow: the followers' sun shadows stopped for this session: %s", FS.broken)
+    for _, s in ipairs(FS.slots) do fo_release(s) end
+end
+
+-- the first place without a follower, made when it is needed, within the slider
+local function fo_free(want)
+    local slots = FS.slots
+    for i = 1, want do
+        local s = slots[i]
+        if not s then
+            s = { g = new_grid(S.FOLLOWER_GRID, FS.stats), stats = FS.stats, picture = false }
+            slots[i] = s
+        end
+        if not s.F then return s end
+    end
+    return nil
+end
+
+local function fo_has(F, want)
+    local slots = FS.slots
+    for i = 1, math.min(want, #slots) do
+        if slots[i].F == F then return true end
+    end
+    return false
+end
+
+-- who has one: cl_follower.lua's list by distance (Fo.order: never a held one), the nearest that are in full detail. One that is not
+-- among them any more keeps its place until a clearly nearer one wants it
+local function fo_choose(want)
+    local slots = FS.slots
+    for i = 1, #slots do
+        local s = slots[i]
+        if s.F and (i > want or not fo_can(s.F)) then fo_release(s) end
+    end
+    if want <= 0 then return end
+    local Fo = GSA1.Followers
+    local order = Fo and Fo.order
+    if not order then return end
+    local seen = 0
+    for r = 1, #order do
+        local F = order[r]
+        if fo_can(F) then
+            seen = seen + 1
+            if seen > want then break end
+            if not fo_has(F, want) then
+                local s = fo_free(want)
+                if not s then
+                    local far, fd = nil, -1
+                    for i = 1, want do
+                        local d = slots[i].F.dist2 or 0
+                        if d > fd then far, fd = slots[i], d end
+                    end
+                    if far and (F.dist2 or 0) < fd * S.CHOOSE_NEARER then
+                        fo_release(far)
+                        s = far
+                    end
+                end
+                if s then s.F = F end
+            end
+        end
+    end
+end
+
+-- their quads, in the main view: the same as your character's, one tone-mapping scale around them all (FS.tone: restored by the caller)
+local function fo_quads(L, fn, now)
+    local slots = FS.slots
+    local cr, cg, cb
+    for i = 1, #slots do
+        local s = slots[i]
+        local F = s.F
+        if F and F.viewFrame == fn and fo_can(F) then
+            s.seen = fn
+            if s.picture then
+                local nc = place_grid(s.g, F, L, now)
+                if nc > 0 then
+                    if not cr then
+                        cr, cg, cb = quad_colour(L)
+                        local tone = render.GetToneMappingScaleLinear and render.GetToneMappingScaleLinear()
+                        if tone and render.SetToneMappingScaleLinear then
+                            FS.tone = tone
+                            render.SetToneMappingScaleLinear(TONE_ONE)
+                        end
+                    end
+                    local ok, err = draw_cells(s.g, s.recv, nc, cr, cg, cb)
+                    if not ok then error(err, 0) end
+                end
+            end
+        end
+    end
+end
+
+local function fo_main_view(L, fn)
+    if FS.quadFrame == fn or FS.broken or #FS.slots == 0 then return end
+    FS.quadFrame = fn
+    local t0 = SysTime()
+    local ok, err = pcall(fo_quads, L, fn, t0)
+    if FS.tone then
+        render.SetToneMappingScaleLinear(FS.tone)
+        FS.tone = nil
+    end
+    local dt = SysTime() - t0
+    FS.stats.ms = FS.stats.ms + dt * 1000
+    FS.stats.frames = FS.stats.frames + 1
+    if GSA1.HitchAdd then GSA1.HitchAdd("FollowerShadow", dt) end
+    if not ok then fo_stop(err) end
+end
+
+-- their pictures, at the frame's end: each one the main view took this frame, by turns when there are more than S.PICTURES_PER_FRAME
+local function fo_pictures(L, fn, now)
+    local want = math.max(math.min(cv.followers:GetInt(), S.FOLLOWERS_MAX), 0)
+    if want ~= FS.want or now >= FS.nextChoose or now < (FS.chosenAt or 0) then
+        FS.want, FS.chosenAt, FS.nextChoose = want, now, now + S.CHOOSE_EVERY
+        fo_choose(want)
+    end
+    local slots = FS.slots
+    local n = #slots
+    local rate = cv.rate:GetFloat()
+    local left, last = S.PICTURES_PER_FRAME, nil
+    for k = 0, n - 1 do
+        if left <= 0 then break end
+        local i = (FS.turn + k - 1) % n + 1
+        local s = slots[i]
+        local F = s.F
+        if F and s.seen == fn and F.viewFrame == fn and fo_can(F) and (rate <= 0 or not s.refreshAt or
+           now - s.refreshAt >= 1 / rate - 1e-6 or now < s.refreshAt) then
+            if not s.rt then
+                targets()           -- (the flat white, in the view's table)
+                s.rt, s.recv = new_target("gsa1_sunshadow_f" .. i .. "_", S.FOLLOWER_RT)
+            end
+            refresh(F, L, now, s)
+            left, last = left - 1, i
+        end
+    end
+    if last then FS.turn = last % n + 1 end
+end
+
+local function fo_frame_end(L, fn)
+    if FS.broken then return end
+    if #FS.slots == 0 and cv.followers:GetInt() <= 0 then return end
+    local t0 = SysTime()
+    local ok, err = pcall(fo_pictures, L, fn, t0)
+    local dt = SysTime() - t0
+    FS.stats.ms = FS.stats.ms + dt * 1000
+    -- (no follower has had a place yet: no section)
+    if #FS.slots > 0 and GSA1.HitchAdd then GSA1.HitchAdd("FollowerShadow", dt) end
+    if not ok then fo_stop(err) end
 end
 
 -- a call with isDrawSkybox and not isDraw3DSkybox: the 3D skybox's own view? Never on a map with no sky_camera (there it is
@@ -583,6 +821,8 @@ local function main_view(isDrawingDepth, isDrawSkybox, isDraw3DSkybox)
     elseif now - S.postAt >= S.WHY_AFTER then note_why(WHY.nopost, now) end
     local C = GSA1.Char
     local L = S.light
+    -- (the followers first: what follows is about your character)
+    if L and not L.disabled then fo_main_view(L, fn) end
     if not (C and C.batches and C.drawPos and L) or L.disabled then return end
     if C.viewFrame ~= fn or S.drawnFrame == fn then return end
     if GSA1.FirstPerson and GSA1.FirstPerson() and not cv.fp:GetBool() then return end
@@ -630,6 +870,7 @@ local function post_render()
         end
     end
     note_why(why_not(C, L, fn), t0)
+    if L and not L.disabled then fo_frame_end(L, fn) end
 end
 
 -- first person with gsa1_sunshadow_fp: cl_render.lua's DrawCharacter prepares the frame's batches without drawing them
@@ -646,8 +887,17 @@ function GSA1.SunShadowLine()
     if not L then return "Sun shadow: reading the map's sun ..." end
     local st = S.stats
     local why = S.why and SysTime() - (S.whySince or 0) >= S.WHY_SHOW and S.why or nil
-    return string.format("Sun shadow: %s%s%s", L.text, st.frames > 0 and string.format(" (%.2f ms per frame)",
-        st.frameMs / st.frames) or "", why and ("; not drawn now: " .. why) or "")
+    local fo = ""
+    if FS.broken then
+        fo = "; the followers' shadows stopped for this session (see the session log)"
+    else
+        local n = 0
+        for _, s in ipairs(FS.slots) do if s.F then n = n + 1 end end
+        if n > 0 then fo = string.format("; %d follower%s with one (%.2f ms per frame for all)", n, n == 1 and "" or "s",
+            FS.stats.ms / math.max(FS.stats.frames, 1)) end
+    end
+    return string.format("Sun shadow: %s%s%s%s", L.text, st.frames > 0 and string.format(" (%.2f ms per frame)",
+        st.frameMs / st.frames) or "", why and ("; not drawn now: " .. why) or "", fo)
 end
 
 -- on / off: the hooks exist only while it is on (off costs nothing)
@@ -670,6 +920,8 @@ function S.Apply()
         hook.Remove("PostRender", HOOK)
         if GSA1.Char then GSA1.Char.viewWanted = nil end
         G.ncells, G.at, S.picture = 0, nil, false       -- (on again: the first quads trace a grid at once)
+        for _, s in ipairs(FS.slots) do fo_release(s) end
+        FS.want = nil
         S.why, S.whySince, S.whyDone, S.postAt = nil, nil, false, nil
     end
 end

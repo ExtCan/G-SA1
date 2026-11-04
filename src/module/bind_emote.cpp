@@ -16,7 +16,7 @@
 //        dup_key}} | nil, message, code
 //       the catalogue of a character entry without a world (sa1_emote_count / sa1_emote_get on the loaded disc): kind
 //       0..8, form gsa1.EMOTE.FORM_NORMAL (0) / FORM_SUPER (1: the General form while Super). name: the internal name
-//       ("s_kimepose0"; names are NOT unique: Knuckles' k_panch0 is rows 39 and 54), label: the SA Tools label, class:
+//       ("s_kimepose0"; names are NOT unique: the stand rows), label: the SA Tools label, class:
 //       gsa1.EMOTE.CLASS_*, group: its word ("stand", "idle", "pose", ...), frames, play: "loop" / "once" / "hold", flags:
 //       gsa1.EMOTE.F_*, dup: the list position (1-based) of the first entry with the same drawn object and motion (0:
 //       none), dup_key its key. Eggman / Tikal: {n = 0}. code "not_ready" before the disc is loaded, "bad_argument".
@@ -34,8 +34,8 @@
 //       "bad_argument" (an unknown key: "unknown animation key ...", a flag, an entry not offered), "not_found" (no such
 //       character), "unsupported" (refused now), "limit", "not_ready", "fault"
 //   gsa1.EmoteStop(id [, how]) -> true | nil, message, code
-//       how gsa1.EMOTE.STOP_NOW (default: the gameplay pose from the next pair) / STOP_BLEND (the stand blended in after
-//       the current item; a loop finishes its cycle)
+//       how gsa1.EMOTE.STOP_NOW (default: the gameplay pose from the next pair) / STOP_BLEND (back to the gameplay's
+//       pose at once, by a bridge, also from a loop)
 //   gsa1.EmoteState(id) -> state, key, item, frame | nil
 //       from the character's state after its last tick (sa1_state_ex): state gsa1.EMOTE.STATE_NONE / PLAYING / ENDING /
 //       HOLDING (version 2: HOLD keeps the last frame; frame = nbFrame - 1, key / item the held entry's), key the playing

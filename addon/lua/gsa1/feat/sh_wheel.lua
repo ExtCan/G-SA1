@@ -358,8 +358,8 @@ W.DEFAULTS = {
         d("a5", "m_wait_a1", "Blink"), d("a33", "m_rollfly0", "Surprised"), d("a94", "m_zitabata", "Shock"),
         d("a37", "m_flyup"), d("a43", "m_atack_1") },
     knuckles = { centre = "Happy",
-        d("a40", "k_kimepose1", "Happy"), d("x", "k_taiki1", "Angry talk"), d("x", "k_wait_b1"), d("x", "k_item_fg1"),
-        d("a5", "k_wait_a1", "Blink"), d("a39", "k_panch0"), d("a56", "k_panch2"), d("a30", "k_rollfly0", "Surprised") },
+        d("a39", "k_kimepose0", "Happy"), d("x", "k_taiki1", "Angry talk"), d("x", "k_wait_b1"), d("x", "k_item_fg1"),
+        d("a5", "k_wait_a1", "Blink"), d("a54", "k_panch0"), d("a56", "k_panch2"), d("a30", "k_rollfly0", "Surprised") },
     amy = { centre = "Happy",
         d("a42", "a_kimepose0", "Happy"), d("x", "a_taiki0", "Angry talk"), d("x", "a_kakure0", "Surprised"),
         d("x", "a_mogura1"), d("a5", "a_wait_a1", "Blink"), d("a85", "a_rollat0"), d("a81", "a_attack1"),
@@ -609,16 +609,20 @@ function W.Index(list)
     return list
 end
 
--- the entry a slot plays (review R.9): the stored key while its entry still has the stored internal name; else the first
--- entry with that name that is no duplicate of another (dup 0); nil, "missing" when the name is nowhere. A body without a
--- name (an old line, a hand edit) goes by its key.
+-- round 0.9.9a: names the catalogue gave up, by the entry's new name. Knuckles' row 39 is his level clear pose (the game requests
+-- it where Sonic requests 75 and Tails 54); the SA Tools labels called it k_panch0. A slot saved as "a39 k_panch0" stays on row 39.
+W.OLD_NAMES = { k_kimepose0 = "k_panch0" }
+
+-- the entry a slot plays (review R.9): the stored key while its entry still has the stored internal name (or the name that entry
+-- had, W.OLD_NAMES); else the first entry with that name that is no duplicate of another (dup 0); nil, "missing" when the name
+-- is nowhere. A body without a name (an old line, a hand edit) goes by its key.
 function W.Resolve(list, body, name)
     if not body or body == "-" or body == "stop" then return nil end
     list = W.Index(list)
     if not list then return nil, "no list" end
     local named = name ~= nil and name ~= "" and name ~= "-"
     local e = list.byKey[body]
-    if e and (not named or e.name == name) then return e, "key" end
+    if e and (not named or e.name == name or W.OLD_NAMES[e.name] == name) then return e, "key" end
     if named then
         local first
         for i = 1, tonumber(list.n) or #list do

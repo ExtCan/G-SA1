@@ -591,6 +591,14 @@ do
             string.find(GSA1.ViewsLine(), "sun shadow 1", 1, true) ~= nil, "an orthographic extra view (cam.Start with "
             .. "the ortho box) with a filter and one material for every batch: \"%s\", %d materials all the given one: %s",
             fb, #recf.mats, tostring(onlyFlat))
+        -- 0.9.9a: a follower's sun silhouette goes through the same call and is never your character's view (the 0.9.8 rule, D4)
+        E3.frame(MAIN)
+        C.follower, C.lod = true, 1
+        local fof = view_batches(fv)
+        local foLine = GSA1.ViewsLine()
+        C.follower, C.lod = nil, nil
+        check3(fof ~= "" and string.find(foLine, "sun shadow", 1, true) == nil, "a follower's extra view draws (\"%s\") and is not "
+            .. "counted in your character's views (\"%s\")", fof, foLine)
         -- (e) first person: the board (and the object), never the body; Effects off: the board stays; Shadows off: its
         -- shadow batch goes; gsa1_set_draw 0: the board stays (review R.10)
         local dist = cv.cam_dist:GetString()

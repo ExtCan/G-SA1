@@ -20,7 +20,7 @@
 --   (9) closing on: the character removed, the vgui cursor, the game UI, typing, GSA1.InputBlocked - nothing plays;
 --   (10) pages: empty ones skipped, LB / RB and keys 1-8, "Clear page" survives a reload;
 --   (11) storage: the format of faces_wheel_plan.md 8.1 round trip, the face column and the centre line, a missing name
---        kept and shown, a renumbered row found by name, bad lines counted, the mirror; a39 / a54 (both k_panch0) and
+--        kept and shown, a renumbered row found by name, bad lines counted, the mirror; a39 (round 0.9.9a: the old name k_panch0 of k_kimepose0, W.OLD_NAMES) / a54 and
 --        a75 / a139 (both s_kimepose0) keep their own keys after a reload (review R.9);
 --   (12) the page lists the module's rows by internal name and number, the game's variants folded by dup (two motions with
 --        one name are two rows), the find box and the group filter, double-click fills the selected slot, another entry's
@@ -164,10 +164,10 @@ local LISTS = {
                   { "a54", "m_kimepose0", 65, "once", "pose" }, { "a56", "m_losepose0", 65, "once", "pose" },
                   { "a94", "m_zitabata", 30, "loop", "air" }, { "x0", "m_taiki0", 90, "once", "idle" } }),
     ["3:0"] = L({ { "a5", "k_wait_a1", 39, "once", "idle" }, { "a30", "k_rollfly0", 33, "loop", "air" },
-                  { "a39", "k_panch0", 75, "hold", "attack" }, { "a40", "k_kimepose1", 65, "once", "pose" },
+                  { "a39", "k_kimepose0", 75, "hold", "pose" }, { "a40", "k_kimepose1", 14, "once", "pose" },
                   { "a54", "k_panch0", 32, "once", "attack" }, { "a56", "k_panch2", 32, "once", "attack" },
-                  { "x0", "k_taiki0", 40, "once", "idle" }, { "x1", "k_taiki1", 40, "once", "idle" },
-                  { "x2", "k_wait_b1", 40, "loop", "idle" }, { "x3", "k_item_fg1", 60, "once", "idle" } }),
+                  { "x0", "k_taiki0", 40, "once", "idle" }, { "x1", "k_taiki1", 16, "loop", "idle" },
+                  { "x2", "k_wait_b1", 40, "loop", "idle" }, { "x3", "k_item_fg1", 23, "loop", "idle" } }),
     ["5:0"] = L({ { "a5", "a_wait_a1", 39, "once", "idle" }, { "a42", "a_kimepose0", 65, "once", "pose" },
                   { "a81", "a_attack1", 20, "once", "attack" }, { "a85", "a_rollat0", 20, "loop", "attack" },
                   { "a87", "a_rollat2", 20, "loop", "attack" }, { "x0", "a_taiki0", 40, "once", "idle" },
@@ -768,11 +768,15 @@ local k39b = W.Resolve(lk, W.WheelOf("knuckles").pages[1][1].body, W.WheelOf("kn
 local k54b = W.Resolve(lk, W.WheelOf("knuckles").pages[1][2].body, W.WheelOf("knuckles").pages[1][2].name)
 local u139b = W.Resolve(lsu, W.WheelOf("supersonic").pages[1][2].body, W.WheelOf("supersonic").pages[1][2].name)
 local kept = string.find(M.files[W.FILE], "sonic\t1\t3\ta200\ts_nothing\t", 1, true) ~= nil
+-- round 0.9.9a: the top of Knuckles' wheel is his level clear pose (row 39), not its way back to standing (row 40); the real first punch is row 54
+check(W.DEFAULTS.knuckles[1].body == "a39" and W.DEFAULTS.knuckles[1].name == "k_kimepose0" and W.DEFAULTS.knuckles[6].body == "a54" and W.DEFAULTS.knuckles[6].name == "k_panch0",
+    "(11) the top of Knuckles' default wheel is k_kimepose0 a39 (%s %s), its punch k_panch0 a54 (%s %s)", tostring(W.DEFAULTS.knuckles[1].body), tostring(W.DEFAULTS.knuckles[1].name),
+    tostring(W.DEFAULTS.knuckles[6].body), tostring(W.DEFAULTS.knuckles[6].name))
 check(s1.body == "a75" and s1.face == "Happy" and s1.loop == true and ws.centre.face == "Blink" and e2 and e2.key == "a75"
     and miss == "missing: s_nothing" and kept and s3.body == "a200" and ws.pages[1][4].body == "stop" and rt == rt2 and
     W.badLines == 0 and k39b and k39b.key == "a39" and k54b and k54b.key == "a54" and u139b and u139b.key == "a139",
     "(11) the file: the face and loop columns and the centre line (%s, %s, %s); a renumbered row found by its name "
-    .. "(a3 s_kimepose0 -> %s); a name found nowhere kept and shown (\"%s\"); a round trip is identical; k_panch0 a39 / a54 and "
+    .. "(a3 s_kimepose0 -> %s); a name found nowhere kept and shown (\"%s\"); a round trip is identical; a39 saved as k_panch0 (its old name) stays on a39, a54 k_panch0 and "
     .. "s_kimepose0 a75 / a139 keep their own keys after a reload (%s %s %s %s)", tostring(s1.body), tostring(s1.face),
     tostring(ws.centre.face), e2 and e2.key or "nil", miss, k39 and k39.key or "nil", k54 and k54.key or "nil",
     u75 and u75.key or "nil", u139 and u139.key or "nil")
@@ -796,7 +800,7 @@ local function line_of(name, num)
         if l.cols[2] == name and (num == nil or l.cols[1] == num) then return l end
     end
 end
-local kp39, kp54 = line_of("k_panch0", "39"), line_of("k_panch0", "54")
+local kp39, kp54 = line_of("k_kimepose0", "39"), line_of("k_panch0", "54")
 E.SetEntry("sonic")
 local nlines = #E.list.lines
 local spin = 0
@@ -832,8 +836,8 @@ if grey40 then E.list.DoDoubleClick(E.list, 1, grey40) end
 local after40 = W.WheelOf("sonic").pages[1][4].body
 check(kp39 ~= nil and kp54 ~= nil and spin == 1 and spinLine and string.find(spinLine.tooltip or "", "+1 variant", 1, true)
     and found == 2 and found81 and air == 2 and put.body == "a84" and put.name == "s_awa0" and nextSel == 4 and
-    GSA1.Char == nil, "(12) the page lists the rows by internal name and number (%d for Sonic); Knuckles' k_panch0 rows 39 "
-    .. "and 54 are two rows, Sonic's s_spin0 variants one (\"%s\"); the find box (\"kimepose0\": %d (a75 and the greyed 139), \"81\": %s) and the group "
+    GSA1.Char == nil, "(12) the page lists the rows by internal name and number (%d for Sonic); Knuckles' k_kimepose0 39 "
+    .. "and k_panch0 54 are two rows, Sonic's s_spin0 variants one (\"%s\"); the find box (\"kimepose0\": %d (a75 and the greyed 139), \"81\": %s) and the group "
     .. "filter (air: %d) work; a double-click fills the selected slot (p1 s3 = %s) and selects the next (%d); edited "
     .. "without a character", nlines, spinLine and spinLine.tooltip or "?", found, tostring(found81), air,
     tostring(put.body), nextSel)

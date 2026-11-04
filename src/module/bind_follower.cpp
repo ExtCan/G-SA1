@@ -40,6 +40,8 @@
 //       m 1 (the game's own: nothing is ever written) .. gsa1.FOLLOWER.SPEED_MAX
 //   gsa1.FollowerSpot(id, x, y) -> true | nil, msg, code    (feature version 2) sa1_follower_spot: where it stands around its leader, an
 //       offset in host units in Source's axes with z 0 (two numbers: no engine Vector, the hook budget of 098 D10); 0, 0: the game's own place
+//   gsa1.FollowerStand(id, on) -> true | nil, msg, code     (round 0.9.9a, sadc build/research/r099a/stop/diagnosis.md; asked for by name, the feature's version stays 2) sa1_follower_stand: on, a follower
+//       that stops reaches the game's own stand and idle; off, the game's AI keeps its stick at 0.005 and the follower stays in its walk at speed 0 on one frame, as the real game's Tails does
 //   gsa1.FollowerThreads(n) -> workers | nil, msg, code     module-wide; 0 automatic; the pool is rebuilt between frames
 //   gsa1.FollowersStats([out]) -> out                       the last second: followers, workers, ms_tick, ms_render, ms_join,
 //       ms_wall, frames
@@ -382,6 +384,26 @@ GSA1_FN(gsa1_follower_FollowerRespawn)
 }
 
 #if SA1_API_FOLLOWER >= 2
+// gsa1.FollowerStand(id, on) -> true | nil, msg, code
+GSA1_FN(gsa1_follower_FollowerStand)
+{
+    int32_t id = 0;
+    if (!arg_int(LUA, 1, id, 1, 2147483647.0) || !LUA->IsType(2, LT::Bool)) {
+        return push_nil_msg(LUA, "FollowerStand(id, on)", "bad_argument");
+    }
+    int ret = 0;
+    if (!follower_char(LUA, id, ret)) {
+        return ret;
+    }
+    gsa1::Session *se = session();
+    sa1_status st = sa1_follower_stand(se->ctx(), id, LUA->GetBool(2) ? 1 : 0);
+    if (SA1_FAILED(st)) {
+        return push_lib_failure(LUA, se, st);
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+
 // gsa1.FollowerSpeed(id, m) -> true | nil, msg, code
 GSA1_FN(gsa1_follower_FollowerSpeed)
 {
@@ -626,6 +648,7 @@ const gsa1::FeatureFn k_follower_fns[] = {
     {"FollowerHold", gsa1_follower_FollowerHold},
     {"FollowerRespawn", gsa1_follower_FollowerRespawn},
 #if SA1_API_FOLLOWER >= 2
+    {"FollowerStand", gsa1_follower_FollowerStand},
     {"FollowerSpeed", gsa1_follower_FollowerSpeed},
     {"FollowerSpot", gsa1_follower_FollowerSpot},
 #endif

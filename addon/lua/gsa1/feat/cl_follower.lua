@@ -35,6 +35,8 @@ if not Fo then return end
 local cv = Fo.cv
 local W = GSA1.Wheel                     -- feat/sh_wheel.lua (the sh_ files load before every cl_ file)
 GSA1.cv.follower_other_views = cv.other_views   -- (cl_render.lua reads it)
+-- round 0.9.9a (N7, sadc build/research/r099a/stop/diagnosis.md): the game's own AI keeps a stopped follower in its walk at speed 0, on one frame (the real game's Tails too); on: the game's own stand and idle
+cv.fix_stand = GSA1.ConVar("gsa1_follower_fix_stand", 1, "Followers that stop go to their stand and idle (0 = the game's own: they stay in a still pose, as the real game's Tails does)", 0, 1)
 
 Fo.list = Fo.list or {}
 Fo.byId = Fo.byId or {}
@@ -437,6 +439,13 @@ function Fo.ApplySpeed(F)
     if not ok then note_refused(F, "the catch-up speed", err) end
     return ok and true or false
 end
+-- the stand (not in the game; the option's words: the ConVar above). Off: libsa1 is the game's own, bit for bit
+function Fo.ApplyStand(F)
+    if not (gsa1 and gsa1.FollowerStand) then return false end
+    local ok, err = gsa1.FollowerStand(F.id, cv.fix_stand:GetBool())
+    if not ok then note_refused(F, "its stand", err) end
+    return ok and true or false
+end
 -- every follower's spot, by its place in the list. One follower alone stands where the game puts it; so does one walking to a box's board.
 -- 0 turns them off for all; while the secret's followers are here all use Fo.SPACING_EGG. A call only for a spot that changed
 function Fo.ApplySpots()
@@ -518,6 +527,7 @@ function Fo.MakeEntry(id, kind, opts, target, pos, yaw, C)
     Fo.list[#Fo.list + 1] = F
     Fo.byId[id] = F
     -- 0.9.9: before its first tick
+    Fo.ApplyStand(F)
     Fo.ApplySpeed(F)
     Fo.ApplySpots()
     -- host objects, Tails' tail blend, the item icon guard (its own game's rings and boxes)
@@ -565,11 +575,11 @@ local function spawn_follower(kind, opts)
         Fo.settingsLogged = true
         GSA1.Log("settings", "followers: at most %d, new ones follow %s, upgrades %s, rings and boxes %s, sounds %s, board %s, boxes %s, "
             .. "come along %s, loop guard %s, fixes view %s respawn %s, full detail %d, far rate %d, draw distance %d, other views %s, "
-            .. "threads %d, catch-up speed %s, room between them %s, emote with you %s", cv.max:GetInt(), tostring(Fo.TARGET_NAMES[cv.target:GetInt()]),
+            .. "threads %d, catch-up speed %s, room between them %s, emote with you %s, stand and idle %s", cv.max:GetInt(), tostring(Fo.TARGET_NAMES[cv.target:GetInt()]),
             cv.upgrades:GetString(), cv.objects:GetString(), cv.sounds:GetString(), cv.board:GetString(), cv.board_boxes:GetString(),
             cv.come_along:GetString(), cv.loop_guard:GetString(), cv.fix_view:GetString(), cv.fix_respawn:GetString(), cv.full_detail:GetInt(),
             cv.far_rate:GetInt(), cv.draw_dist:GetInt(), cv.other_views:GetString(), cv.threads:GetInt(), cv.speed:GetString(),
-            cv.spacing:GetString(), cv.emotes:GetString())
+            cv.spacing:GetString(), cv.emotes:GetString(), cv.fix_stand:GetString())
     end
     local F = Fo.MakeEntry(id, k, opts, target, pos, yaw)
     run_hook("GSA1FollowerCreated", F, opts.why or "spawned")
@@ -1365,6 +1375,10 @@ cvars.AddChangeCallback("gsa1_follower_speed", function()
     for _, F in ipairs(Fo.list) do Fo.ApplySpeed(F) end
     log_setting("catch-up speed", cv.speed)
 end, "gsa1_follower")
+cvars.AddChangeCallback("gsa1_follower_fix_stand", function()
+    for _, F in ipairs(Fo.list) do Fo.ApplyStand(F) end
+    log_setting("stand and idle", cv.fix_stand)
+end, "gsa1_follower")
 cvars.AddChangeCallback("gsa1_follower_spacing", function()
     Fo.ApplySpots()
     log_setting("room between them", cv.spacing)
@@ -1856,7 +1870,10 @@ function Fo.BuildPage(panel)
     panel:ControlHelp("Open the wheel and press the key or the button: the wheel closes and they come back, dropping in from above. "
         .. "Keys and buttons the character, the wheel or the board use are refused.")
     -- fixes
-    panel:Help("Fixes (not in the game; for new followers)")
+    panel:Help("Fixes (not in the game)")
+    panel:CheckBox("Followers that stop go to their stand and idle", "gsa1_follower_fix_stand")
+    panel:ControlHelp("Works at once. Off: the game's own: a stopped follower stays in a still pose, as the game's Tails does. E-102's hover stays in a still pose either way: the game has no way out of it but a jump, for you too.")
+    panel:Help("For new followers:")
     panel:CheckBox("Followers' own animations run where the game's camera cannot see them", "gsa1_follower_fix_view")
     panel:ControlHelp("Off: a follower's emote also pauses while the game's camera cannot see it.")
     panel:CheckBox("After dropping in, followers other than Tails forget where they were (stops Knuckles bouncing back)",

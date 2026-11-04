@@ -340,6 +340,39 @@ void behaviour099(MockLua &L, Rig &R)
     }
     R.clear();
 
+    // the stand (0.9.9a, N7, sadc build/research/r099a/stop/diagnosis.md): after a stop, on: the game's own stand with its frames moving; off: the game's own walk at speed 0 on one frame
+    {
+        double s = R.create_char(SA1_CHAR_SONIC, 0.0f, 0.0f);
+        double on = R.follower(SA1_CHAR_SONIC, 0.0f, 0.0f, s), off = R.follower(SA1_CHAR_SONIC, 0.0f, 0.0f, s);
+        int bad = 0;
+        bad += !is_code(L.call("FollowerStand", {Val::number(s), Val::boolean(true)}), "bad_argument");
+        bad += !is_code(L.call("FollowerStand", {Val::number(99999), Val::boolean(true)}), "not_found");
+        bad += !is_code(L.call("FollowerStand", {Val::number(on), Val::number(1)}), "bad_argument");
+        CHECK(bad == 0, "FollowerStand: not a follower or not a boolean -> bad_argument, no such id -> not_found (%d wrong)", bad);
+        CHECK(is_true(L.call("FollowerStand", {Val::number(on), Val::boolean(true)})), "FollowerStand(id, true) -> true");
+        for (int t = 0; t < 120; t++) {
+            R.pair(s, 0.0, 1.0);
+            R.ftick();
+        }
+        double frame0 = 0.0;
+        for (int t = 0; t < 300; t++) {
+            R.pair(s);
+            R.ftick();
+            if (t == 280 && R.ch(on)) {
+                frame0 = R.ch(on)->st.frame;
+            }
+        }
+        gsa1::Character *a = R.ch(on), *b = R.ch(off);
+        CHECK(a && a->st.action == 0 && a->st.frame != frame0, "on: 300 pairs after the stop action %d, the frame moves (%.2f, %.2f)", a ? (int)a->st.action : -1, frame0, a ? (double)a->st.frame : 0.0);
+        double fb = b ? b->st.frame : 0.0;
+        for (int t = 0; t < 20; t++) {
+            R.pair(s);
+            R.ftick();
+        }
+        CHECK(b && b->st.action != 0 && b->st.frame == fb, "off: the game's own: action %d, the frame stands still (%.2f, %.2f)", b ? (int)b->st.action : -1, fb, b ? (double)b->st.frame : 0.0);
+        R.clear();
+    }
+
     // the catch-up: a Tails at 3 stays with a running Sonic, its factor above 1 while it is behind, 1 near its spot
     {
         double s = R.create_char(SA1_CHAR_SONIC, 0.0f, 0.0f);
@@ -983,6 +1016,7 @@ int main(int argc, char **argv)
         {"FollowerHold", "id, on", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
         {"FollowerRespawn", "id", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
 #if SA1_API_FOLLOWER >= 2
+        {"FollowerStand", "id, on", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
         {"FollowerSpeed", "id, m", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
         {"FollowerSpot", "id, x, y", "true | nil, message, code", "unsupported,not_ready,fault,bad_argument,not_found"},
 #endif

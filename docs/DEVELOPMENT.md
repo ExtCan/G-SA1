@@ -40,6 +40,42 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.9a changes: models that stay whole, followers that go to idle, screenshots that aren't black
+
+From the owner's test of 0.9.9. **None of this has been seen in the real game yet**: the tests run against a stand-in for Garry's Mod and against the Dreamcast's own code. An independent check passed with no fails.
+
+* **Eggman's legs no longer swing through his body.** This was a libsa1 bug, not the game's: a thigh turning 22 degrees was treated as turning 338. On the Dreamcast's code his legs stay whole, so this one is fixed, and the rest of his brokenness stays.
+* **Models no longer break leaving a pose.** Emotes used a blend made for the game's cutscenes, which the game never uses this way: it treated angles as plain numbers, so Tails could flip over, and it collapsed poses that use scaling, which is what broke Big. Emotes now blend in and out the shortest way. Stopping an emote now goes back at once, and a loop no longer finishes its cycle first.
+* **Knuckles' emotes.** What was labelled `k_panch0` at row 39 is really his level-clear pose, now named `k_kimepose0`, and it's the top of his wheel. The old top slot only played the way back to standing. Eight emotes that played as a twitch then a freeze now loop. A slot you saved keeps its pose. His wall poses still look tilted on open ground: that's the animation, with no wall there.
+* **Followers go to idle when they stop.** The game's own follower code keeps its stick pushed a hair while it's more than 1 unit from where it's aiming, so the follower stays in its walk at speed 0, and the walk stands frozen. The Dreamcast's Tails does exactly this. Since you asked for it, followers now reach their stand and idle by default. A box on the Followers page, under Fixes, turns it off for the game's own still pose. Catch-up speeds are unchanged.
+* **Followers have sun shadows.** The nearest 3 by default, with a slider on the Rendering page from 0 to 8, so the 99 Knuckles don't all pay for one. Their edge is a little harder than yours, on purpose: blurring several at once could put a follower's pose on your own shadow.
+* **Screenshots aren't black.** Since 0.9.5b, your sun shadow's last step left its small picture selected at the end of every frame, so `.tga` screenshots read that instead of the screen. The picture on screen was fine, which is why nothing else showed it. The step now puts things back.
+* **The log:** debug flight no longer logs false "jump" lines.
+
+**Known limits:** an E-102 follower stays in his hover after a long run, because the game's hover has no stand test, and a jump ends it. If you're moving as your emote ends, followers stop theirs with a snap, not a blend.
+
+### The owner checklist
+
+1. Eggman: walk and run: no leg through the body.
+2. Sonic with a Tails and a Knuckles follower: play the top of the wheel at 0.5x, let it end or pick it again: followers blend back, nobody turns over.
+3. Tails: victory pose, then move: a smooth fade of about 0.25 s.
+4. Big: `b_kimepose0`, `b_joysmall`, `b_throw0`, `b_miss0`: pick, pick again, move: body whole.
+5. Knuckles: the top of the wheel is the level clear pose, named `k_kimepose0`; `k_taiki1`, `k_wait_b1`, `k_item_fg1` loop.
+6. Knuckles, Big, Tails: one emote right after another: each blends from the last.
+7. **Say which Big or Knuckles entry still looks wrong**: the notes didn't name one.
+8. Sonic: run, then brake into a turn: no stretched limb.
+9. Three followers: run, stop: each goes to its stand and breathes, and about 30 s later the idle plays. Untick the option on Followers > Fixes for the game's still pose. Run again: the catch-up feels the same.
+10. Five followers: the 3 nearest have a sun shadow; try the slider at 0 and 8; no swapping when two are about as near; note the log's FollowerShadow figure.
+11. A screenshot in third person with the sun shadow on: the `.tga` in `garrysmod/screenshots` shows the picture.
+12. Tikal in debug flight: no "jump" lines in the log.
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_sunshadow_followers` | 3 (0-8) | Rendering: "Followers with a sun shadow (the nearest; 0 = none)" |
+| `gsa1_follower_fix_stand` | 1 | Followers > Fixes: a stopped follower goes to its stand and idle |
+
 ## What 0.9.9 changes: followers that keep up and stand apart, Eggman, Tikal and the "?"
 
 From the owner's test of 0.9.8. **None of this has been seen in the real game yet**: every test here runs against a stand-in for Garry's Mod and against Dreamcast references. Nothing planned was dropped.

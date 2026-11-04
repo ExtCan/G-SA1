@@ -12,7 +12,7 @@
 // With the disc: EmoteList(kind, form) for each of the 8 character entries (Sonic, Tails, Knuckles, Amy, E-102, Big, Super
 // Sonic kind 8, the General form) without a world - libsa1 094a-lib-emote's list sizes (107 / 140 / 122 / 105 / 89 / 96 /
 // 92 / 119), non-empty names, every key parses back to its (source, index), dup points at an earlier entry; Knuckles'
-// k_panch0 is two entries (rows 39 and 54); Eggman's list is empty. With gm_construct (read only from the Garry's Mod
+// k_panch0 is row 54 alone (round 0.9.9a: row 39 is k_kimepose0, the level clear pose); Eggman's list is empty. With gm_construct (read only from the Garry's Mod
 // install; skipped when it is not there): a standing Sonic plays "a3" (Emote -> true, EmoteState PLAYING with key a3 after
 // two pairs), EmoteStop(STOP_NOW) ends it; an entry not offered ("a130" for a normal Sonic) -> nil, "... is not available
 // for Sonic", "bad_argument".
@@ -274,8 +274,8 @@ int main(int argc, char **argv)
         }
     }
     std::vector<Val> eg = L.call("EmoteList", {Val::number(1)});
-    CHECK(panch == 2 && pk == " a39 a54" && eg.size() == 1 && eg[0].type == Type::Table && eg[0].tab->field("n").num == 0,
-          "Knuckles' k_panch0 is two entries, neither a duplicate (%s): names are not unique (review R.9); Eggman: an empty "
+    CHECK(panch == 1 && pk == " a54" && eg.size() == 1 && eg[0].type == Type::Table && eg[0].tab->field("n").num == 0,
+          "Knuckles' k_panch0 is row 54 alone (%s): row 39 is his level clear pose, k_kimepose0 (round 0.9.9a); Eggman: an empty "
           "list", pk.c_str());
 
     std::string map;

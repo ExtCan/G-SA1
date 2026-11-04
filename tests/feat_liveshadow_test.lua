@@ -44,6 +44,17 @@
 --      none outside the main view; walking, a grid only every few frames and the darkness at the picture's centre steady.
 --      Another character: nothing with the old one's picture, drawn from the frame after its own; removed: nothing. Why not
 --      drawn: one log line per reason per map after 5 s, the reason on the page, none when drawn.
+--   6b 0.9.9a (L3, the owner: "screenshots are completely black"): a model of the engine's target stack whose BlurRenderTarget binds its own
+--      target: the target bound at the end of PostRender is the one bound at its start, your picture and your followers', also when the blur
+--      fails; the pinned order in section 6 has the blur before the pop.
+--   7  0.9.9a (the owner's note 12:17:30 "Followers don't have sun shadows"; SADC/build/research/r099a/misc/diagnosis.md): the option
+--      gsa1_sunshadow_followers and its row; the nearest get one by the same method (the picture at the frame's end, the quads in the main
+--      view, the ground right before them), a target each from a pool, at most S.PICTURES_PER_FRAME pictures a frame; the far drawing levels
+--      and held none, at once; no swapping between two about as near; off, first person, disableallshadows, the rate, a low sun, a ledge, a
+--      re-creation, an error in their part; your own shadow as without them; only your picture through the one shared blur material; no Lua
+--      garbage of its own.
+--   8  0.9.9a (found in the log): the jump check of cl_log.lua and Eggman's and Tikal's debug flight (here because this test loads the whole
+--      addon and its module stand-in; tests/log_test.lua has the check's other cases).
 --
 -- API NOTES (095-gsa1-render, round 0.9.5; the lane's full notes - its report carries a short form):
 --   cl_render.lua
@@ -178,7 +189,7 @@ local blurs = 0
 render.BlurRenderTarget = function() blurs = blurs + 1 end
 -- 0.9.5a, the frame's order: what is called while a frame's views run. phase = "view" from the first view's
 -- PreDrawOpaqueRenderables to the end of the last view (frame() below); viewCalls: the render target work seen there;
--- picture: while recordPicture, the calls from a push of the sun shadow's own target to its blur
+-- picture: while recordPicture, the calls from a push of the sun shadow's own target to its pop
 local viewCalls, picture, pictureOn, recordPicture = {}, {}, false, false
 local toneAtBox, toneAtBlur = nil, nil      -- the tone-mapping scale when the picture's box was opened and at its blur
 local function spy(lib, name, label)
@@ -189,10 +200,8 @@ local function spy(lib, name, label)
             pictureOn = recordPicture and GSA1 and GSA1.SunShadow and a == GSA1.SunShadow.rt and a ~= nil
         end
         if pictureOn then picture[#picture + 1] = label end
-        if label == "BlurRenderTarget" then
-            if pictureOn then toneAtBlur = tone.x end
-            pictureOn = false
-        end
+        if label == "BlurRenderTarget" and pictureOn then toneAtBlur = tone.x end
+        if label == "PopRenderTarget" then pictureOn = false end
         return f(a, ...)
     end
 end
@@ -340,6 +349,8 @@ local VIEWS = { depth = false, sky3d = false, sky2d = false, target = nil, skyAr
 local DEPTH_RT = { GetName = function() return "_rt_ResolvedFullFrameDepth" end }
 local SSAO = STUDIO_SSAODEPTHTEXTURE or 134217728
 local CMD = setmetatable({}, { __index = function() return function() return 0 end end })
+-- 0.9.9a (L3): VIEWS.postTarget: what is bound when PostRender starts; postLeft: the frames whose PostRender left another target bound
+local postLeft = 0
 local function frame(dt)
     dt = dt or 1 / 60
     M.dt = dt
@@ -378,9 +389,35 @@ local function frame(dt)
         for _, e in ipairs(M.entities) do if not e.removed and e.DrawTranslucent then e:DrawTranslucent(1) end end
     end
     M.run_hook("PostDrawTranslucentRenderables", a1, a2)
-    M.render_target = nil
+    M.render_target = VIEWS.postTarget
     phase, curView = nil, nil
     M.run_hook("PostRender")
+    if M.render_target ~= VIEWS.postTarget then postLeft = postLeft + 1 end
+    M.render_target = nil
+end
+-- 0.9.9a (L3): the engine's target stack, modelled for fn(stack) (the mock's own Push and Pop only count): a push saves what is bound and
+-- binds its target, a pop restores it, and the blur binds its own target and leaves it bound, as Garry's Mod's own Lua does
+-- (garrysmod/lua/includes/extensions/client/render.lua:84-103 ends with render.SetRenderTarget(rt))
+local function with_target_model(fn)
+    local push0, pop0, blur0 = render.PushRenderTarget, render.PopRenderTarget, render.BlurRenderTarget
+    local stack = {}
+    render.PushRenderTarget = function(rt, ...)
+        stack[#stack + 1] = M.render_target or false
+        M.render_target = rt
+        return push0(rt, ...)
+    end
+    render.PopRenderTarget = function(...)
+        M.render_target = table.remove(stack) or nil
+        return pop0(...)
+    end
+    render.BlurRenderTarget = function(rt, ...)
+        local r = blur0(rt, ...)
+        M.render_target = rt
+        return r
+    end
+    postLeft = 0
+    fn(stack)
+    render.PushRenderTarget, render.PopRenderTarget, render.BlurRenderTarget = push0, pop0, blur0
 end
 local function frames(n, dt) for _ = 1, n do frame(dt) end end
 
@@ -745,11 +782,41 @@ do
         .. "the frame of the first silhouette (%d made, at its end), %d in the next", q1, r1, q2)
     recordPicture = false
     local got = table.concat(picture, " ", 1, math.min(#picture, 5))
-    check(got == "PushRenderTarget Clear cam.Start PopRenderTarget BlurRenderTarget", "one picture's order at the frame's "
+    check(got == "PushRenderTarget Clear cam.Start BlurRenderTarget PopRenderTarget", "one picture's order at the frame's "
         .. "end: \"%s\"", got)
     check(toneAtBox == 1 and toneAtBlur == 1 and tone.x == 2, "the tone-mapping scale 1 from the picture's box to its blur "
         .. "(%s, %s) and restored after it (%s): an HDR map's scale at the frame's end does not grey the picture",
         tostring(toneAtBox), tostring(toneAtBlur), tostring(tone.x))
+    -- L3: the owner's black screenshots: what PostRender finds bound is what it leaves bound, with a blur that binds its own target
+    with_target_model(function(stack)
+        local r2 = S.stats.refreshes
+        frames(10)
+        check(S.stats.refreshes - r2 >= 9 and postLeft == 0 and #stack == 0, "the screen is bound at the end of PostRender as at its "
+            .. "start, with a blur that binds its own target: %d pictures, %d frames left another target bound, %d pushes not popped",
+            S.stats.refreshes - r2, postLeft, #stack)
+        local other = { GetName = function() return "_rt_another_addons" end }
+        VIEWS.postTarget = other
+        postLeft, r2 = 0, S.stats.refreshes
+        frames(5)
+        VIEWS.postTarget = nil
+        check(S.stats.refreshes - r2 >= 4 and postLeft == 0 and #stack == 0, "another target bound when PostRender starts: the same one "
+            .. "when it ends (%d frames left another)", postLeft)
+        -- the blur fails: the pop still runs, the error is reported as any of this picture's
+        local blur1 = render.BlurRenderTarget
+        render.BlurRenderTarget = function(...)
+            blur1(...)
+            error("a test's blur error")
+        end
+        local n0 = #logs_with("a test's blur error")
+        postLeft = 0
+        frame()
+        render.BlurRenderTarget = blur1
+        check(postLeft == 0 and #stack == 0 and tone.x == 2 and S.broken ~= nil and #logs_with("a test's blur error") == n0 + 1,
+            "a blur that fails: the target popped and the scale restored all the same (%d left, %d not popped, scale %s), one log line",
+            postLeft, #stack, tostring(tone.x))
+        S.broken = nil
+    end)
+    frames(2)
     do
         -- the character's batches go stale between the main view and the frame's end: no picture, no render target
         hook.Add("PostDrawTranslucentRenderables", "feat_liveshadow_test", function() GSA1.Char.viewFrame = -1 end)
@@ -1223,6 +1290,526 @@ do
     local pl = string.match(log, "perf [^\n]*sun shadow [%d.]+ ms per frame[^\n]*")
     check(pl ~= nil, "the perf line carries the sun shadow's time (%s)", pl and string.match(pl, "sun shadow [%d.]+ ms per "
         .. "frame") or "none")
+end
+-- 7. 0.9.9a: the followers' sun shadow (the owner's note 12:17:30, "Followers don't have sun shadows") ------------------------
+do
+    GSA1.DrawCharacterView = realDV
+    local Fo = GSA1.Followers
+    local FS = S.followers
+    read_map(bsp(MAPS.gm_construct))
+    frames(2)
+    VIEWS.depth, VIEWS.sky3d, VIEWS.sky2d, VIEWS.skyArgs, VIEWS.culled = true, true, false, nil, false
+    -- (the module's tick is not here: the levels' order is the real code's, asked every frame; a stand-in F has what
+    -- cl_follower.lua's Fo.Create gives one, on a real render entity, drawn by the real path)
+    hook.Add("Think", "feat_liveshadow_levels", function() Fo.UpdateLevels(SysTime()) end)
+    local uid = 0
+    local function follower(y, lod)
+        uid = uid + 1
+        local p = C.drawPos
+        local pos = Vector(p.x, p.y + y, p.z)
+        local id = G.Create(0, pos, 0, 0, 0)
+        local ent = ents.CreateClientside("gsa1_render")
+        local F = { id = id, kind = 0, name = "sonic", title = "Sonic", uid = uid, info = G.CharacterInfo(0), state = {},
+                    batches = { count = 0 }, batchGen = 0, mats = {}, static = {}, matsDirty = true, ent = ent, drawPos = pos, drawYaw = 0,
+                    lod = lod or 1, interp = (lod or 1) == 1, renderGen = 1, follower = true }
+        G.Batches(id, F.batches)
+        ent.char = F
+        Fo.list[#Fo.list + 1] = F
+        Fo.byId[id] = F
+        return F
+    end
+    local function drop(F)
+        F.removed = true
+        for i = #Fo.list, 1, -1 do if Fo.list[i] == F then table.remove(Fo.list, i) end end
+        Fo.byId[F.id] = nil
+        F.ent:Remove()
+    end
+    -- what each character got: pictures (through GSA1.DrawCharacterView), quads' vertices (each by the nearest root), targets
+    local pics, near, pushed, homes = {}, {}, {}, {}
+    GSA1.DrawCharacterView = function(c, v)
+        pics[c] = (pics[c] or 0) + 1
+        return realDV(c, v)
+    end
+    local push1, mpos1 = render.PushRenderTarget, mesh.Position
+    render.PushRenderTarget = function(rt, ...)
+        pushed[#pushed + 1] = rt
+        return push1(rt, ...)
+    end
+    mesh.Position = function(v)
+        if not recording then return end
+        local best, bd = nil, math.huge
+        for _, c in ipairs(homes) do
+            local dx, dy = v.x - c.drawPos.x, v.y - c.drawPos.y
+            local d = dx * dx + dy * dy
+            if d < bd then best, bd = c, d end
+        end
+        if best then near[best] = (near[best] or 0) + 1 end
+    end
+    -- the receivers recorded inside the hook (it is looked up again: off / on makes the same function, the wrap has to go first)
+    local hk0
+    local function rec_on()
+        hk0 = M.hooks.PostDrawOpaqueRenderables.gsa1_sunshadow
+        M.hooks.PostDrawOpaqueRenderables.gsa1_sunshadow = function(...)
+            recording = true
+            local r = hk0(...)
+            recording = false
+            return r
+        end
+    end
+    local function rec_off() M.hooks.PostDrawOpaqueRenderables.gsa1_sunshadow = hk0 end
+    local function reset()
+        pics, near, pushed = {}, {}, {}
+    end
+
+    local d = GSA1.CONVARS.gsa1_sunshadow_followers
+    check(d ~= nil and d.default == "3" and d.min == 0 and d.max == 8, "gsa1_sunshadow_followers: default 3, 0 .. 8 (%s)",
+        d and (d.default .. ", " .. tostring(d.min) .. " .. " .. tostring(d.max)) or "no such setting")
+    if not (d and FS) then
+        hook.Remove("Think", "feat_liveshadow_levels")
+        render.PushRenderTarget, mesh.Position, GSA1.DrawCharacterView = push1, mpos1, realDV
+    else
+        -- the Rendering page's row
+        M.menu = {}
+        M.run_hook("PopulateToolMenu")
+        local page
+        for _, e in ipairs(M.menu) do if e.class == "gsa1_rendering" then page = e end end
+        local calls = {}
+        local any = setmetatable({}, { __index = function(t) return function() return t end end })
+        local P = setmetatable({}, { __index = function(_, k)
+            return function(_, ...)
+                calls[#calls + 1] = { k, ... }
+                return any
+            end
+        end })
+        local built = page and pcall(page.cpanel, P)
+        local row
+        for _, c in ipairs(calls) do if c[1] == "NumSlider" and c[3] == "gsa1_sunshadow_followers" then row = c end end
+        check(built and row and row[2] == "Followers with a sun shadow (the nearest; 0 = none)" and row[4] == 0 and row[5] == 8 and
+            row[6] == 0, "Options > G-SA1 > Rendering: \"%s\" (0 .. 8, 0)", row and row[2] or "no row")
+
+        -- five near followers, the default of 3
+        local F1, F2, F3, F4, F5 = follower(300), follower(600), follower(900), follower(1200), follower(1500)
+        homes = { C, F1, F2, F3, F4, F5 }
+        frames(12)                  -- (the levels' 0.1 s, the first pictures, the first quads)
+        reset()
+        viewCalls, quadsIn, colors = {}, {}, {}
+        rec_on()
+        local rf0, tr0, ftr0 = S.stats.refreshes, S.stats.traces, FS.stats.traces
+        local blurOf, blur2 = {}, render.BlurRenderTarget
+        render.BlurRenderTarget = function(rt, ...)
+            blurOf[rt] = (blurOf[rt] or 0) + 1
+            return blur2(rt, ...)
+        end
+        frames(60)
+        render.BlurRenderTarget = blur2
+        local blurred = 0
+        for _ in pairs(blurOf) do blurred = blurred + 1 end
+        check(blurred == 1 and blurOf[S.rt] == 60 and S.rt.w == 256 and FS.slots[1].rt.w == 128 and FS.slots[3].rt.h == 128, "only your picture "
+            .. "goes through Garry's Mod's one shared blur material: %d targets blurred, yours %d times in 60 frames (a second target in a "
+            .. "frame could alias on a threaded queue); theirs 128 x 128, yours 256 x 256", blurred, blurOf[S.rt] or 0)
+        check((pics[F1] or 0) >= 59 and (pics[F2] or 0) >= 59 and (pics[F3] or 0) >= 59 and pics[F4] == nil and pics[F5] == nil,
+            "the default: the 3 nearest of 5 get a picture every frame (%d, %d, %d in 60 frames), the others none (%d, %d)",
+            pics[F1] or 0, pics[F2] or 0, pics[F3] or 0, pics[F4] or 0, pics[F5] or 0)
+        check(near[F1] == 216 * 60 and near[F2] == 216 * 60 and near[F3] == 216 * 60 and near[F4] == nil and near[F5] == nil,
+            "their quads in every frame: 36 cells each on a 7 x 7 grid (%d, %d, %d vertices in 60 frames), none for the others",
+            near[F1] or 0, near[F2] or 0, near[F3] or 0)
+        local seen, distinct = {}, 0
+        for _, rt in ipairs(pushed) do if not seen[rt] then seen[rt] = true; distinct = distinct + 1 end end
+        check(#pushed == 240 and distinct == 4 and seen[S.rt], "a target of its own each, from the pool: %d pushes in 60 frames "
+            .. "(yours and 3), %d targets", #pushed, distinct)
+        check(#viewCalls == 0 and quadsIn.depth == nil and quadsIn.sky3d == nil and (quadsIn.main or 0) > 0, "the owner's method: no "
+            .. "render target work inside a view (%d), the quads only in the main view (depth %d, 3D skybox %d, main %d)", #viewCalls,
+            quadsIn.depth or 0, quadsIn.sky3d or 0, quadsIn.main or 0)
+        -- your character's own, with followers out: as without them
+        local cmax, cmin = 0, math.huge
+        for _, c in ipairs(colors) do
+            if c > cmax then cmax = c end
+            if c < cmin then cmin = c end
+        end
+        check(S.stats.refreshes - rf0 == 60 and near[C] == 384 * 60 and (pics[C] or 0) == 60 and S.grid.ncells == 64 and
+            (S.stats.traces - tr0 == 81 * 4 or S.stats.traces - tr0 == 81 * 5) and S.why == nil, "your own shadow with followers out: one picture a frame (%d), 64 "
+            .. "cells (%d vertices in 60 frames), 4 or 5 grids of 81 traces in a second (%d traces)", S.stats.refreshes - rf0, near[C] or 0,
+            S.stats.traces - tr0)
+        check(math.abs(cmax - 68) < 0.5 and math.abs(cmin - 68) < 0.5, "their colour is the map's, as yours (%.1f .. %.1f: 255 - 187 at the "
+            .. "feet)", cmin, cmax)
+        check(string.find(GSA1.ViewsLine(), "sun shadow 1", 1, true) ~= nil, "a follower's picture is not your character's view (\"%s\")",
+            GSA1.ViewsLine())
+        local ftraces = FS.stats.traces - ftr0
+        check(ftraces % 49 == 0 and ftraces / 49 >= 12 and ftraces / 49 <= 15, "standing: 49 traces a grid, 4 grids a second each (%d "
+            .. "traces, %d grids in 1 s for 3 followers)", ftraces, ftraces / 49)
+        -- moving: a grid a frame each (8 HU), no more than 3 x 49; your own trace count does not move
+        do
+            local mv = "feat_liveshadow_move"
+            hook.Add("Think", mv, function() for _, F in ipairs({ F1, F2, F3 }) do F.drawPos.x = F.drawPos.x + 9 end end)
+            local t0, f0 = S.stats.traces, FS.stats.traces
+            frames(30)
+            hook.Remove("Think", mv)
+            check(FS.stats.traces - f0 == 147 * 30 and S.stats.traces - t0 <= 81 * 3, "at speed (9 HU a frame): the ground traced right "
+                .. "before the quads, %d traces in 30 frames (147 a frame, your own alone is 81 at speed)", FS.stats.traces - f0)
+        end
+        -- the slider
+        RunConsoleCommand("gsa1_sunshadow_followers", "0")
+        frames(1)
+        reset()
+        frames(30)
+        check(pics[F1] == nil and near[F1] == nil and pics[C] == 30 and near[C] == 384 * 30 and #pushed == 30, "the slider at 0: none, "
+            .. "your own stays (%d pushes in 30 frames)", #pushed)
+        RunConsoleCommand("gsa1_sunshadow_followers", "1")
+        frames(12)
+        reset()
+        frames(30)
+        check((pics[F1] or 0) == 30 and pics[F2] == nil and near[F1] == 216 * 30, "the slider at 1: only the nearest (%d pictures)",
+            pics[F1] or 0)
+        RunConsoleCommand("gsa1_sunshadow_followers", "8")
+        local more = { F1, F2, F3, F4, F5 }
+        for k = 6, 12 do more[k] = follower(300 * k) end
+        homes = { C }
+        for _, F in ipairs(more) do homes[#homes + 1] = F end
+        frames(12)
+        reset()
+        frames(60)
+        local eight, least, none = 0, 60, 0
+        for k = 1, 12 do
+            local n = pics[more[k]] or 0
+            if k <= 8 then
+                if n > 0 then eight = eight + 1 end
+                if n < least then least = n end
+            elseif n > 0 then
+                none = none + 1
+            end
+        end
+        local q8 = near[more[8]]
+        local most = 0
+        do
+            local p0 = #pushed
+            frame()
+            most = #pushed - p0 - 1
+        end
+        check(eight == 8 and none == 0 and least >= 29 and least <= 31 and most == 4 and S.PICTURES_PER_FRAME == 4 and q8 == 216 * 60, "the slider at 8 "
+            .. "with 12 followers: the 8 nearest, at most %d pictures a frame (%d in the last), the slowest %d in 60 frames; quads "
+            .. "in every frame", S.PICTURES_PER_FRAME, most, least)
+        -- L3: your followers' pictures leave the bound target as found too
+        with_target_model(function(stack)
+            reset()
+            frames(20)
+            local many = 0
+            for k = 1, 8 do if (pics[more[k]] or 0) > 0 then many = many + 1 end end
+            check(many == 8 and (pics[C] or 0) == 20 and postLeft == 0 and #stack == 0, "the bound target at the end of PostRender with 8 "
+                .. "followers' pictures and yours, with a blur that binds its own: %d frames left another, %d pushes not popped", postLeft,
+                #stack)
+        end)
+        for k = 12, 6, -1 do
+            drop(more[k])
+            more[k] = nil
+        end
+        homes = { C, F1, F2, F3, F4, F5 }
+        RunConsoleCommand("gsa1_sunshadow_followers", "3")
+        frames(12)
+        -- far or held: none, at once; the next one takes the place
+        reset()
+        F1.lod, F1.interp = 2, false
+        frame()
+        local far1 = pics[F1] == nil and near[F1] == nil
+        frames(12)
+        local next1 = (pics[F4] or 0) > 0 and (near[F4] or 0) > 0
+        F1.lod, F1.interp = 1, true
+        frames(12)
+        reset()
+        F2.lod, F2.interp = 3, false
+        frame()
+        local far3 = pics[F2] == nil and near[F2] == nil
+        F2.lod, F2.interp = 1, true
+        frames(12)
+        reset()
+        F3.held = true
+        frame()
+        local held1 = pics[F3] == nil and near[F3] == nil
+        F3.held = false
+        frames(12)
+        reset()
+        frames(5)
+        check(far1 and next1 and far3 and held1 and (pics[F1] or 0) == 5 and (pics[F2] or 0) == 5 and (pics[F3] or 0) == 5,
+            "the far drawing levels and held: none in that very frame, the next follower takes the place; back: the nearest again")
+        -- nearly as near: no swapping to and fro; clearly nearer: it takes over
+        F4.drawPos.y = F3.drawPos.y - 5
+        frames(12)
+        reset()
+        frames(10)
+        local tie = (pics[F3] or 0) == 10 and pics[F4] == nil
+        F4.drawPos.y = F1.drawPos.y + 100
+        frames(12)
+        reset()
+        frames(10)
+        check(tie and (pics[F4] or 0) == 10 and pics[F3] == nil, "a follower about as near as one with a shadow does not take it; a "
+            .. "clearly nearer one does")
+        F4.drawPos.y = F3.drawPos.y + 300
+        frames(12)
+        -- first person and off
+        local dist = GSA1.cv.cam_dist:GetString()
+        GSA1.cv.cam_dist:SetString("0")
+        frames(2)
+        reset()
+        frames(10)
+        local fpFo, fpMe = (pics[F1] or 0) == 10 and near[F1] == 216 * 10, pics[C] == nil and near[C] == nil
+        GSA1.cv.cam_dist:SetString(dist)
+        frames(2)
+        check(fpFo and fpMe, "first person without gsa1_sunshadow_fp is about your character: none of yours, your followers' stay")
+        local Ckeep = GSA1.Char
+        GSA1.Char = nil
+        reset()
+        frames(10)
+        GSA1.Char = Ckeep
+        check((pics[F1] or 0) == 10 and near[F1] == 216 * 10, "with no character of yours your followers keep theirs")
+        frames(2)
+        rec_off()
+        RunConsoleCommand("gsa1_sunshadow", "0")
+        reset()
+        local tr1, ft1 = M.calls.TraceLine or 0, FS.stats.traces
+        frames(30)
+        check(next(pics) == nil and #pushed == 0 and (M.calls.TraceLine or 0) == tr1 and FS.stats.traces == ft1 and
+            M.hooks.PostRender.gsa1_sunshadow == nil, "gsa1_sunshadow 0 removes them too: no hook, no picture, no target, no trace")
+        RunConsoleCommand("gsa1_sunshadow", "1")
+        frames(12)
+        rec_on()
+        reset()
+        frames(10)
+        check((pics[F1] or 0) == 10 and near[F1] == 216 * 10 and pics[C] == 10, "on again: back")
+        -- gsa1_sunshadow_rate holds for them too
+        RunConsoleCommand("gsa1_sunshadow_rate", "30")
+        frames(2)
+        reset()
+        frames(60)
+        local r1, q1 = pics[F1] or 0, near[F1] or 0
+        RunConsoleCommand("gsa1_sunshadow_rate", "0")
+        frames(2)
+        check(r1 >= 28 and r1 <= 31 and q1 == 216 * 60, "gsa1_sunshadow_rate 30: %d pictures a second, the quads in every frame", r1)
+        -- disableallshadows
+        rec_off()
+        read_map(bsp(MAPS.awm_bigcity))
+        reset()
+        rec_on()
+        frames(20)
+        check(next(pics) == nil and next(near) == nil, "disableallshadows 1: none")
+        rec_off()
+        -- a low sun, 30 degrees above the horizon: your 12 HU cells are not ledges there, and theirs (16 HU) are not either
+        read_map(bsp(WORLD .. ent({ { "classname", "shadow_control" }, { "angles", "30 0 0" }, { "color", "128 128 128" },
+            { "distance", "1000" } })))
+        frames(20)              -- (a new grid under this sun: every 0.25 s)
+        local low = FS.slots[1] and FS.slots[1].g.ncells or -1
+        check(S.grid.ncells == 64 and low == 36, "a sun 30 degrees up on flat ground: all cells, yours %d of 64, theirs %d of 36 (the "
+            .. "ledge rule scales with the cell)", S.grid.ncells, low)
+        read_map(bsp(MAPS.gm_construct))
+        frames(12)
+        -- a ledge under a follower: the cells across it left out
+        CRATE = { z = GROUND_Z + 40, x0 = F1.drawPos.x - 1000, x1 = F1.drawPos.x }
+        for _, s in ipairs(FS.slots) do s.g.at = nil end
+        frames(3)
+        local ledge = FS.slots[1].g.ncells
+        CRATE = nil
+        for _, s in ipairs(FS.slots) do s.g.at = nil end
+        frames(3)
+        check(ledge < 36 and ledge >= 20 and FS.slots[1].g.ncells == 36, "a 40 HU ledge under a follower: the cells across it left out "
+            .. "(%d of 36)", ledge)
+        -- gone and made again (a re-creation is a new F table)
+        rec_on()
+        drop(F1)
+        local F1b = follower(300)
+        homes = { C, F1b, F2, F3, F4, F5 }
+        frames(12)
+        reset()
+        frames(10)
+        check(pics[F1] == nil and (pics[F1b] or 0) == 10 and near[F1b] == 216 * 10, "removed: none; the one made in its place has one")
+        -- a Lua error in a follower's picture: their part stops, one log line, yours goes on, the render target balanced
+        do
+            local n0 = #logs_with("the followers' sun shadows stopped")
+            local pu, po = M.calls.PushRenderTarget or 0, M.calls.PopRenderTarget or 0
+            GSA1.DrawCharacterView = function(c, v)
+                if c.follower then error("a test's error") end
+                pics[c] = (pics[c] or 0) + 1
+                return realDV(c, v)
+            end
+            reset()
+            frames(5)
+            local pushes, pops = (M.calls.PushRenderTarget or 0) - pu, (M.calls.PopRenderTarget or 0) - po
+            check(#logs_with("the followers' sun shadows stopped") == n0 + 1 and FS.broken ~= nil and S.broken == nil and pics[C] == 5 and
+                near[C] == 384 * 5 and pushes == pops and string.find(GSA1.SunShadowLine(), "followers' shadows stopped", 1, true) ~= nil,
+                "a Lua error in their part: one log line, it stops; your own goes on (%d pictures), the target balanced (%d, %d)",
+                pics[C] or 0, pushes, pops)
+            FS.broken = nil
+            GSA1.DrawCharacterView = function(c, v)
+                pics[c] = (pics[c] or 0) + 1
+                return realDV(c, v)
+            end
+            frames(12)
+        end
+        -- no Lua garbage of its own per frame (the mock module's own left out), and the cost in the mock
+        rec_off()
+        GSA1.DrawCharacterView = realDV
+        render.PushRenderTarget, mesh.Position = push1, mpos1
+        local hk = M.hooks.PostDrawOpaqueRenderables.gsa1_sunshadow
+        local hp = M.hooks.PostRender.gsa1_sunshadow
+        local mockkb = 0
+        local wrapped = {}
+        for nm, fn in pairs(gsa1) do
+            if type(fn) == "function" then
+                wrapped[nm] = fn
+                gsa1[nm] = function(...)
+                    local q0 = collectgarbage("count")
+                    local a, b, c, e, f, g, h, i = fn(...)
+                    mockkb = mockkb + collectgarbage("count") - q0
+                    return a, b, c, e, f, g, h, i
+                end
+            end
+        end
+        local function run_frames(n, move)
+            for _ = 1, n do
+                M.T = M.T + 1 / 60
+                M.frameNo = M.frameNo + 1
+                if move then for _, F in ipairs(Fo.list) do F.drawPos.x = F.drawPos.x + 9 end end
+                M.run_hook("Think")
+                M.run_hook("PreRender")
+                for _, e in ipairs(M.entities) do if not e.removed and e.Draw then e:Draw(1) end end
+                coroutine.yield()
+            end
+        end
+        frames(30)
+        if jit and jit.off then jit.off() jit.flush() end
+        local camStarts = M.camStarts
+        M.camStarts = nil
+        collectgarbage("collect")
+        collectgarbage("stop")
+        local kb, n = 0, 0
+        local co = coroutine.create(run_frames)
+        for _ = 1, 300 do
+            coroutine.resume(co, 300, true)
+            local m0 = mockkb
+            local k0 = collectgarbage("count")
+            hk(false, false, false)
+            hp()
+            kb = kb + (collectgarbage("count") - k0) - (mockkb - m0)
+            n = n + 1
+        end
+        collectgarbage("restart")
+        if jit and jit.on then jit.on() end
+        local per = kb * 1024 / n
+        check(per < 16, "with 3 followers' shadows at speed: no Lua garbage of its own per frame (%.1f bytes; 300 frames, the mock "
+            .. "module's own left out)", per)
+        -- the cost in the mock, 0, 3 and 8 followers (engine calls are what the pool adds; the GPU's part only the game can show)
+        local function cost(want)
+            RunConsoleCommand("gsa1_sunshadow_followers", tostring(want))
+            for _ = 1, 15 do frame() end
+            local co2 = coroutine.create(run_frames)
+            local t, pu, tr = 0, M.calls.PushRenderTarget or 0, M.calls.TraceLine or 0
+            for _ = 1, 300 do
+                coroutine.resume(co2, 300, true)
+                local t0 = host_clock()
+                hk(false, false, false)
+                hp()
+                t = t + host_clock() - t0
+            end
+            return t * 1000 / 300, ((M.calls.PushRenderTarget or 0) - pu) / 300, ((M.calls.TraceLine or 0) - tr) / 300
+        end
+        M.camStarts = camStarts
+        for nm, fn in pairs(wrapped) do gsa1[nm] = fn end
+        local extra = { F1b, F2, F3, F4, F5 }
+        for k = 6, 8 do extra[k] = follower(300 * k) end
+        for _, want in ipairs({ 0, 3, 8 }) do
+            local ms, pu, tr = cost(want)
+            info("the sun shadow in the mock with %d followers' shadows at speed: %.3f ms a frame in its two hooks, %.1f targets and "
+                .. "%.1f traces a frame", want, ms, pu, tr)
+        end
+        RunConsoleCommand("gsa1_sunshadow_followers", "3")
+        for k = 8, 1, -1 do drop(extra[k]) end
+        frames(12)
+        check(next(FS.slots) == nil or (function()
+            for _, s in ipairs(FS.slots) do if s.F then return false end end
+            return true
+        end)(), "no follower left: no place held")
+        hook.Remove("Think", "feat_liveshadow_levels")
+        VIEWS.depth, VIEWS.sky3d = false, false
+    end
+end
+
+-- 8. 0.9.9a, found in the owner's log, not in a note: Tikal's debug flight logged "jump: the drawn character moved ... more than the
+-- game's speed explains" at 1200 units/s: it moves the position itself and the state's speed stays low (eight lines on 2026-11-03,
+-- every one mode 11, log_099_20261103_1232_prev.txt:1028-1122)
+do
+    GSA1.DrawCharacterView = realDV
+    local mc = M.mchars[C.id]
+    local gs = G.GetState
+    local mode
+    function G.GetState(id, out)
+        local r = gs(id, out)
+        if r and mode and id == C.id then r.mode = mode end
+        return r
+    end
+    local kind0 = C.kind
+    local function jumps()
+        GSA1.LogFlush()
+        local n = 0
+        for _ in string.gmatch(M.files["gsa1/log.txt"] or "", "jump +the drawn character moved") do n = n + 1 end
+        return n
+    end
+    local function fly(k, m, count, move, dt)
+        C.kind, mode = k, m
+        for _ = 1, count do
+            mc.pos.x = mc.pos.x + move
+            frame(dt)
+        end
+    end
+    local function rest()
+        C.kind, mode = kind0, nil
+        M.T = M.T + 2          -- (the check's one line a second)
+        frames(5)
+    end
+    rest()
+    local j0 = jumps()
+    fly(4, 11, 150, 25, 1 / 48)
+    local tikal = jumps() - j0
+    rest()
+    j0 = jumps()
+    fly(1, 17, 150, 25, 1 / 48)
+    local eggman = jumps() - j0
+    rest()
+    check(tikal == 0 and eggman == 0, "debug flight at 1,200 units/s, 25 units in a frame of 20.8 ms, no speed in the state: no jump "
+        .. "line (Tikal mode 11: %d, Eggman mode 17: %d)", tikal, eggman)
+    -- every move the owner's log calls a jump in mode 11: units, ms
+    j0 = jumps()
+    C.kind, mode = 4, 11
+    for _, m in ipairs({ { 56, 46.9 }, { 26, 21.5 }, { 45, 38.7 }, { 33, 27.3 }, { 25, 20.6 }, { 24, 20.3 }, { 25, 20.4 }, { 71, 59.6 } }) do
+        fly(4, 11, 3, 16, 1 / 75)
+        fly(4, 11, 1, m[1], m[2] / 1000)
+        M.T = M.T + 1
+        fly(4, 11, 3, 16, 1 / 75)
+    end
+    local logged = jumps() - j0
+    -- and out of the flight: the last moves still count (the check's ring of 4 ticks)
+    j0 = jumps()
+    fly(4, 11, 10, 25, 1 / 48)
+    fly(4, 2, 1, 25, 1 / 48)
+    fly(4, 2, 1, 0, 1 / 48)
+    local leaving = jumps() - j0
+    rest()
+    check(logged == 0 and leaving == 0, "the moves of the owner's eight lines: none now (%d); the frame that leaves the flight: none (%d)",
+        logged, leaving)
+    -- not blinded: a real jump in flight, the same move for a character not in that mode
+    j0 = jumps()
+    fly(4, 11, 10, 25, 1 / 48)
+    fly(4, 11, 1, 200, 1 / 48)
+    fly(4, 11, 1, 0, 1 / 48)
+    local inflight = jumps() - j0
+    rest()
+    j0 = jumps()
+    fly(4, 2, 100, 25, 1 / 48)
+    local walking = jumps() - j0
+    rest()
+    j0 = jumps()
+    fly(0, 11, 100, 25, 1 / 48)
+    local sonic = jumps() - j0
+    rest()
+    check(inflight == 1 and walking >= 1 and sonic >= 1, "the check stays awake: 200 units in a frame of flight %d line; the same 25 units "
+        .. "with no speed: Tikal walking %d, Sonic in his mode 11 %d", inflight, walking, sonic)
+    G.GetState = gs
 end
 check(#M.reported == 0, "no Lua error reported (%s)", tostring(M.reported[1]))
 return done()

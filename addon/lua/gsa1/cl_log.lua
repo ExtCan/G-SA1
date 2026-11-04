@@ -65,6 +65,9 @@ local REPEAT_WINDOW = 10.0
 local PERF_EVERY = 10.0
 local RING = 256                -- frame times kept for the stutter median (the last second of them is used)
 local STUTTER_MS = 25           -- a stutter: at least this long and about twice the median of the second before (1.9x)
+-- 0.9.9a: Eggman's and Tikal's debug flight (the game's X: mode 17 and 11, 1,200 units/s), which moves the position with no speed in the
+-- state (sadc src/1st_read/code_8C0ED880.c:235, src/overlays/tikal_prog/code_0CB00000.c:207; docs/research/playable099.md 2.4)
+local DEBUG_MODE, DEBUG_SPEED = { [1] = 17, [4] = 11 }, 1200
 local JUMP_HU = 24              -- a "jump": the drawn character moved at least this far in one frame, and further than
                                 -- 1.5 x the game's speed (the largest of the last 4 ticks) x the frame + 8 units
 local BIG_SPRITE_HU = 160       -- a sprite this wide (40 SA1 units) is implausible (0.4 / 0.5 drew them 256 wide)
@@ -348,6 +351,8 @@ function GSA1.LogFrame(dt, sections, counted, gc)
     -- new chain. UNVERIFIED on moving platforms: the state's speed may leave out the carrier's motion.
     local p = C.drawPos
     local sp = math.sqrt((st.vx or 0) ^ 2 + (st.vy or 0) ^ 2 + (st.vz or 0) ^ 2)
+    -- (0.9.9a: its speed goes into the ring, so the frame that leaves the flight is explained too and a real jump in flight still shows)
+    if st.mode ~= nil and st.mode == DEBUG_MODE[C.kind] and sp < DEBUG_SPEED then sp = DEBUG_SPEED end
     local vr = L.vring
     if p then
         local lp = L.lastPos

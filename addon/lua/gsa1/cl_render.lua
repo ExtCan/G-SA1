@@ -696,7 +696,8 @@ function GSA1.DrawCharacterView(C, v)
     C.cvEye = C.cvEye or Vector()
     C.cvEye:Set(v.eye)
     if O then C.cvEye:Sub(O) end
-    tally(v.kind or "closeup")
+    -- (0.9.9a: a follower's sun silhouette is never counted as your character's view: D4 above)
+    if not C.follower then tally(v.kind or "closeup") end
     local ortho = v.ortho
     if ortho and cam.Start then
         local d = CV_DATA
