@@ -554,6 +554,16 @@ check(took7 ~= nil and took7 >= 2.95 and took7 < 3.2 and R.deaths == deaths0 and
     ply.spawns == spawns0 + 1 and ply.GSA1Active and ply.nodraw, "a kill the game does not take: 3 s without its death, "
     .. "then the player is asked back once and comes back as the living character (%.2f s)", took7 or -1)
 
+-- 0.9.9d (the owner: in photo mode "completely invincible and untouchable", feat/sv_photo.lua): no hit is sent, in any damage mode
+do
+    local n0 = #sent_s
+    ply.GSA1Photo = true
+    SI.SendHurt(ply, 10, 0, Vector(), NULL, false, false)
+    ply.GSA1Photo = nil
+    check(#sent_s == n0, "in photo mode I.SendHurt sends nothing (%d)", #sent_s - n0)
+    SI.SendHurt(ply, 10, 0, Vector(), NULL, false, false)
+    check(#sent_s == n0 + 1, "out of it, a hit is sent as ever (%d)", #sent_s - n0)
+end
 check(#M.reported == 0, "no Lua error%s", #M.reported > 0 and (": " .. M.reported[1]) or "")
 info("client messages %d, server messages %d; kills %d, spawns %d, character deaths %d", #sent_c, #sent_s, ply.kills,
     ply.spawns, R.deaths)

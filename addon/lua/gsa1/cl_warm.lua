@@ -184,7 +184,7 @@ end
 -- queues a character's warm-up (at its creation, and again when the material settings change)
 function W.Start(C)
     -- 0.9.9: no census for "?": as with the pre-warm off (Super Sonic's census is not its own)
-    if not C or C.question or not GSA1.cv.prewarm:GetBool() then
+    if not C or C.question or C.skin or not GSA1.cv.prewarm:GetBool() then
         W.total = nil
         W.queue, W.head = { [0] = {}, [1] = {} }, { [0] = 1, [1] = 1 }
         return 0

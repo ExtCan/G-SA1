@@ -40,6 +40,109 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.9e changes: Metal Sonic, Eggman and Tikal as followers, a wall that stops you
+
+From the owner's test of 0.9.9d and their ideas. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod and against the Dreamcast's own code. Two independent checks found no reason to hold it back from a test, and their remaining points are below.
+
+* **Metal Sonic is playable.** He's on the disc as a 25-part figure in a Mystic Ruins file, next to what looks like the base leading to Final Egg. His skeleton isn't Sonic's, so a table copies each Sonic part's motion onto the matching part of his. Sonic's own game code runs underneath, byte for byte the same, and only the picture changes. Running uses Super Sonic's flying, a slow walk stays Sonic's walk, and he has no voice lines. Press his button under Quick spawn on the Character page, or on Character Select hover Sonic and press Up. He's one small entry in the code, as a start for mod support later.
+* **Eggman and Tikal can be followers.** Spawner, console and the Followers page. Nothing's repaired, so they follow, jump and catch up, but they have no flight or glide, and they don't play emotes with you.
+* **Character Select's last slot always plays Super Sonic (Vs. Perfect Chaos).**
+* **The wall you glided through has collision again.** G-SA1's clean-up of thin walls could delete a wall's only collision face where it met another solid. On your wall at (1706 -1024 361) the first surface behind what you see was 128 units back, and it's now inside the wall. The first time you load each map, its collision cache rebuilds once.
+* **Photo mode repairs:** a teleport plus a respawn in one freeze no longer leaves a stray world behind, and someone in photo mode can't hit anyone. K in multiplayer freezes only the person using it, as you ruled.
+* **The sun shadow:** no fault found. With the slider at 0, this map's own colour (187, 187, 187) can darken the ground by 27 % at most, by the same formula as the engine's shadows. Your frozen shots do have that faint shadow under the feet. The log and the Rendering page now say what the darkness is.
+
+**Known limits:**
+
+* The wall fix is a large net gain, not a perfect one. Across 20 maps, in the game's own code at 3,348 spots, 117 places you could wrongly cross before are closed, but 14 new ones opened, 9 of them on a plain run. Some walls' collision also moved deeper, up to 48 units behind what you see on one map, so characters can sink further into those. If a wall misbehaves, type `!note`.
+* Metal Sonic's first stand after spawning has his toes about 2 units under the ground. After a run and a stop he stands clear.
+* Metal Sonic can't turn Super, because the disc has no golden model. No shoes show on him, and Sonic's Light Speed glow isn't drawn on him. His hands and feet are stiff, because he has no fingers or toes that move. A held prop may sit a little away from his hand. A wheel emote of a running row holds one flying pose instead of running on the spot.
+* Footsteps may keep sounding while he flies, because the world underneath is still running Sonic.
+* Tikal hangs in the air when the follower AI gives her its flying button, until you move away. Underwater, the air timer runs on Eggman and Tikal, and what happens when it ends isn't tested.
+* Metal Sonic on the faster drawing path has no test here.
+
+### The owner checklist
+
+1. Character page, under Quick spawn: press Metal Sonic. Blue chrome, red eyes, red and white shoes. How does the chrome look to you?
+2. Stand still after he lands. His toes sit about 2 units under the ground in this first stand: say if that needs fixing. He taps his foot if you wait.
+3. Walk slowly: Sonic's walk. Push the stick further: he flies like Super Sonic. Speed up and slow down: no jump in his pose. Stop: he stands again, no pop.
+4. Jump and spin dash: a blue chrome ball.
+5. Spin dash dust, ring sparkles, hit flash: as Sonic's. Light Speed charge: sparks and streaks, no glowing body shape.
+6. Idle a long time, get hurt, jump: no voice lines, no grunts. If a jump sound sounds like a voice, say which.
+7. Jump, spin, rings and springs all still sound. Do footsteps while flying bother you?
+8. Take a hit: he blinks and drops rings. Rings, lives and HUD as Sonic.
+9. Light Speed Shoes and Crystal Ring ticked: Light Speed Dash works.
+10. G key: only a message.
+11. Emote wheel: Sonic's list plays on him, with no voices. Walk near an NPC: his head turns.
+12. A follower Tails still follows him. Photo mode, sun shadow and the faster drawing all show him.
+13. Character Select, on Sonic: Up on the D-pad, the Up key or W: Sonic becomes Metal Sonic on the spot, textured. Up again: Sonic. Pick: you play him. Open the screen while you're him: it opens on him. Move to Tails and press Up: nothing new. Start and Escape as before.
+14. Sonic and the Super Sonics as before, and Sonic still speaks.
+15. Spawn Eggman and Tikal as followers: from the spawner, `gsa1_follower_spawn eggman`, and the Followers page. Run, jump, stop. What do they do over a pit? Does Tikal hang in the air?
+16. Character Select's last slot: Super Sonic (Vs. Perfect Chaos), every time.
+17. The wall: on `gm_construct_remaster_csm`, glide into the building's wall near (1706 -1024 361): you stop at the wall. Tell me if any wall now stops you where you could pass before, or lets you through where it didn't.
+18. Photo mode: a teleport arriving during a freeze, then respawn: you end at the spawn point, with nothing stuck.
+19. **A shot with the slider at 0, next to a prop in full sun:** that settles whether the shadow matches the engine's.
+
+### The new options (Q menu > Options > G-SA1 > Character)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_metal_fly` | 1 | "Metal Sonic: run with Super Sonic's flying" |
+| `gsa1_metal_walk_fly` | 0 | "... and when walking" |
+| `gsa1_metal_voice` | 0 | "Metal Sonic: speak with Sonic's voice" |
+| `gsa1_charselect_skins` | 1 | "Up on Sonic switches to Metal Sonic" |
+
+## What 0.9.9d changes: photo mode, Knuckles in the light on walls, a shorter shadow fade
+
+From the owner's test of 0.9.9c and their ideas. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod and against the Dreamcast's own code. Two independent checks found no reason to hold it back from a test.
+
+* **Photo mode.** Press K, or use the Photo mode page, and your character and followers freeze mid-pose, then fly a free camera to line up the shot.
+  * **The camera:** WASD, Space and Ctrl fly. Shift is fast, Alt is slow. The wheel zooms, right mouse tilts and zooms, R resets.
+  * **To leave:** K or Escape, or the Leave button. You carry on from the same moment, with nothing changed.
+  * **Untouchable:** nothing hurts, moves or wakes you while frozen, and nothing that happened lands afterwards.
+  * **Freeze the world too:** a box, off by default, single player only. Props, NPCs and NextBots stop as well. Doors, lifts, animated props, particles and other addons' Lua keep going, and the page says if anything couldn't be stopped.
+  * **Frame rate:** with the 99 around it rises only a little, and the log says by how much at each freeze.
+  * Controlling other characters and custom animations are planned for 1.0.0.
+* **Knuckles no longer turns black on walls.** You measured it: the game took his light from inside the wall, which is 0 0 0, where the air by his body reads 0.13 0.24 0.38. The light now comes from the middle of the body. A character standing upright gets exactly the same numbers as before. A box on the Rendering page brings the old behaviour back.
+* **The sun shadow's edge at a shade line is shorter.** About half as wide in general, with no new questions to the engine and none of the flashing a shorter edge could have caused: the shadow's rows now stay fixed on the ground. On a straight-down sun it's about 12 to 18 units along the map's axes, and up to about 29 on lines at an angle. On a slanted sun it stays wider, about 24 to 30, and on a low sun up to about 37, barely better than before.
+
+**Known limits:**
+
+* In multiplayer, anyone playing as a character can step out of a fight with K. It follows what you asked for, and can be limited to admins if you prefer. With only followers and no character, K freezes them and you can still be hurt.
+* A modified client in multiplayer could stay untouchable while hitting others. Decide this with the point above before the public release.
+* A teleport that arrives during a freeze, plus a respawn in that same freeze, can leave a stray character world behind. I'll fix this before the public release.
+* The shadow's edge can lie up to about 17 units from the true shade line, and slanted lines can look a little wavy.
+* In the one moment before the server hears of the freeze, damage in the health modes can still land.
+
+### The owner checklist
+
+1. Press K: everyone freezes. Fly around and take an F12 and an F5 shot with the sun shadow on: both normal, not black. Leave with K, then again with Escape: the same pose carries on, with no jump. Your jukebox keeps playing, and a box can hold it.
+2. Freeze near NPCs and let them shoot, punch or blow you up, and drown or fall if you can, in each damage mode. Nothing happens, and nothing lands when you leave. Does your health stay the same?
+3. Get hit with no rings and press K during the death animation: it stops. Press K again: it finishes, and you respawn after the usual wait.
+4. Stand on a teleporter that switches on while frozen: nothing moves until you leave, then you're taken there.
+5. World box off: props fall and NPCs walk while you're frozen. World box on: freeze with props falling, an NPC walking and a NextBot chasing. Do they stop in mid-air, and carry on at the same speed when you leave? Doors and lifts not stopping is expected.
+6. Untick the world box while frozen: the world goes on, you stay frozen. Tick it: it stops.
+7. Leave each way with the world box on: K, Escape, the command, the button. Each time, props and NPCs go on. Then change map while frozen with it on: on the new map, do props fall and NPCs move? Sandbox's own "Disable AI" and physics speed should be as you left them.
+8. Freeze with the fishing camera, with Character Select's key, and with a follower being added or removed. Nothing should get stuck.
+9. Knuckles on the wall at `gm_construct_remaster_csm` (1283 -1032 86) and elsewhere: no black silhouette, about as bright as on the floor in the same shade. Untick "Take the light at the middle of the body": black again. Tick it: back at once. Followers on walls too.
+10. Standing on flat ground: no change in brightness.
+11. Walk into and out of shade, as in your screenshots: is the shadow's edge short enough? Does it line up with the map's shade? Tell me on which maps it bothers you.
+12. Stand still and walk slowly along a shade line: nothing flickers.
+13. A wide pose (Knuckles gliding, an emote with arms out) in full sun: is the outer rim of the shadow cut off?
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_photo_key` | 21 (K) | Photo mode: "Photo mode key" |
+| `gsa1_photo_pad` | 0 (none) | Photo mode: "Controller button" |
+| `gsa1_photo_world` | 0 | Photo mode: "Freeze the world too (single player)" |
+| `gsa1_photo_hud` | 1 | Photo mode: "Hide the HUD while frozen" |
+| `gsa1_photo_shadows` | 0 | Photo mode: "Hide shadows while frozen" |
+| `gsa1_photo_jukebox` | 1 | Photo mode: "The jukebox keeps playing while frozen" |
+| `gsa1_photo_speed` | 200 (20-2000) | Photo mode: "Camera speed" |
+| `gsa1_photo_hint` | 1 | Photo mode: "Show the reminder" |
+| `gsa1_light_body` | 1 | Rendering: "Take the light at the middle of the body" |
+
 ## What 0.9.9c changes: the sun shadow only where the sun reaches, a camera that stays out of the wall
 
 From the owner's test of 0.9.9b. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod, against the map files themselves, and against the Dreamcast's own code. Independent checks found real faults in the earlier tries, which were fixed; the last check found no reason to hold this back from a test, and its remaining points are below.
@@ -164,23 +267,19 @@ From the owner's test of 0.9.9. **None of this has been seen in the real game ye
 | `gsa1_sunshadow_followers` | 3 (0-8) | Rendering: "Followers with a sun shadow (the nearest; 0 = none)" |
 | `gsa1_follower_fix_stand` | 1 | Followers > Fixes: a stopped follower goes to its stand and idle |
 
-## What 0.9.9 changes: followers that keep up and stand apart, Eggman, Tikal and the "?"
+## What 0.9.9 changes: followers that keep up and stand apart, Eggman and Tikal
 
 From the owner's test of 0.9.8. **None of this has been seen in the real game yet**: every test here runs against a stand-in for Garry's Mod and against Dreamcast references. Nothing planned was dropped.
 
 * **Followers can keep up.** Q menu > Options > G-SA1 > **Followers**, a slider, "Speed when catching up". It starts at 1, the game's own speed, where no kind keeps up with Sonic at full speed. Above 1, a follower near you runs at the game's speed, and one behind you may run up to that many times its own speed until it has caught up. **A plain multiplier failed in testing** (Knuckles lurched between almost stopped and very fast, and E-102 circled a standing leader for ever), so it only applies while a follower is behind. To stay with Sonic at full speed: Sonic 1.2, Knuckles 1.3, Tails 1.5, E-102 2.5, Big 3.5, Amy 4. Slow characters' legs move very fast at those values. Jump height, drowning and timers stay the game's.
 * **Followers stand apart.** Each has its own spot around you, and a slider, "Room between followers", sets how far apart. They stop there by the game's own steering. One follower alone is exactly as before, and at 0 they stack as before. While running they can still pass through each other for a moment, because each is alone in its own world. A spot beyond a ledge makes a follower fall once.
-* **Followers emote with you** (a box, on). Play a slot of the wheel, and each follower plays that page and slot of its own wheel. An empty slot does nothing and says nothing. A follower on its way joins when it arrives, and your emote ending ends theirs. Faces don't go with it. As Eggman, Tikal or "?" you have no wheel, so nothing starts.
 * **Heads turn to more things.** The Head look page has two new boxes, both off: "Physics props" and "Things you can use". A person always wins over a prop, and rings, Item Boxes and Board boxes are never looked at. Static props are part of the map, so heads can never turn to those.
-* **The "?" on Character Select is a clean gold.** The disc's own code draws a texture with the words "Player Select" as a reflection on it, so the small letters repeat over every bend. The texture coordinates and clamping are right, so this isn't a tiling fault as such. The disc has an unused gold texture in the same archive, which is now the default. The game's own look is one choice away on the Character page.
 * **Dr. Eggman and Tikal are playable**, on the Character page, in quick spawn and in the menubar. They're as broken as the game's code is, and nothing is repaired: a hit does nothing, Eggman has no jump pose and no action, Tikal uses one run motion for everything, and their lives icon is Sonic's. When their air runs out they just stand there, then come back about 4 seconds later because the game asks for its restart. On a real Dreamcast either one hangs before the stage loads, so this was never reachable there without a cheat. **The debug button** works on both: H on the keyboard, Y on the controller, and both can be changed. The stick moves them with no ground and no gravity, hold the button with the stick forward or back to fly up or down, jump leaves it, and action goes back to your spawn point (on a real Dreamcast that button crashes the game). They have no emotes, faces, head look or boards and can't be followers, but a follower can follow them.
-* **"?" is its own joke character.** A spinning gold question mark, its foot on the ground, with Super Sonic's (Vs. Perfect Chaos) moves and sounds and no golden Sonic or aura. It has its own rings, drain, water and spin options and shares nothing with either Super Sonic. Picking "?" on Character Select now gives you this character; a setting points that slot back at Super Sonic, and both Super Sonics stay on the Character page. A saved "played last" setting moves over once, and a later choice stays.
 * **The log:** dragging a slider writes one line about a second after you let go, not one per tick.
 * **Game code:** Eggman's 11 functions are decompiled (8 matching, 3 functionally checked); libsa1 is now 0.5.0.
 
-**How it was checked:** all 78 strict replays stay bit-exact, four of them new for Eggman and Tikal against the Dreamcast's own code; 84 test programs pass. The "?" world matched plain Super Sonic on every state, event and arena byte over 2,000 pairs. An independent check passed with no fails.
 
-**Known limits:** followers still don't collide with each other. A "?" or Eggman or Tikal can't be a follower. Calling followers back as these three is the Followers page's button, since there's no wheel. What the server's player and your followers do when you fly far off with the debug button isn't known yet.
+**Known limits:** followers still don't collide with each other. Calling followers back as these three is the Followers page's button, since there's no wheel. What the server's player and your followers do when you fly far off with the debug button isn't known yet.
 
 ### The owner checklist
 
@@ -215,14 +314,10 @@ From the owner's test of 0.9.8. **None of this has been seen in the real game ye
 18. Rings, Item Boxes and Board boxes are never looked at. Your followers do all this too.
 19. On a map with many props, note the fps with the boxes on and off, and send the log (its "head look" line says how many it holds: never more than 96).
 
-**The "?" on Character Select**
 
-20. Go to the "?": one smooth gold reflection with no small repeating pattern, on Character Select and as the character. "Player Select" in the circle still says that. **If it still repeats, say so.**
-21. Character page, "The question mark's texture", second choice: white with yellow streaks, the words "Player Select" as a reflection: what the game's own code picks.
 
 **Dr. Eggman and Tikal**
 
-22. Character page: "Dr. Eggman", "Tikal" and "?" in the list, in quick spawn and in the menubar. Each comes up where you stand. One hitch at the first draw of each is expected.
 23. As Eggman: run, jump. He has no jump pose: he stands while he flies. Action does nothing. That is the game's own. He has a few plain untextured parts: the model's own, so say if they look wrong.
 24. As Tikal: run, jump. The same run motion in the air. Action in the air: she stops and drops. The game's own.
 25. Press H (or Y on the controller): the debug button. The stick moves them with no ground and no gravity. Hold it with the stick forward: up. Jump: out, they fall. Both keys can be changed on the Character page.
@@ -230,15 +325,9 @@ From the owner's test of 0.9.8. **None of this has been seen in the real game ye
 27. Get shot or hit by an NPC as either of them: nothing happens, no rings lost. The game's own. Die as a Garry's Mod player: Tikal stands still in her drop pose until she comes back; Eggman plays nothing at all and can even keep walking for those 2 seconds. The game's own.
 28. Walk into deep water as either: they walk on the bottom, and the air countdown runs with its music. When the air runs out they just stand there, no pose and no voice, and can still walk; about 4 seconds later they come back, because the game asks for its restart. The game's own. **Say if you want otherwise.**
 29. Their lives icon on the HUD is Sonic's. The game's own.
-30. Spawn a Tails follower as Tikal, then as Eggman: it follows. Eggman and Tikal cannot be followers: the page says why. With followers out as these two or "?", calling them back is the Followers page's button: there is no wheel to do it from. Fly far off with the debug button: what the server's player and the followers do there is unknown (UNVERIFIED): **say what you see.**
 
-**"?"**
 
-31. Character page: "?": a spinning gold "?" as tall as about one and a third Sonics, its foot on the ground, moving like Super Sonic: run, jump, homing, the air stop. No golden Sonic, no aura. Round shadow under it. With the sun shadow on: a "?" shaped shadow.
 32. Rings stay at 50 and it stays as it is. Tick "lose a ring every second": they drain, nothing else changes.
-33. Tick and untick Sonic's upgrades and every Super Sonic option as "?": it is not re-created, nothing changes. Press G: nothing. The wheel key says it has no emotes, and the Emote wheel page does not open on Super Sonic's list.
-34. Character Select's "?" slot gives you the "?" character. Set the slot to "The Super Sonic you played last": it gives the Super Sonic you last played. Restart Garry's Mod: your choice stays.
-35. Character Select's "?" and the character look the same; `gsa1_charselect_qmark` changes both, at once.
 
 **The log**
 
@@ -253,15 +342,9 @@ From the owner's test of 0.9.8. **None of this has been seen in the real game ye
 | `gsa1_follower_emotes` | 1 | Followers: "Followers play the same slot of their own wheel when you play one from the emote wheel" |
 | `gsa1_look_props` | 0 | Head look: "Physics props" |
 | `gsa1_look_usable` | 0 | Head look: "Things you can use (doors, buttons, vehicles)" |
-| `gsa1_charselect_qmark` | 1 | Character: "The question mark's texture" |
-| `gsa1_charselect_super` | "question" | Character: "The ? slot plays" |
 | `gsa1_debug_button` | 1 | Character: "Eggman and Tikal: the game's debug button" |
 | `gsa1_debug_key` | 18 (H) | Character: a key binder and "No key" |
 | `gsa1_debug_pad` | 0x8000 (Y) | Character: a controller button |
-| `gsa1_question_rings` | 50 (0-99) | Character: "The ?: start with N rings" |
-| `gsa1_question_drain` | 0 | Character: "The ?: lose a ring every second" |
-| `gsa1_question_water` | 1 | Character: "The ?: runs on water" |
-| `gsa1_question_spin` | 1 | Character: "The ?: spins as on the character menu" |
 
 ## What 0.9.8 changes: followers, the fishing camera, the game's own Character Select
 
@@ -335,7 +418,6 @@ The old 0.9.6 and 0.9.7 are one update now. **All of this is new and none of it 
 * It looks like the Dreamcast's; Left / Right, stick, mouse wheel turn the ring with its sound; the character stands in the circle with its idle; "Choose Your Buddy!" plays once, with no double music with game music on. It's lit by G-SA1, not the game's palette.
 * A, Enter or a click: the pose and the voice; after 5 s (or a second A) you are that character where you stood, with your ticked upgrades; your followers appear behind you.
 * B, Backspace or right click: back. Start picks. Escape closes at once.
-* Super Sonic: the spinning "?"; it plays the one you played last.
 * The jukebox resumes where it was. Q menu > Character still works. At 3440 x 1440: centred, sky to the edges.
 * If the screen ever faults: the simple chooser appears, the log says why.
 * Open it while riding a board: the board rides on with no input until it stops.
@@ -397,7 +479,6 @@ The old 0.9.6 and 0.9.7 are one update now. **All of this is new and none of it 
 | `gsa1_charselect_music` | 1 | Character: check "Play Choose Your Buddy!" |
 | `gsa1_charselect_file` | 0 | Character: check "Show File and Clear in the bottom bar" |
 | `gsa1_charselect_wide` | 0 | Character: combo "Wide screens": 4:3 with the sky continued / stretched |
-| `gsa1_charselect_super` | "last" | Character: combo "The Super Sonic slot plays": the one you played last / Vs. Perfect Chaos / General Gameplay |
 | `gsa1_native_mesh` | 0 | Rendering: check "Draw with the module's own mesh path (faster; off = the Lua path)" |
 
 ## What 0.9.5b changes: the sun shadow moves as smoothly as the character

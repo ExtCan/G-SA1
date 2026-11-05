@@ -497,6 +497,8 @@ local function update(now)
     if not cv.background:GetBool() then
         paused = game_paused() or (cv_focus ~= nil and cv_focus:GetBool() and not system.HasFocus())
     end
+    -- (0.9.9d: photo mode's box "The jukebox keeps playing while frozen" off holds it, whatever the box above says)
+    paused = paused or (GSA1.PhotoHoldsMusic ~= nil and GSA1.PhotoHoldsMusic())
     local music = 1
     if cv.gmod_music:GetBool() and cv_music then music = math.Clamp(cv_music:GetFloat(), 0, 1) end
     -- the game's jingles (J1): faded out and held (or lowered) while the game plays one

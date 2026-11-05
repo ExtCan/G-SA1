@@ -320,6 +320,7 @@ W.MOUSE_LEFT, W.MOUSE_RIGHT = 107, 108
 W.COLOURS = {
     sonic = { 35, 110, 255 }, tails = { 250, 150, 30 }, knuckles = { 230, 45, 45 }, amy = { 245, 110, 180 },
     gamma = { 150, 160, 175 }, big = { 150, 90, 220 }, supersonic = { 255, 196, 40 }, supersonic_general = { 255, 196, 40 },
+    metalsonic = { 60, 90, 200 },
 }
 -- (0.9.9: Dr. Eggman, Tikal and "?" have no wheel: nowheel, sh_config.lua)
 function W.Entries()
@@ -376,6 +377,17 @@ W.DEFAULTS = {
         d("a133", "ss_move2"), d("a3", "s_wait3"), d("a5", "s_wait_a1"), d("a81", "s_furatsuki0") },
 }
 W.DEFAULTS.supersonic_general = W.DEFAULTS.supersonic
+-- 0.9.9f: Metal Sonic plays Sonic's rows (sadc docs/research/metal099e.md 4.6); he has no face, so none of the faces
+do
+    local own = { }
+    for i, it in ipairs(W.DEFAULTS.sonic) do
+        local c = {}
+        for k, v in pairs(it) do c[k] = v end
+        c.face = nil
+        own[i] = c
+    end
+    W.DEFAULTS.metalsonic = own
+end
 
 -- a wheel: { pages = { [1..4] = { [1..8] = slot } }, centre = { face = name | nil } }; slot = { body = "a75" | "x3" | "x" |
 -- "stop" | nil, name = internal name | nil, face = name | nil, loop = true | nil, nohold = true | nil (round 0.9.4b: "Hold

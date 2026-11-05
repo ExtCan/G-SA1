@@ -151,7 +151,7 @@ end
 F.Const = const
 
 -- 1. the characters' faces ------------------------------------------------------------------------------------------------
-F.SHORT = { gamma = "E-102", supersonic = "Super Sonic", supersonic_general = "Super Sonic", question = "?" }
+F.SHORT = { gamma = "E-102", supersonic = "Super Sonic", supersonic_general = "Super Sonic", question = "?", metalsonic = "Metal Sonic" }
 local function entry_of(name)
     if name == nil or name == "" then return nil end
     local kind, def = GSA1.KindByName(name)
@@ -170,6 +170,7 @@ function F.NoFaceText(entry_name)
     if def.name == "eggman" then return "Eggman has no face in the game" end
     if def.name == "tikal" then return "Tikal's cutscene face is not wired up" end
     if def.form == "question" then return "The ? has no face" end
+    if def.form == "skin" then return string.format("%s has no face", def.title or "?") end
     if kind == 8 or def.form == "general" then return "Super Sonic has no cutscene face in the game" end
     if not F.FACE_KINDS[kind] then return F.Title(entry_name) .. " has no face in G-SA1" end
     return nil
@@ -1799,7 +1800,7 @@ local function maker(panel)
     local ui = {}
     F.ui = ui
     local cc = panel:ComboBox("Character")
-    for _, d in ipairs(GSA1.CHARACTERS) do cc:AddChoice(d.title, d.name, d.name == E.entry) end
+    for _, d in ipairs(GSA1.ListedCharacters()) do cc:AddChoice(d.title, d.name, d.name == E.entry) end
     ui.character = cc
     ui.why = panel:Help("")
     local ex = vgui.Create("DListView")

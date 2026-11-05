@@ -10,8 +10,8 @@ GSA1.Followers = GSA1.Followers or {}
 local Fo = GSA1.Followers
 
 Fo.NEEDS = { feature = "follower", version = 1, module = "0.9.8" }
--- Tails first (14.2), then the bring-up order of libsa1's kinds
-Fo.KIND_ORDER = { 2, 0, 3, 6, 5, 7 }
+-- Tails first (14.2), then the bring-up order of libsa1's kinds; 0.9.9e (the owner, rounds plan 14.1bc): Dr. Eggman and Tikal, nothing repaired (Fo.PLAYABLE_NOTE)
+Fo.KIND_ORDER = { 2, 0, 3, 6, 5, 7, 1, 4 }
 Fo.KINDS = {
     [0] = { name = "sonic", title = "Sonic", letter = "S" },
     [2] = { name = "tails", title = "Tails", letter = "T" },
@@ -19,7 +19,13 @@ Fo.KINDS = {
     [5] = { name = "amy", title = "Amy", letter = "A" },
     [6] = { name = "gamma", title = "E-102 Gamma", letter = "E" },
     [7] = { name = "big", title = "Big", letter = "B" },
+    [1] = { name = "eggman", title = "Dr. Eggman", letter = "D" },
+    [4] = { name = "tikal", title = "Tikal", letter = "T" },
 }
+-- what they do, on the page: libsa1's tests/follower_test.c case FPL measured it, their code in the game has nothing for the follower AI's orders
+Fo.PLAYABLE_NOTE = "Dr. Eggman and Tikal as followers: their own code, nothing repaired. They run after you and jump, but they have no flight or glide: when they drop in from above the camera they just fall. "
+    .. "Tikal takes the follower code's flying button for her debug button, so after a drop-in she can hang in the air where she is until you move away. A hit does nothing to them. Their air timer still runs under water, but their code has no drown: "
+    .. "when it ends they just stand there. Neither plays an emote, turns their head or rides a board."
 Fo.BOARD_SLOTS = 15                     -- the board messages' u4 slot: 1 .. 15 (a 16th boards with remove = true)
 Fo.EGG_MAX, Fo.NORMAL_MAX = 99, 8       -- made with ignore_cap at most; normal ones at most (4.14)
 Fo.BEHIND = 40                          -- HU behind its leader (the game's mode 0 places it 10 units behind)
@@ -46,7 +52,7 @@ Fo.cv = Fo.cv or {}
 local cv = Fo.cv
 cv.on = GSA1.ConVar("gsa1_follower", 1, "Followers: 0 = none can be made and yours are removed", 0, 1)
 cv.kind = GSA1.ConVar("gsa1_follower_kind", 2, "The character the Spawn button makes (2 Tails, 0 Sonic, 3 Knuckles, 6 E-102, "
-    .. "5 Amy, 7 Big)", 0, 7)
+    .. "5 Amy, 7 Big, 1 Dr. Eggman, 4 Tikal)", 0, 7)
 cv.max = GSA1.ConVar("gsa1_follower_max", 3, "Most followers at once (each is a whole game, about 21 MB); lowering it removes "
     .. "the newest", 1, Fo.NORMAL_MAX)
 cv.target = GSA1.ConVar("gsa1_follower_target", 0, "New followers follow: 0 me, 1 the nearest player, 2 my last follower, 3 what "

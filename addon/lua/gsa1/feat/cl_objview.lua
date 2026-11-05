@@ -653,7 +653,7 @@ function V.Think()
     end
     if any then V.lastGone = now end
     if (any or (V.lastGone and now - V.lastGone < V.TICK_AFTER)) and gsa1.PreviewTick then
-        local ok, err, code = gsa1.PreviewTick(FrameTime())
+        local ok, err, code = gsa1.PreviewTick((GSA1.PhotoFrozen and GSA1.PhotoFrozen()) and 0 or FrameTime())
         if not ok and code == "fault" then V.Fault(err) end
     end
 end

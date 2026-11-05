@@ -68,6 +68,10 @@ public:
     sa1_status open(Session &se, int32_t slot, int32_t language, bool dialog, std::string &err);
     void close();
     bool is_open() const { return fe_ != nullptr; }
+#if defined(SA1_API_SKIN)
+    // 0.9.9f (sa1_frontend_set_skin; nullptr: Sonic): voiceless: slot 0's voices stay out of the mixer while it is on (metal099e.md 4.5)
+    sa1_status set_skin(const sa1_skin_desc *skin, bool voiceless, std::string &err);
+#endif
     // whole frames of 1/60 s for dt (libsa1 keeps the rest; at most 8); buttons: SA1_FRONTEND_B_*
     sa1_status tick(float dt, float sx, float sy, uint32_t buttons, uint32_t &frames, std::string &err);
     sa1_status state(sa1_frontend_state &out, std::string &err);
@@ -88,6 +92,7 @@ private:
     const void *ctx_ = nullptr;
     sa1_context *live_ctx_ = nullptr;
     sa1_frontend *fe_ = nullptr;
+    bool skin_on_ = false, skin_voiceless_ = false;
     Character holder_;
     int32_t render_kind_ = -1;
     bool rendered_ = false;

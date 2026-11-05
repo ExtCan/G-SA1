@@ -285,7 +285,7 @@ end
 local function fclear() FM.calls = {} end
 local function is_vec(v) return type(v) == "table" and type(v.x) == "number" and type(v.y) == "number" and type(v.z) == "number" end
 local create0 = G.Create
-local KINDS_OK = { [0] = true, [2] = true, [3] = true, [5] = true, [6] = true, [7] = true }
+local KINDS_OK = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true }
 local OPT_TYPES = { upgrades = "table", objects = "number", sounds = "boolean", seed = "number", fix_view = "boolean", fix_respawn = "boolean" }
 function G.FollowerKinds(out)
     out = out or {}
@@ -775,7 +775,7 @@ do
         bound.gsa1_follower_fix_stand == "Followers that stop go to their stand and idle",
         "the three rows of 0.9.9 on the page, with their words")
     check(string.find(alltext, "Sonic 1.2, Knuckles 1.3, Tails 1.5, E-102 2.5, Big 3.5, Amy 4", 1, true) ~= nil, "the speed row's help names each kind's value")
-    check(string.find(alltext, "Dr. Eggman, Tikal and ? have no wheel: use the button Call them back to me, or gsa1_follower_call", 1, true) ~= nil,
+    check(string.find(alltext, "As a character with no wheel, such as Dr. Eggman or Tikal: use the button Call them back to me, or gsa1_follower_call", 1, true) ~= nil,
         "the call-back help says what to use with no wheel (review R99.18)")
     check(string.find(alltext, "a follower's emote also pauses", 1, true) ~= nil, "the fix's help says what it does to a follower's emote (5.9)")
     -- the buttons
@@ -791,7 +791,7 @@ do
     for n in pairs(cs or {}) do names[#names + 1] = n end
     table.sort(names)
     local T = cs and cs.gsa1_follower_tails
-    check(#names == 6 and T and T.GSA1FollowerKind == 2 and T.Spawnable and T.Category == "G-SA1" and T.DisableDuplicator and
+    check(#names == 8 and cs.gsa1_follower_eggman.GSA1FollowerKind == 1 and cs.gsa1_follower_tikal.GSA1FollowerKind == 4 and T and T.GSA1FollowerKind == 2 and T.Spawnable and T.Category == "G-SA1" and T.DisableDuplicator and
         T.IconOverride == "entities/gsa1_follower_tails.png" and classes_s and classes_s.gsa1_follower_big.GSA1FollowerKind == 7,
         "one spawner class per kind, on both realms: %s", table.concat(names, " "))
     check(host_read(string.gsub(M.root, "lua$", "") .. "materials/entities/gsa1_follower_tails.png") ~= nil and
@@ -2710,6 +2710,28 @@ do
     FM.estate[C.id] = 0
     frames(2)
 
+    -- 0.9.9e: a follower with no wheel (Dr. Eggman, Tikal): your emote does not reach it, no error, the others play on
+    do
+        FM.kinds[1], FM.kinds[4] = true, true
+        local keepMax = cv.max:GetString()
+        cv.max:SetString("8")
+        local ok1, E1 = GSA1.SpawnFollower(1, { why = "a test" })
+        local ok4, E4 = GSA1.SpawnFollower("tikal", { why = "a test" })
+        check(ok1 == true and ok4 == true and E1.kind == 1 and E4.kind == 4 and E1.def.nowheel and E4.def.nowheel, "0.9.9e: Dr. Eggman and Tikal followers made, each with its own entry (%s, %s)", tostring(ok1), tostring(ok4))
+        frames(2)
+        fclear()
+        play(1, 1)
+        frames(15)
+        check(ok1 == true and #emotes(E1) == 0 and #emotes(E4) == 0 and #emotes(K) == 1, "0.9.9e: your emote goes to no follower with no wheel, Knuckles plays his (%d %d %d)", #emotes(E1), #emotes(E4), #emotes(K))
+        check(E1.slot == nil and E4.slot == nil, "0.9.9e: no board slot for them: only Sonic and Tails ride")
+        FM.estate[C.id] = 0
+        frames(2)
+        if ok1 == true then Fo.Remove(E1, "a test") end
+        if ok4 == true then Fo.Remove(E4, "a test") end
+        cv.max:SetString(keepMax)
+        frames(2)
+    end
+
     -- 2.4 C3: gsa1_emote and a catalogue row are page 0: nothing maps; the page's Play is a slot
     fclear()
     RunConsoleCommand("gsa1_emote", "a75")
@@ -2732,6 +2754,7 @@ do
 
     -- review R99.18, 2.3 row 6: a leader with no wheel. W.Open refuses, nothing starts, no follower is asked. Real entries when the character list has them
     local names = {}
+    RunConsoleCommand("iwonderwhotheseventhcharacteris")     -- (0.9.9e: the "?" is an unlockable)
     for _, nm in ipairs({ "eggman", "tikal", "question" }) do
         local d = GSA1.CharacterByName and GSA1.CharacterByName(nm)
         if d and d.nowheel then names[#names + 1] = nm end

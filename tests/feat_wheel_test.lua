@@ -1673,7 +1673,7 @@ else
     end
     local unresolved, notplayed, total = {}, {}, 0
     for _, c in ipairs(W.Entries()) do      -- (0.9.9: Dr. Eggman, Tikal and "?" have no wheel)
-        local l = disc[c.name]
+        local l = disc[c.name == "metalsonic" and "sonic" or c.name]     -- (0.9.9f: he plays Sonic's list)
         local d = W.DEFAULTS[c.name]
         for s = 1, 8 do
             local o = d and d[s]
@@ -1688,7 +1688,7 @@ else
             end
         end
     end
-    check(#unresolved == 0 and #notplayed == 0 and total == 64, "every default slot of the 8 wheels (%d) resolves by name to "
+    check(#unresolved == 0 and #notplayed == 0 and total == 72, "every default slot of the 9 wheels (%d) resolves by name to "
         .. "an offered entry of its (kind, form) list on the disc that played without a fault%s%s", total,
         #unresolved > 0 and (": unresolved " .. table.concat(unresolved, ", ")) or "",
         #notplayed > 0 and ("; did not play: " .. table.concat(notplayed, ", ")) or "")

@@ -43,6 +43,7 @@
 
 #include "GarrysMod/Lua/Interface.h"
 
+#include "skin_args.hpp"
 #include "../core/frontend.hpp"
 #include "../core/session.hpp"
 #include "../core/util.hpp"
@@ -192,6 +193,31 @@ GSA1_FN(gsa1_frontend_FrontendOpen)
     LUA->PushBool(true);
     return 1;
 }
+
+#if defined(SA1_API_SKIN)
+// 0.9.9f: gsa1.FrontendSkin(desc | nil [, voiceless]) -> true | nil, message, code: the game's slot 0 draws the skin, from the next frame (feat/cl_charselect.lua S.ToggleSkin)
+GSA1_FN(gsa1_frontend_FrontendSkin)
+{
+    gsa1::skinargs::SkinArgs a;
+    const sa1_skin_desc *d = nullptr;
+    std::string err;
+    if (LUA->IsType(1, LT::Table)) {
+        if (!a.read(LUA, absidx(LUA, 1), err)) {
+            return push_nil_msg(LUA, err.c_str(), "bad_argument");
+        }
+        d = &a.d;
+    } else if (!absent(LUA, 1)) {
+        return push_nil_msg(LUA, "FrontendSkin(a skin's table | nil [, voiceless])", "bad_argument");
+    }
+    bool voiceless = LUA->IsType(2, LT::Bool) && LUA->GetBool(2);
+    sa1_status st = g_fe.set_skin(d, voiceless, err);
+    if (st != SA1_OK) {
+        return fail(LUA, st, err);
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+#endif
 
 // gsa1.FrontendClose() -> true
 GSA1_FN(gsa1_frontend_FrontendClose)
@@ -630,6 +656,9 @@ void frontend_close_hook(ILuaBase *)
 const gsa1::FeatureFn k_frontend_fns[] = {
     {"FrontendOpen", gsa1_frontend_FrontendOpen},
     {"FrontendClose", gsa1_frontend_FrontendClose},
+#if defined(SA1_API_SKIN)
+    {"FrontendSkin", gsa1_frontend_FrontendSkin},
+#endif
     {"FrontendTick", gsa1_frontend_FrontendTick},
     {"FrontendState", gsa1_frontend_FrontendState},
     {"FrontendEvents", gsa1_frontend_FrontendEvents},

@@ -242,6 +242,7 @@ end
 local prev_extras = GSA1.CreateExtras
 function S.Extras(kind, how, rings, def, old)
     if GSA1.Question and GSA1.Question.IsDef(def) then return nil end     -- 0.9.9: the "?" has its own options (cl_question.lua)
+    if def and def.form == "skin" then return nil end                     -- 0.9.9f: never Super capable: a Sonic world that can transform is a different world (feat/cl_skins.lua)
     if kind ~= S.KIND and kind ~= S.KIND_SONIC then return nil end
     if not have() then return nil end
     local inf = S.Info()
@@ -406,7 +407,7 @@ end
 
 -- only: nil = all, else one of "speed", "aura", "effects", "anims", "lsd", "voice", "idle", "aura_anim"
 function S.ApplyOptions(C, only)
-    if not C or not C.id or C.question or not have_general() then return 0 end
+    if not C or not C.id or C.noSuper or not have_general() then return 0 end
     if C.kind ~= S.KIND and C.kind ~= S.KIND_SONIC then return 0 end
     local st = S.State(C)
     if not st or not st.capable then return 0 end
@@ -528,6 +529,7 @@ function S.Press(C, how)
     C = C or GSA1.Char
     if not C then return false, "no character" end
     if C.question then return false, "the ? is not a Super Sonic" end
+    if C.noSuper then return false, string.format("%s does not turn Super", C.title or "?") end
     local st = S.State(C)
     local need = cv.need:GetInt()
     local act, why = S.KeyAction(st, need, C.death ~= nil)
@@ -575,7 +577,7 @@ concommand.Add("-gsa1_super", function() S.cmdDown = false end)
 
 hook.Add("GSA1PreTick", "gsa1_super", function(C)
     if not C or not have() then return end
-    if (C.kind ~= S.KIND and C.kind ~= S.KIND_SONIC) or C.question then
+    if (C.kind ~= S.KIND and C.kind ~= S.KIND_SONIC) or C.noSuper then
         S.keyDown = false          -- other characters: the key is not theirs (the command still answers)
         return
     end
@@ -594,7 +596,7 @@ function S.ActionBit()
     return tonumber(gsa1 and gsa1.BUTTON_ACTION) or 2
 end
 function S.Filter(C, buttons)
-    if not C or C.question or (C.kind ~= S.KIND and C.kind ~= S.KIND_SONIC) or not have() then return buttons end
+    if not C or C.noSuper or (C.kind ~= S.KIND and C.kind ~= S.KIND_SONIC) or not have() then return buttons end
     local g = C.gesture
     if not g then
         g = { held = false, masked = false, jumpUsed = false }
@@ -675,7 +677,7 @@ function S.OnForm(C, st)
 end
 
 hook.Add("GSA1PostTick", "gsa1_super", function(C, state, dt)
-    if not C or C.question or not have() then return end
+    if not C or C.noSuper or not have() then return end
     if C.kind ~= S.KIND and C.kind ~= S.KIND_SONIC then return end
     local st = S.State(C)
     if not st then return end
@@ -689,7 +691,7 @@ end)
 -- apply at once, the log. Review RC1: the form of a re-created character was decided by its create extras (S.ExtrasFor:
 -- SA1_SUPER_START / SA1_SUPER_START_NORMAL), so nothing is ordered here; the count of transformations goes over to it.
 hook.Add("GSA1CharacterCreated", "gsa1_super", function(C, how, old)
-    if not C or C.question then return end
+    if not C or C.noSuper then return end
     S.ApplyWarm(C.kind, C)
     if not have() or (C.kind ~= S.KIND and C.kind ~= S.KIND_SONIC) then return end
     C.superForm = false
@@ -745,7 +747,7 @@ local function option_changed(name, which)
         log("%s = %s", name, tostring(new))
         local C = GSA1.Char
         if not C then return end
-        local mine = (which == "vspc" and C.kind == S.KIND and not C.question) or (which == "general" and C.kind == S.KIND_SONIC and
+        local mine = (which == "vspc" and C.kind == S.KIND and not C.noSuper) or (which == "general" and C.kind == S.KIND_SONIC and not C.noSuper and
             (C.superGeneral or S.IsGeneralDef(C.def))) or (which == "sonic" and C.kind == S.KIND_SONIC and
             not S.IsGeneralDef(C.def))
         if mine then
@@ -940,7 +942,7 @@ end
 
 -- the music number the character should have now (nil: none)
 function S.MusicWanted(C)
-    if not C or C.question or not C.superForm or not GSA1.cv.sound:GetBool() then return nil end
+    if not C or C.noSuper or not C.superForm or not GSA1.cv.sound:GetBool() then return nil end
     return S.MusicNumber(cv.music:GetInt(), cv.track:GetInt())
 end
 
@@ -1028,6 +1030,8 @@ function S.MusicUpdate(now)
         paused = FrameTime() == 0 or (game.SinglePlayer() and gui.IsGameUIVisible()) or
             (focus ~= nil and focus:GetBool() and not system.HasFocus())
     end
+    -- (0.9.9d: photo mode's box "The jukebox keeps playing while frozen" off holds it, whatever the box above says)
+    paused = paused or (GSA1.PhotoHoldsMusic ~= nil and GSA1.PhotoHoldsMusic())
     local music = 1
     local smv = GetConVar("snd_musicvolume")
     if pcv.gmod_music:GetBool() and smv then music = math.Clamp(smv:GetFloat(), 0, 1) end
@@ -1116,7 +1120,7 @@ function S.StatusLines()
         S.WhooshText(inf))
     local C = GSA1.Char
     local need = cv.need:GetInt()
-    if C and (C.kind == S.KIND or C.kind == S.KIND_SONIC) and not C.question then
+    if C and (C.kind == S.KIND or C.kind == S.KIND_SONIC) and not C.noSuper then
         local st = S.State(C)
         if st then
             local rings = tonumber(st.rings) or 0
@@ -1135,7 +1139,7 @@ function S.StatusLines()
             end
         end
     elseif C then
-        out[#out + 1] = C.question and "? is a character of its own, not one of these two: nothing on this page applies to it (its options are on the Character page)"
+        out[#out + 1] = C.noSuper and (C.question and "? is a character of its own, not one of these two: nothing on this page applies to it (its options are on the Character page)" or string.format("%s is Sonic's world with another model: he does not turn Super (his options are on the Character page)", C.title or "?"))
             or string.format("%s cannot turn Super (only Sonic)", C.title or "?")
     else
         out[#out + 1] = "no character"
@@ -1287,7 +1291,7 @@ function S.BuildPage(panel)
     panel:CheckBox("Aura whoosh sounds", "gsa1_super_whoosh")
     panel:ControlHelp("The game's swoosh when he goes faster than about 1,700 and 3,100 HU/s (two seconds each, again after "
         .. "slowing down), from the Perfect Chaos stage's sound bank on your disc. It comes with the aura: none while the "
-        .. "General Gameplay aura is off. The character \"?\" keeps Super Sonic's sounds, this one too, under this same switch.")
+        .. "General Gameplay aura is off." .. (GSA1.QuestionUnlocked() and " The character \"?\" keeps Super Sonic's sounds, this one too, under this same switch." or ""))
     local wprev = panel:Button("Preview the whoosh")
     if wprev then wprev.DoClick = function() S.PreviewWhoosh() end end
     panel:CheckBox("Super Sonic's own idle lines while Super", "gsa1_super_idle_by_form")

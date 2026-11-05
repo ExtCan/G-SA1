@@ -327,6 +327,7 @@ function B.KeyRefused(code, skip)
     add("gsa1_interact_key", "the interact key")
     add("gsa1_lift_key", "the lift key")
     add("gsa1_follower_call_key", "the key that calls your followers")
+    add("gsa1_photo_key", "the photo mode key")
     if others[code] then return others[code] end
     if W and W.KeyRefusal then
         local lookup = input and input.LookupBinding

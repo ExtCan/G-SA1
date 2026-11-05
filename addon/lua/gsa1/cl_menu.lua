@@ -156,11 +156,12 @@ local function choice_combo(panel, label, cvname, choices)
 end
 
 local function character_panel(panel)
+    GSA1.characterPanel = panel         -- (0.9.9e: built again when the "?" is unlocked, below)
     panel:ClearControls()
     panel:Help("Play a Sonic Adventure character from your own disc image (the module reads the disc path from its "
         .. "own config file: see the Disc section).")
     local combo = panel:ComboBox("Character", "gsa1_character")
-    for _, c in ipairs(GSA1.CHARACTERS) do
+    for _, c in ipairs(GSA1.ListedCharacters()) do
         combo:AddChoice(c.title, c.name, c.name == GSA1.cv.character:GetString())
     end
     combo.OnSelect = function(_, _, _, data)
@@ -170,7 +171,7 @@ local function character_panel(panel)
     panel:Button("Remove the character", "gsa1_remove")
     panel:Button("Respawn at the spawn point", "gsa1_respawn")
     panel:Help("Quick spawn:")
-    for _, c in ipairs(GSA1.CHARACTERS) do
+    for _, c in ipairs(GSA1.ListedCharacters()) do
         panel:Button(c.title, "gsa1_spawn", c.name)
     end
     panel:Help("Upgrades")
@@ -180,7 +181,7 @@ local function character_panel(panel)
         .. "again when he turns back.")
     -- 0.9.3a (RC4): one block per kind - an entry with a form (Super Sonic (General Gameplay), kind 0) has its kind's
     local shown = {}
-    for _, c in ipairs(GSA1.CHARACTERS) do
+    for _, c in ipairs(GSA1.ListedCharacters()) do
         local ups = (c.form or shown[c.kind]) and {} or GSA1.UpgradesOf(c.kind)
         shown[c.kind] = true
         if #ups > 0 then
@@ -226,6 +227,12 @@ local function character_panel(panel)
         return out
     end)
 end
+
+-- 0.9.9e: the page was built before the unlocking: built again, now with the "?"
+hook.Add("GSA1QuestionUnlocked", "gsa1_menu", function()
+    local p = GSA1.characterPanel
+    if p and (not p.IsValid or p:IsValid()) then character_panel(p) end
+end)
 
 local function camera_panel(panel)
     panel:ClearControls()
@@ -294,6 +301,9 @@ local function rendering_panel(panel)
     panel:ControlHelp("The game runs at 30 frames per second; on: smooth at any frame rate (one game frame behind), "
         .. "off: the game's own frames (cheaper: the meshes are rebuilt 30 times a second only).")
     panel:CheckBox("Map lighting (off = fullbright)", "gsa1_lighting")
+    -- 0.9.9d (the owner: "Knuckles still turns completely black on walls"; cl_render.lua update_lighting)
+    panel:CheckBox("Take the light at the middle of the body", "gsa1_light_body")
+    panel:ControlHelp("Along the character's own up, so a character climbing a wall is lit by the air in front of it, not by the inside of the wall. Standing upright it makes no difference. Off: straight above the feet, as before 0.9.9d.")
     panel:CheckBox("Effects", "gsa1_effects")
     panel:ControlHelp("Spin dash ball and trail, punches, E-102's targeting lines, sprites.")
     panel:CheckBox("Character shadows (the game's blob)", "gsa1_shadow")

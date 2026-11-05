@@ -116,6 +116,24 @@ sa1_status Frontend::open(Session &se, int32_t slot, int32_t language, bool dial
     return SA1_OK;
 }
 
+#if defined(SA1_API_SKIN)
+sa1_status Frontend::set_skin(const sa1_skin_desc *skin, bool voiceless, std::string &err)
+{
+    if (!fe_) {
+        err = "the front end is not open";
+        return SA1_ERR_NOT_LOADED;
+    }
+    sa1_status st = sa1_frontend_set_skin(fe_, skin);
+    if (st != SA1_OK) {
+        return fail(st, "sa1_frontend_set_skin", err);
+    }
+    skin_on_ = skin != nullptr;
+    skin_voiceless_ = skin_on_ && voiceless;
+    rendered_ = false;      // the holder batches again with the archive it may keep
+    return SA1_OK;
+}
+#endif
+
 void Frontend::close()
 {
     if (fe_) {
@@ -123,6 +141,7 @@ void Frontend::close()
         fe_ = nullptr;
         st_.closes++;
     }
+    skin_on_ = skin_voiceless_ = false;
     rendered_ = false;
     render_kind_ = -1;
 }
@@ -181,6 +200,15 @@ sa1_status Frontend::events(Audio *audio, std::vector<Event> &out, std::string &
         if (st != SA1_OK) {
             return fail(st, "sa1_frontend_poll", err);
         }
+        bool mute_voices = false;
+#if defined(SA1_API_SKIN)
+        if (skin_on_ && skin_voiceless_) {
+            sa1_frontend_state fs;
+            std::memset(&fs, 0, sizeof fs);
+            fs.struct_size = sizeof fs;
+            mute_voices = sa1_frontend_state_get(fe_, &fs) == SA1_OK && fs.slot == 0;
+        }
+#endif
         for (uint32_t i = 0; i < n; i++) {
             const sa1_event &e = buf_[i];
             switch (e.type) {
@@ -194,7 +222,7 @@ sa1_status Frontend::events(Audio *audio, std::vector<Event> &out, std::string &
                     st_.voices++;
                     st_.last_voice = e.id;
                 }
-                if (audio) {
+                if (audio && !(mute_voices && voice_class(e))) {
                     audio->event(e);
                 }
                 break;
@@ -288,6 +316,10 @@ sa1_status Frontend::render(Session &se, int32_t &kind, std::string &err)
         na = se.texture_archives(k);
     }
     holder_.num_archives = na;
+#if defined(SA1_API_SKIN)
+    // (metal099e.md RM.4: build_batches tests the holder's flag: without it he is white on this screen only)
+    holder_.create_extra = skin_on_ ? SA1_CREATE_SKIN : 0u;
+#endif
     se.rebatch(holder_);
     holder_.view_ready = false;
     rendered_ = true;

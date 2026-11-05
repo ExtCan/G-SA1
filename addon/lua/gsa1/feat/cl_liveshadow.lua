@@ -127,6 +127,18 @@
 --     MEASURED in the test). One place where the moving grid does show: a crease in the ground whose far side is broad and turned from the sun has its line at the nearest grid points, as the shadow's cells have: right beside it
 --     a fixed place changes by up to 0.53 of the shadow in a frame under the character, by up to 0.99 where the grid's outer rows pass over it (a row there alone on such ground reads what is around it, until the next row joins it), further than a cell from it by 0.000.
 --     A band of 16 HU turned from the sun, by turns one row or two: 0.59 at most, 0.15 by 20 HU, none from 32 (MEASURED, SADC/build/research/r099c/fix2/crease_after.txt). That the outer rows hold no picture of a character is READ from the box's size, UNVERIFIED by eye.
+--     THE FADE AT A SHADE LINE (0.9.9d; the owner, on 0.9.9c: "The sun shadow disappears in a gradient style"). What is written here of a fade over one cell is 0.9.9c's: its 10 % to 90 % ran over 28 HU at most, 27.3 on the mean across a
+--     straight line, 32 and 29.9 across a slanted one, 34 and 29.7 for a follower. Now 18 and 11.8, 12 and 9.1, 12 and 12 (all MEASURED, tests/feat_sunlit_test.lua section 5f, there on either tree). No new ray and no new garbage (225 rays on that test's walk, the same to one). Two things do it, and
+--     neither alone: S.SUN_STEEP makes the bilinear mean S.SUN_STEEP times steeper around its middle; and the grid's rows lie on multiples of a cell along the light's axes while the check is on, so a point of the grid stays on one place of
+--     the ground as the character moves. Steepening alone flashes: on rows that move with the character a fixed place changes by about 8 / 12 of the shadow at each new grid (READ, the arithmetic; that is why the rows had to stop). With both a fixed place does
+--     not change at all while walking, 0.000 of the shadow in a frame at 120, 400 and 1500 HU/s where 0.9.9c had up to 0.078 (MEASURED, section 4). The crease above changes with them: within 20 HU of the feet at most 0.001 of the shadow in a frame at every phase of the rows, where 0.9.9c had 0.488; further out it does still jump, up to 0.536 within 30 HU and 0.948
+--     at 32-40 HU, where 0.9.9c had 0.488 and 0.985 (MEASURED, section 5g, creases at 12 phases; only a crease lying on a row, x = 300 in section 4's walk, reads 0.000 all the way). On an axis-aligned line under a straight-down light the grid's cell is the fade's limit: at least
+--     9.6 HU for yours, 12.8 for a follower's; 19 where a row falls on the middle of the fade. Followers' rows are shifted by a quarter of a cell: their 16 HU are half the lattice's, and every row would lie on that middle (MEASURED 25 HU against 12).
+--     THAT IS THE BEST CASE, NOT THE RULE: lines at any angle and slanted shadows come out wider (widest / mean, 0.9.9c beside it; MEASURED, 099d-verify's anyangle and fade files, pinned in section 5g). Straight down, lines at every 15 degrees: 29 / 13.7 (49 / 31.8). shadow_control 60 298 (gm_bigcity, rp_bigcity), every angle: 24 / 15.4 (47 / 32.0).
+--     Across the light's azimuth: pitch 60: 24 / 21.2 (34 / 29.4); pitch 45: 30 / 19.8 (35 / 31.2); pitch 30: 37 / 25.3 (38 / 34.8). So about half as wide in general, and the lower the light the less is gained: at pitch 30 the widest barely moves. Of 19 maps looked at, 6 use pitch 56-75 or 80 and 2 use 90.
+--     A corner's change in time goes over in S.SUN_FADE, longer by S.SUN_STEEP, so the shadow still changes by at most the same amount a frame; a roof that arrives shows after about 0.4 s of those 1 s, then goes in 0.25 s.
+--     WHAT IT COSTS: the place of the line is decided by corners 32 HU apart, as it always was, and a soft fade hid that: the shadow's edge can now visibly lie up to 17 HU from the true line of shade (MEASURED, section 5f), wavier on a slant. A shadow's picture can lose a
+--     little more of its outer rim: the rows may lie half a cell further off the picture's centre: the quads reach at least 36.9 HU from the centre of a 48 HU box where 0.9.9c reached 42.6 (MEASURED, section 5f); the box holds the character with room to spare (READ: 0.75 of its height + 16 HU each way against half its height), UNVERIFIED by eye. A finer lattice would place the line better, and asks more: S.SUN_CELL 16 has it within 8.8 HU for 750 rays where this asks 225 (MEASURED, the same walk). Off (0): 0.9.9b's rows, by its hash.
 --     WHAT IS NOT ANSWERED YET: traces a frame are bounded (S.SUN_YOU, S.SUN_THEM corners), a corner not traced yet does not count and is asked the next frame. A point with no answer at all keeps its value while
 --     the shadow stays about where that was asked; a new shadow, or one that jumped S.SUN_JUMP, starts from nothing: what is not known yet is not drawn. So a shadow arriving in the shade is never lit for a
 --     frame (099c's verifier: 1-3 frames at full darkness, with several followers, a teleport, a tall character); one arriving in the sun can come a frame or a few late. A KNOWN LIMIT: at very high speed the budget runs out and
@@ -522,10 +534,19 @@ local function trace_grid(g, C, L, cx, cy, cz, box)
     -- (0.9.9c: the surface's own normal, for the sun check alone: sun_at)
     local normals = cv.sunlit:GetBool() and L.sun ~= nil and L.sun.known
     local nx, ny, nz = g.nx, g.ny, g.nz
+    -- (0.9.9d: with the check on the rows lie on multiples of a cell, along the light's own axes, so a point of the grid stays on one place of the ground while the character moves: THE FADE AT A SHADE LINE. Off: 0.9.9b's rows)
+    local ox, oy = 0, 0
+    if normals then
+        local cell = 2 * box / (N - 1)
+        local cr, cu = cx * rx + cy * ry + cz * rz, cx * ux + cy * uy + cz * uz
+        -- (a quarter of a cell for a follower's grid: its 16 HU are half of S.SUN_CELL, so rows on the multiples would all fall on the middle of a lattice cell, the worst place: MEASURED 25 HU wide against 13)
+        local shift = N == S.GRID and 0 or 0.25
+        ox, oy = (math.floor(cr / cell + 0.5) + shift) * cell - cr, (math.floor(cu / cell + 0.5) + shift) * cell - cu
+    end
     for k = 1, NN do
         local i, j = (k - 1) % N, math.floor((k - 1) / N)
-        local xv = -box + 2 * box * i / (N - 1)
-        local yv = box - 2 * box * j / (N - 1)            -- row 0 at the top of the picture (the view's up)
+        local xv = -box + 2 * box * i / (N - 1) + ox
+        local yv = box - 2 * box * j / (N - 1) + oy       -- row 0 at the top of the picture (the view's up)
         local gx = cx + rx * xv + ux * yv - dx * box
         local gy = cy + ry * xv + uy * yv - dy * box
         local gz = cz + rz * xv + uz * yv - dz * box
@@ -655,8 +676,7 @@ local function emit_cells(g, nc, cr, cg, cb)
 end
 
 -- ---- where the sun reaches (0.9.9c; ONLY WHERE THE SUN REACHES at the top of this file) -----------------------------------------------------------
-S.SUN_CELL = 32                     -- HU: the lattice of ground samples, fixed in the world. From 24 to 48 HU agreed alike with the maps' baked light (12 and 16: run on a quarter of the samples, alike there); the
-                                    -- fade across a shade line is one cell wide, about what a lightmap's own edge is, and a grid's points 12 or 16 HU apart show it
+S.SUN_CELL = 32                     -- HU: the lattice of ground samples, fixed in the world. From 24 to 48 HU agreed alike with the maps' baked light (12 and 16: run on a quarter of the samples, alike there)
 S.SUN_SLOTS = 2048                  -- the lattice's answers kept, by a hash of the corner: a clash only asks again
 S.SUN_BAND = 32                     -- HU: heights a corner keeps apart (two levels on one x, y): the band of the point asking
 S.SUN_SAME = 48                     -- HU: a corner whose ground lies further than this from the point asking is another surface: it does not count
@@ -665,7 +685,9 @@ S.SUN_LIFT = 8                      -- HU: its ray starts this far off its groun
 S.SUN_STEP = 18                     -- HU of height: a ray stopped within this of its start gets a second ray from this much higher (sun_ray). About what a player walks over, UNVERIFIED for Garry's Mod. MEASURED, 12 or 24: within 0.1 points of this on four maps
 S.SUN_FAR = 56755                   -- HU: a ray to the sun, VRAD's MAX_TRACE_LENGTH
 S.SUN_KEEP = 4                      -- s: an answer kept (what moves: doors, props); a standing shadow asks about 6 corners a second again
-S.SUN_FADE = 0.25                   -- s: an answer that changes (something moved into the sun's way) goes over from the old one in this time
+S.SUN_STEEP = 4                     -- 0.9.9d (the owner: "The sun shadow disappears in a gradient style"): the bilinear mean of the corners, which runs over a whole cell of the lattice, is made this much steeper around its
+                                    -- middle (sun_at), so the fade ends closer to the line, about half as wide in general (the grid's cell and a slanted light limit it), with no ray more: THE FADE AT A SHADE LINE at the top of this file
+S.SUN_FADE = 0.25 * S.SUN_STEEP     -- s: an answer that changes (something moved into the sun's way) goes over from the old one in this time; longer by S.SUN_STEEP, since the steepening shortens it again: at most the same change a frame as 0.9.9c's 0.25 s
 S.SUN_FACING = 0.1                  -- how far a point's surface must face the sun (the cosine) for all of its sun: under it less, to none at 0. Flat ground under the lowest sun used (10 degrees) has 0.17
 S.SUN_PLANE = 0.25                  -- of a grid's cell, along the light: how far a neighbour may lie off a point's plane and still be on it
 S.SUN_WIDE = 1.4                    -- cells: a surface this wide or wider, turned from the sun, reads none; a cell or less reads what is around it (sun_broad). Under the square root of 2: ground across the grid at any angle is this wide
@@ -820,7 +842,10 @@ local function sun_at(g, k, L, now)
         sum, W = sum + w * sun_value(h, now), W + w
     end
     local v
-    if W > 1e-3 then v = sum / W
+    if W > 1e-3 then
+        -- (0.9.9d: steeper around the middle: THE FADE AT A SHADE LINE)
+        v = 0.5 + (sum / W - 0.5) * S.SUN_STEEP
+        if v < 0 then v = 0 elseif v > 1 then v = 1 end
     elseif late then return -1
     else
         v = sun_own(x, y, z, sun, now)
@@ -1337,6 +1362,10 @@ function GSA1.SunShadowLine()
             FS.stats.ms / math.max(FS.stats.frames, 1)) end
     end
     local sun = (cv.sunlit:GetBool() and L.sun) and ("; only where the sun reaches: " .. L.sun.text) or ""
+    -- 0.9.9e: what the map's own colour means: the ground at most this much darker, as a prop's shadow on this map (READ: the engine modulates by the same colour)
+    if cv.dark:GetFloat() <= 0 and L.color then
+        sun = sun .. string.format("; the map's own colour darkens the ground by at most %d %%", math.floor((255 - math.max(L.color[1] or 128, L.color[2] or 128, L.color[3] or 128)) / 255 * 100 + 0.5))
+    end
     return string.format("Sun shadow: %s%s%s%s%s", L.text, st.frames > 0 and string.format(" (%.2f ms per frame)",
         st.frameMs / st.frames) or "", sun, why and ("; not drawn now: " .. why) or "", fo)
 end
@@ -1346,7 +1375,7 @@ local guard = GSA1.Guard or function(_, fn) return fn end
 local think_g, pre_g, view_g, post_g = guard("SunShadow", step_light), guard("SunShadow", pre_render), main_view,
     guard("SunShadow", post_render)
 function S.Apply()
-    local on = cv.on and cv.on:GetBool() or false
+    local on = cv.on and cv.on:GetBool() and not S.hiddenForPhoto or false
     if on == S.hooked then return end
     S.hooked = on
     if on then
@@ -1368,6 +1397,10 @@ function S.Apply()
 end
 if cvars and cvars.AddChangeCallback then
     cvars.AddChangeCallback("gsa1_sunshadow", function() S.Apply() end, HOOK)
+    -- 0.9.9e: the slider in the log, a second after its last tick: the owner's pictures of 0.9.9d could not be told apart by it (r099e/build/shadow.txt)
+    cvars.AddChangeCallback("gsa1_sunshadow_dark", function(_, _, new)
+        timer.Create("gsa1_sunshadow_log_dark", 1, 1, function() log("sun shadow darkness = %s", tostring(new)) end)
+    end, HOOK)
 end
 S.hooked = nil
 S.Apply()

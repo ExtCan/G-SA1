@@ -13,7 +13,7 @@ namespace gsa1 {
 
 namespace {
 
-const uint32_t kPipelineVersion = 6;     // bump when the cleaning changes its result (old cache files are rebuilt)
+const uint32_t kPipelineVersion = 7;     // bump when the cleaning changes its result (old cache files are rebuilt)
                                          // 4: surface-type tags (0.8)
                                          // 5: 0.9.2 - bounded thin-wall middle faces, open sliver hulls, thin stacks,
                                          //    the guard, no-hull displacements, coplanar down faces (one bump: the

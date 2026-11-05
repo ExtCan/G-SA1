@@ -8,20 +8,15 @@ GSA1.CharSelect = S
 
 S.SLOTS = 7                     -- the game's ring: 0 Sonic .. 5 E-102, 6 the spinning "?"
 S.SUPER_SLOT = 6
--- the game's slot -> G-SA1's list entry (sh_config.lua GSA1.CHARACTERS); slot 6 by S.SuperEntry
-S.SLOT_ENTRY = { [0] = "sonic", [1] = "tails", [2] = "knuckles", [3] = "amy", [4] = "big", [5] = "gamma" }
+-- the game's slot -> G-SA1's list entry (sh_config.lua GSA1.CHARACTERS)
+S.SLOT_ENTRY = { [0] = "sonic", [1] = "tails", [2] = "knuckles", [3] = "amy", [4] = "big", [5] = "gamma", [6] = "supersonic" }
 -- (Dr. Eggman and Tikal are not on the game's ring: S.SlotOf gives them Sonic's slot)
-S.ENTRY_SLOT = { sonic = 0, tails = 1, knuckles = 2, amy = 3, big = 4, gamma = 5, supersonic = 6, supersonic_general = 6, question = 6 }
--- gsa1_charselect_super: which entry the slot plays. 0.9.9 (the plan's addendum A4): its default is "question", the Question Mark as a character of
--- its own; the other three stay a choice away. "last" only ever holds a Super Sonic (cl_charselect.lua writes those two), so it can never become
--- the "?"; before any Super Sonic was played "last" is General Gameplay, the one that works on every map (charsel098 6.4, owner question CS-5)
-S.SUPER_FIRST = "supersonic_general"
-S.SUPER_CHOICES = {
-    { "The Super Sonic you played last", "last" },
-    { "Vs. Perfect Chaos", "supersonic" },
-    { "General Gameplay", "supersonic_general" },
-    { "The Question Mark", "question" },
-}
+S.ENTRY_SLOT = { sonic = 0, tails = 1, knuckles = 2, amy = 3, big = 4, gamma = 5, supersonic = 6, supersonic_general = 6, question = 6, metalsonic = 0 }
+-- 0.9.9f (the owner, rounds plan 14.1bd: "you hover over Sonic and press UP on the D-pad"): the skins of a slot; a later skin is one more name and Up cycles through them
+S.SLOT_SKINS = { [0] = { "metalsonic" } }
+-- 0.9.9e (the owner, rounds plan 14.1bc: "When you use the Adventure character select, Super Sonic (Vs. Perfect Chaos) should always be the choice"): slot 6 always plays him, the "?" locked or not.
+-- gsa1_charselect_super, its one-time move and its combo box are gone; a value saved in them is ignored
+S.SUPER_ENTRY = "supersonic"
 -- the game's own sphere colours (FF0000FF, the selected one FFFF0000)
 S.SPHERE = { 0, 0, 255 }
 S.SPHERE_SELECTED = { 255, 0, 0 }
@@ -32,16 +27,8 @@ S.PAD_START, S.PAD_BACK, S.PAD_A, S.PAD_B = 0x0010, 0x0020, 0x1000, 0x2000
 S.RUN_FRAMES = 21               -- frames between the presses of a run: the ring's slide (charsel098 6.3)
 S.STICK = 0.5                   -- Design S: how far the stick counts as a press
 
--- the list entry the "?" slot plays
-function S.SuperEntry(choice, last)
-    if choice == "supersonic" or choice == "supersonic_general" or choice == "question" then return choice end
-    if last == "supersonic" or last == "supersonic_general" then return last end
-    return S.SUPER_FIRST
-end
-
 -- the list entry of a slot (nil: no such slot)
-function S.EntryOf(slot, choice, last)
-    if slot == S.SUPER_SLOT then return S.SuperEntry(choice, last) end
+function S.EntryOf(slot)
     return S.SLOT_ENTRY[slot]
 end
 

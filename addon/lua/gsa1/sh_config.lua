@@ -1,7 +1,7 @@
 -- G-SA1 shared configuration: constants, character names, ConVars, network strings.
 GSA1 = GSA1 or {}
 
-GSA1.VERSION = "0.9.9c"
+GSA1.VERSION = "0.9.9e"
 GSA1.REQUIRED_API = 6          -- gsa1.API_VERSION the addon is written for
 GSA1.SCALE = 4.0               -- Hammer units per SA1 unit (libsa1's Source preset)
 GSA1.MODULE = "gsa1"           -- require("gsa1") -> garrysmod/lua/bin/gmcl_gsa1_<platform>.dll
@@ -28,7 +28,9 @@ GSA1.CHARACTERS = {
     { kind = 4, name = "tikal",    title = "Tikal", nowheel = true, airEndsNothing = true },
     { kind = 8, name = "supersonic", title = "Super Sonic (Vs. Perfect Chaos)" },
     { kind = 0, name = "supersonic_general", title = "Super Sonic (General Gameplay)", form = "general" },
-    { kind = 8, name = "question", title = "?", form = "question", nowheel = true, noUpgrades = true },
+    -- 0.9.9f (the owner, sadc docs/research/gsa1_rounds_plan.md 14.1bd; metal099e.md): Sonic's world wearing another model, feat/sh_skins.lua's entry names it all. Not secret. CharacterByKind(0) stays Sonic
+    { kind = 0, name = "metalsonic", title = "Metal Sonic", form = "skin", skin = "metalsonic" },
+    { kind = 8, name = "question", title = "?", form = "question", nowheel = true, noUpgrades = true, secret = true },
 }
 
 -- other names of the entries (0.9.3a: "super" stays the Vs. Perfect Chaos Super Sonic of 0.9.3)
@@ -37,15 +39,58 @@ GSA1.CHARACTER_ALIASES = {
     super = "supersonic", super_sonic = "supersonic", ["super-sonic"] = "supersonic", vspc = "supersonic",
     supergeneral = "supersonic_general", super_general = "supersonic_general", ssg = "supersonic_general",
     ["?"] = "question", qm = "question", question_mark = "question", questionmark = "question",
+    metal = "metalsonic", metal_sonic = "metalsonic",
 }
 
--- the entry of a list name, an alias or a kind number ("0" is Sonic's own entry); nil: none
+-- 0.9.9e (the owner, rounds plan 14.1bc: "it should be an unlockable"): an entry with secret = true is in no list and no name finds it until it is
+-- unlocked (feat/cl_question.lua). Kept in a Garry's Mod cookie, cl.db next to the game: no ConVar, so `find` and the console do not show it and it cannot
+-- be set by accident; it stays over maps and sessions. Read once, set by the unlocking.
+GSA1.QUESTION_COOKIE = "gsa1_question_unlocked"
+function GSA1.QuestionUnlocked()
+    local u = GSA1.questionUnlocked
+    if u == nil then
+        u = cookie ~= nil and cookie.GetNumber ~= nil and cookie.GetNumber(GSA1.QUESTION_COOKIE, 0) == 1
+        GSA1.questionUnlocked = u
+    end
+    return u
+end
+
+-- the entries a list may show
+function GSA1.ListedCharacters()
+    local out = {}
+    for _, c in ipairs(GSA1.CHARACTERS) do
+        if not (c.secret and not GSA1.QuestionUnlocked()) then out[#out + 1] = c end
+    end
+    return out
+end
+
+-- the listed names, for "unknown character" and such
+function GSA1.CharacterNamesText()
+    local out = {}
+    for i, c in ipairs(GSA1.ListedCharacters()) do out[i] = c.name end
+    return table.concat(out, ", ")
+end
+
+-- this name or alias is an entry that is still locked (a value saved before it was one, or typed)
+function GSA1.LockedName(name)
+    name = string.lower(tostring(name or ""))
+    name = GSA1.CHARACTER_ALIASES[name] or name
+    for _, c in ipairs(GSA1.CHARACTERS) do
+        if c.name == name then return c.secret == true and not GSA1.QuestionUnlocked() end
+    end
+    return false
+end
+
+-- the entry of a list name, an alias or a kind number ("0" is Sonic's own entry); nil: none, or one still locked
 function GSA1.CharacterByName(name)
     name = string.lower(tostring(name or ""))
     if name == "" then name = "sonic" end
     name = GSA1.CHARACTER_ALIASES[name] or name
     for _, c in ipairs(GSA1.CHARACTERS) do
-        if c.name == name then return c end
+        if c.name == name then
+            if c.secret and not GSA1.QuestionUnlocked() then return nil end
+            return c
+        end
     end
     for _, c in ipairs(GSA1.CHARACTERS) do
         if not c.form and tostring(c.kind) == name then return c end
@@ -172,6 +217,8 @@ if CLIENT then
         -- rendering
         interp       = cv("gsa1_interpolate", "1", "Interpolate the animation and the movement between the game's 30 Hz frames (0 = the raw frames)", 0, 1),
         lighting     = cv("gsa1_lighting", "1", "Light the character with the map's lighting (0 = fullbright)", 0, 1),
+        -- 0.9.9d (the owner: "Knuckles still turns completely black on walls"): cl_render.lua update_lighting
+        light_body   = cv("gsa1_light_body", "1", "Take the map's light at the middle of the character's body, along its own up: a character on a wall is not lit from inside the wall (0 = straight above its root, as 0.9.9c)", 0, 1),
         vcolor       = cv("gsa1_vertexcolor", "1", "Multiply effect and model textures by their SA1 vertex colours (the characters' bodies are lit like the game: texture x lighting)", 0, 1),
         effects      = cv("gsa1_effects", "1", "Draw the characters' effects (spin dash trail, punches, targeting lines, sprites)", 0, 1),
         shadow       = cv("gsa1_shadow", "1", "Draw the characters' shadows: the game's own blob, where the game finds the ground under the character (it shrinks with height and disappears high above the ground, as in the game)", 0, 1),

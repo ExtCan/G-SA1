@@ -423,10 +423,11 @@ D3 centroid(const std::vector<D3> &w)
 // keeps the parts of the fragments (convex pieces of one face with normal fn) outside the convex volume bounded by
 // `planes` (outward normals). Inside counts: lying on one of its planes and facing into it (two solids touching);
 // lying on one of its planes facing the same way (a coplanar duplicate) unless keep_dups. Returns whether a fragment
-// was cut or removed. next / inside / front / back are scratch.
+// was cut or removed. next / inside / front / back are scratch. dups_both_ways (0.9.9f, a thin wall's middle face: it stands for both of the wall's faces, so it has no one way
+// it looks): keep_dups keeps a fragment on a plane facing either way.
 bool cut_by_volume(std::vector<std::vector<D3>> &frags, const D3 &fn, bool keep_dups,
                    const std::vector<const Plane *> &planes, std::vector<std::vector<D3>> &next, std::vector<D3> &inside,
-                   std::vector<D3> &front, std::vector<D3> &back)
+                   std::vector<D3> &front, std::vector<D3> &back, bool dups_both_ways = false)
 {
     next.clear();
     bool touched = false;
@@ -440,7 +441,7 @@ bool cut_by_volume(std::vector<std::vector<D3>> &frags, const D3 &fn, bool keep_
                 keep = true;
                 break;
             }
-            if (keep_dups && dmx <= 0.05 && dmn >= -0.05 && dot(pl->n, fn) > 0.99) {
+            if (keep_dups && dmx <= 0.05 && dmn >= -0.05 && (dups_both_ways ? std::fabs(dot(pl->n, fn)) : dot(pl->n, fn)) > 0.99) {
                 keep = true;
                 break;
             }
@@ -1310,6 +1311,7 @@ struct SFace {
     bool one_way = false;   // 0.9.3: a near-horizontal underside of a one-way solid (one_way_solid): cross_one_way keeps
                             // its pieces front-only unless they are low ceilings
     bool curved = false;    // 0.9.3: part of a curved surface (detect_curved; surface has SA1_SURFACE_CURVED)
+    double mid_h = 0.0;     // 0.9.9f: a thin wall's middle face: half the wall's thickness (clean's hidden parts). 0: any other face
 };
 
 struct FaceCounts {
@@ -1579,6 +1581,7 @@ uint32_t thin_wall_solid(Solid &S, const BspWorldOptions &opt, ThinWallCounts *c
             m.surface |= SA1_SURFACE_DOUBLE_SIDED;
             m.drop = false;
             m.one_way = false;
+            m.mid_h = 0.5 * t;
             if (curved) {
                 m.curved = true;   // the middle surface of a thin curved ribbon
                 m.surface |= SA1_SURFACE_CURVED;
@@ -2209,6 +2212,33 @@ void clean(std::vector<Solid> &S, const BspWorldOptions &opt, bool stairs, std::
         }
         return cut;
     };
+    // 0.9.9f (the owner: "I did end up gliding through a wall"; sadc build/research/r099e/wall/, gm_construct_remaster_csm's wall at (1706 -1024 361)): a thin wall's middle face is the
+    // only surface left of the wall (thin_wall_solid dropped its two faces), so it goes only where another solid holds the wall's WHOLE thickness there. The test of a point p of the middle face,
+    // that p - h n .. p + h n lies inside the convex volume, is the same volume with every plane moved inward by h |n . plane normal|: a frame with a pane in one half of it, whose middle face lies on the
+    // pane's face, keeps it. Of two walls in one place the lower solid index keeps the overlap, whichever way the plane looks: the other solid's coplanar face has given way to it
+    std::vector<Plane> shrunk;
+    std::vector<const Plane *> shrunk_p;
+    auto cut_middle_by_solids = [&](std::vector<std::vector<D3>> &fr, const SFace &f, size_t self) {
+        bool cut = false;
+        clippers_near(f.lo, f.hi, self);
+        for (uint32_t o : cand) {
+            shrunk.clear();
+            shrunk_p.clear();
+            for (const Plane *pl : cplanes[o]) {
+                Plane q = *pl;
+                q.d -= f.mid_h * std::fabs(dot(q.n, f.n));
+                shrunk.push_back(q);
+            }
+            for (const Plane &q : shrunk) {
+                shrunk_p.push_back(&q);
+            }
+            cut |= cut_by_volume(fr, f.n, self < (size_t)o, shrunk_p, next, inside, front, back, true);
+            if (fr.empty() || fr.size() > 4096) {
+                break;
+            }
+        }
+        return cut;
+    };
 
     // hidden parts (remove_hidden): a face loses its parts inside another closed solid o, which includes the parts
     // lying on a face of o that looks into o's volume (two solids touching); where it lies on a face of o facing the
@@ -2220,7 +2250,7 @@ void clean(std::vector<Solid> &S, const BspWorldOptions &opt, bool stairs, std::
             }
             frags.clear();
             frags.push_back(f.poly);
-            bool cut = opt.remove_hidden && cut_by_solids(frags, f.n, f.lo, f.hi, b);
+            bool cut = opt.remove_hidden && (f.mid_h > 0.0 ? cut_middle_by_solids(frags, f, b) : cut_by_solids(frags, f.n, f.lo, f.hi, b));
             if (cut && f.sp != kNoSurface) {
                 // Review G6: a coplanar face of a lower solid facing the same way keeps the overlap - with its own
                 // surface type; counted where that type differs (cand: the clippers cut_by_solids looked at, sorted)

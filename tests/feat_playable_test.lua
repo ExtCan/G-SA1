@@ -69,6 +69,7 @@ local function log_has(pat)
 end
 local function setcv(name, v) GetConVar(name):SetString(tostring(v)) end
 
+RunConsoleCommand("iwonderwhotheseventhcharacteris")   -- (0.9.9e: the "?" is an unlockable: tests/feat_unlock_test.lua; this test wants it)
 -- 1. the entries -------------------------------------------------------------------------------------------------------------------
 local ke, de = GSA1.KindByName("eggman")
 local kt, dt = GSA1.KindByName("tikal")
@@ -77,8 +78,8 @@ check(ke == 1 and de.title == "Dr. Eggman" and de.nowheel == true and de.airEnds
     "the list: \"Dr. Eggman\" (kind 1) and \"Tikal\" (kind 4), no wheel, the air timer's end kept")
 local order = {}
 for i, c in ipairs(GSA1.CHARACTERS) do order[c.name] = i end
-check(#GSA1.CHARACTERS == 11 and order.eggman == order.big + 1 and order.tikal == order.big + 2 and order.supersonic == order.big + 3 and
-    order.question == 11, "after Big, before the Super Sonics; \"?\" last (%d entries)", #GSA1.CHARACTERS)
+check(#GSA1.CHARACTERS == 12 and order.eggman == order.big + 1 and order.tikal == order.big + 2 and order.supersonic == order.big + 3 and
+    order.question == 12, "after Big, before the Super Sonics; \"?\" last (%d entries)", #GSA1.CHARACTERS)
 check(GSA1.CharacterByKind(1) == de and GSA1.CharacterByKind(4) == dt and GSA1.CharacterByName("1") == de and GSA1.CharacterByName("4") == dt and
     GSA1.CharacterByKind(0).name == "sonic" and GSA1.CharacterByKind(8).name == "supersonic" and GSA1.CharacterByName("8").name == "supersonic" and
     GSA1.CharacterByName("0").name == "sonic", "by kind and by number: 1 and 4 are theirs; 8 stays Super Sonic and 0 Sonic")
@@ -269,7 +270,7 @@ do
     check(binder ~= nil and buttons["No key"] == "gsa1_debug_key", "the key: a DBinder and \"No key\"")
     check(string.find(all, "voice chat", 1, true) == nil, "no word about voice chat (the plan's addendum A3)")
     check(combos["Debug button on the controller"] and string.find(all, "X sends the action button on your controller", 1, true) ~= nil, "the controller's combo and its help")
-    check(string.find(all, "cannot be followers; a follower can follow them", 1, true) ~= nil, "the status line (%s)", tostring(P.StatusLines()[2]))
+    check(string.find(all, "They can be followers and a follower can follow them", 1, true) ~= nil, "the status line (%s)", tostring(P.StatusLines()[2]))
     check(string.find(all, "the button on the Followers page", 1, true) ~= nil, "no wheel: the call-back's way is said (review R99.18)")
     local quick = 0
     for _, Pn in ipairs(made) do

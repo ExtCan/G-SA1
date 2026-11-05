@@ -1374,6 +1374,7 @@ do
         GSA1.Followers = nil
         setcv("gsa1_look_super", 0)
         -- the character list's own entry, when it is there: cl_character.lua sets C.question before the first look round
+        RunConsoleCommand("iwonderwhotheseventhcharacteris")     -- (0.9.9e: an unlockable)
         if GSA1.CharacterByName and GSA1.CharacterByName("question") then
             GSA1.Remove(true)
             R.looks, R.opts = {}, {}

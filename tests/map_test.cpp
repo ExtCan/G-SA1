@@ -2633,6 +2633,107 @@ static void test_dig(const std::string &gdi, const char *map, const MapResult &r
     CHECK(!n.dug, "without the Shovel Claw no dig on the same grass (modes %s)", n.modes.c_str());
 }
 
+// ---- 0.9.9f: the hole in thin walls (the owner, 2026-11-05: "I did end up gliding through a wall"; sadc build/research/r099e/wall/, gm_construct_remaster_csm's
+// wall at (1706 -1024 361)): a frame 8 thick with a 4-thick pane in one half of it. The frame's middle face lay on the pane's face, looking into it, so the hidden-part step deleted it; the
+// frame's two outer faces were gone already (thin_wall_solid), the pane is a face the size of the opening or less: a visible wall with no collision. The rule: a thin wall's middle face is removed only
+// by a solid that holds the wall's whole thickness.
+// the fraction of n x n points of the wall's area (x, z) that have a steep triangle within band of the plane y
+static double wall_cover(const std::vector<sa1_collision_tri> &w, double x0, double x1, double z0, double z1, double y, double band, uint32_t need = 0)
+{
+    const int n = 16;
+    int hit = 0;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            double x = x0 + (x1 - x0) * (i + 0.5) / n, z = z0 + (z1 - z0) * (j + 0.5) / n;
+            bool any = false;
+            for (const sa1_collision_tri &t : w) {
+                if ((t.surface & need) != need) {
+                    continue;
+                }
+                double ax = t.v[0][0], az = t.v[0][2], bx = t.v[1][0], bz = t.v[1][2], cx = t.v[2][0], cz = t.v[2][2];
+                double d = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+                if (std::fabs(d) < 1e-9) {
+                    continue;
+                }
+                double l1 = ((bx - x) * (cz - z) - (bz - z) * (cx - x)) / d, l2 = ((cx - x) * (az - z) - (cz - z) * (ax - x)) / d, l3 = 1.0 - l1 - l2;
+                if (l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) {
+                    continue;
+                }
+                double yy = l1 * t.v[0][1] + l2 * t.v[1][1] + l3 * t.v[2][1];
+                if (std::fabs(yy - y) <= band) {
+                    any = true;
+                    break;
+                }
+            }
+            hit += any;
+        }
+    }
+    return (double)hit / (double)(n * n);
+}
+
+static void test_thin_wall_hole()
+{
+    std::printf("0.9.9f: the hole in thin walls (a middle face is removed only by a solid holding the wall's whole thickness; thin walls 32)\n");
+    struct Box {
+        float y0, y1, z0, z1;
+    };
+    // every scene with its solids in both orders and mirrored in y: which way the middle face looks and who has the lower index both decide the old cut
+    auto world = [](std::vector<Box> boxes, bool rev, float mir, std::vector<sa1_collision_tri> &w, BspWorldStats &st) {
+        if (rev) {
+            std::reverse(boxes.begin(), boxes.end());
+        }
+        std::vector<ConvexSolid> s(boxes.size());
+        for (size_t i = 0; i < boxes.size(); i++) {
+            float a = boxes[i].y0 * mir, b = boxes[i].y1 * mir;
+            const float mn[3] = {-256, std::min(a, b), boxes[i].z0}, mx[3] = {256, std::max(a, b), boxes[i].z1};
+            box_solid(mn, mx, nullptr, nullptr, s[i]);
+        }
+        BspWorldOptions o;
+        o.thin_wall_max = 32.0f;
+        std::string err;
+        clean_solids(s, o, w, st, err);
+    };
+    struct Scene {
+        const char *what;
+        std::vector<Box> boxes;
+        double y, band;     // where a surface must cover the wall (x -240..240, z 16..144), anywhere inside its thickness: the thin stack rule may move it to between the frame's and the pane's middle ...
+        bool ds;            // ... double-sided
+        double gone_y;      // (a band with nothing left, 0 band: not asked)
+        double gone_band;
+    };
+    const Scene scenes[] = {
+        {"a frame 8 thick and a pane 4 thick in one half of it: the frame's middle face lies on the pane's face (the owner's wall)", {{-4, 4, 0, 160}, {-4, 0, 0, 160}}, 0, 4.01, true, 0, 0},
+        {"... the pane in the frame's opening, as tall as a part of it", {{-4, 4, 0, 160}, {-4, 0, 40, 120}}, 0, 4.01, true, 0, 0},
+        {"... a pane 2 thick in the frame's middle (the frame's middle face runs inside it)", {{-4, 4, 0, 160}, {-1, 1, 0, 160}}, 0, 4.01, true, 0, 0},
+        {"... the owner's wall: the frame against a thick wall, the pane between: y -8..0, -8..-4, -128..-8", {{-8, 0, 0, 160}, {-8, -4, 0, 160}, {-128, -8, 0, 160}}, -4, 4.01, true, 0, 0},
+        {"... the same frame twice: one middle face stays", {{-4, 4, 0, 160}, {-4, 4, 0, 160}}, 0, 4.01, true, 0, 0},
+        {"a solid holding the wall's whole thickness still removes its middle face: y -100..100", {{-4, 4, 0, 160}, {-100, 100, 0, 160}}, 100, 0.1, false, 0, 50},
+        {"a solid holding it, flush with one side: y -100..4: a surface stays at the wall, in either order", {{-4, 4, 0, 160}, {-100, 4, 0, 160}}, 2, 2.1, false, 0, 0},
+    };
+    for (const Scene &sc : scenes) {
+        for (int v = 0; v < 4; v++) {
+            std::vector<sa1_collision_tri> w;
+            BspWorldStats st;
+            float mir = (v & 2) ? -1.0f : 1.0f;
+            world(sc.boxes, (v & 1) != 0, mir, w, st);
+            double cover = 0.0;
+            // (a flush solid's scene: the surface may be its own face or the middle face)
+            cover = wall_cover(w, -240, 240, 16, 144, sc.y * mir, sc.band, sc.ds ? (uint32_t)SA1_SURFACE_DOUBLE_SIDED : 0u);
+            bool gone = sc.gone_band <= 0.0 || wall_cover(w, -240, 240, 16, 144, sc.gone_y * mir, sc.gone_band) == 0.0;
+            CHECK(cover > 0.999 && gone, "%s (order %d, mirror %d): %.0f%% of the wall covered at y %.0f%s, %zu triangles, %u thin walls", sc.what, v & 1, (v >> 1) & 1, 100 * cover,
+                  sc.y * mir, sc.ds ? " double-sided" : "", w.size(), st.thin_walls);
+        }
+    }
+    // no doubled faces: the same frame twice has as many triangles as one
+    {
+        std::vector<sa1_collision_tri> a, b;
+        BspWorldStats sa, sb;
+        world({{-4, 4, 0, 160}}, false, 1.0f, a, sa);
+        world({{-4, 4, 0, 160}, {-4, 4, 0, 160}}, false, 1.0f, b, sb);
+        CHECK(a.size() == b.size(), "the same frame twice: %zu triangles, one frame %zu", b.size(), a.size());
+    }
+}
+
 int main(int argc, char **argv)
 {
     std::string gm = gsa1_garrysmod_dir(), maps, gdi;
@@ -2657,6 +2758,7 @@ int main(int argc, char **argv)
     std::printf("G-SA1 map_test\n");
     test_ranges();
     test_thin_stacks();
+    test_thin_wall_hole();
     test_ceilings_and_loops();
     test_synthetic_bsp();
     test_disp_floors();

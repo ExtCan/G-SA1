@@ -156,7 +156,7 @@ end
 
 GSA1 = nil
 M.included = {}
--- 0.9.9 (the plan's addendum A4): what Garry's Mod kept from 0.9.8: a saved "last", no marker yet
+-- what Garry's Mod kept from an older version: a saved "last". 0.9.9e: nothing reads it any more, nothing creates the ConVar
 local cookies = {}
 cookie = { GetNumber = function(k, d) return tonumber(cookies[k]) or d end, Set = function(k, v) cookies[k] = v end }
 M.cv("gsa1_charselect_super", "last")
@@ -197,23 +197,11 @@ local function reset_calls()
     calls.play, calls.stop, calls.pause, calls.volume, calls.duck = {}, {}, {}, {}, {}
 end
 
--- 0.9.9, addendum A4: the slot's default is the "?", and a saved "last" moves to it once ---------------------------------------------
+-- 0.9.9e (the owner, 14.1bc): the slot always plays Super Sonic (Vs. Perfect Chaos); the option, its memory and its one-time move are gone -------------------
 do
-    GSA1.LogFlush()
-    check(S.cv.super:GetString() == "question" and tonumber(cookies.gsa1_charselect_super_099) == 1, "the first load of this version: a saved \"last\" became \"question\", the marker is set")
-    check(string.find(M.files["gsa1/log.txt"] or "", "moved once to", 1, true) ~= nil, "... with one log line")
-    S.cv.super:SetString("last")
-    check(S.MigrateSlot() == false and S.cv.super:GetString() == "last", "a later choice of \"last\" stays: the marker holds")
-    cookies.gsa1_charselect_super_099 = nil
-    S.cv.super:SetString("supersonic")
-    check(S.MigrateSlot() == false and S.cv.super:GetString() == "supersonic" and tonumber(cookies.gsa1_charselect_super_099) == 1, "a saved Super Sonic stays, the marker is set")
-    cookies.gsa1_charselect_super_099 = nil
-    S.cv.super:SetString("question")
-    check(S.MigrateSlot() == false and S.cv.super:GetString() == "question" and tonumber(cookies.gsa1_charselect_super_099) == 1, "a new installation: \"question\" from the default")
-    cookies.gsa1_charselect_super_099 = nil
-    S.cv.super:SetString("last")
-    check(S.MigrateSlot() == true and S.cv.super:GetString() == "question" and S.MigrateSlot() == false, "the move runs once")
-    check(S.SlotTitle(6) == "?" and S.EntryName(6) == "question", "the slot gives the \"?\" by default")
+    check(S.cv.super == nil and S.cv.super_last == nil and S.MigrateSlot == nil and S.SuperEntry == nil and S.SUPER_CHOICES == nil, "no option, no memory, no move")
+    check(cookies.gsa1_charselect_super_099 == nil, "no marker")
+    check(S.SlotTitle(6) == "Super Sonic" and S.EntryName(6) == "supersonic", "the slot gives Super Sonic (Vs. Perfect Chaos), a saved \"last\" or not")
 end
 
 -- 1. the C menu's icon (R98.13: at file scope, behind the guard) -----------------------------------------------------------------
@@ -247,7 +235,7 @@ do
     local titles = {}
     for _, o in ipairs(opts) do titles[o[1]] = o[2] end
     local all = titles["Character Select..."] ~= nil and titles["Remove character"] ~= nil
-    for _, c in ipairs(GSA1.CHARACTERS) do all = all and titles[c.title] ~= nil end
+    for _, c in ipairs(GSA1.ListedCharacters()) do all = all and titles[c.title] ~= nil end
     check(name == "G-SA1" and all, "the menubar: G-SA1 > Character Select..., every character, Remove character")
     titles["Character Select..."]()
     check(S.IsOpen() and S.st.how == "menubar", "Character Select... opens the panel")
@@ -413,50 +401,30 @@ do
     p:OnMousePressed(MOUSE_LEFT or 107)
     check(not S.IsOpen() and GSA1.Char.kind == 6, "a click on E-102's button picks E-102 (kind %d)", GSA1.Char.kind)
 end
--- the "?" slot by the option
-local function pick_super(choice, want)
-    S.cv.super:SetString(choice)
+-- the "?" slot: whatever is saved, Super Sonic (Vs. Perfect Chaos)
+local function pick_super(saved, want)
+    GetConVar("gsa1_charselect_super"):SetString(saved)
     S.Open("test")
     S.st.slot = 6
     press(KEY_SPACE or 65)
-    check(not S.IsOpen() and GSA1.Char.name == want, "slot 6 with gsa1_charselect_super %s plays %s (%s)", choice, want,
-        tostring(GSA1.Char.name))
+    check(not S.IsOpen() and GSA1.Char.name == want and not GSA1.Char.question, "slot 6 with a saved gsa1_charselect_super %s plays %s (%s)", saved, want, tostring(GSA1.Char.name))
 end
-S.cv.super_last:SetString("")
-pick_super("last", "supersonic_general")
-pick_super("supersonic", "supersonic")
-check(S.cv.super_last:GetString() == "supersonic", "the last one played is remembered")
 pick_super("last", "supersonic")
-pick_super("supersonic_general", "supersonic_general")
-S.cv.super:SetString("last")
-pick_super("last", "supersonic_general")
+pick_super("supersonic_general", "supersonic")
+pick_super("question", "supersonic")
 S.Open("test")
-check(S.st.slot == 6, "both Super Sonics: the first selection is slot 6")
+check(S.st.slot == 6, "Super Sonic: the first selection is slot 6")
 S.Close("test")
--- 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.10, playable099.md 5.6, 7.4, addendum A4): the slot's 4th choice, its default; "?" is no Super Sonic:
--- "last" never becomes it
+-- Dr. Eggman and Tikal are not on the ring; the General form's slot and the "?"'s slot stay 6 for the first selection
 do
-    local before = S.cv.super_last:GetString()
-    check(S.ENTRY_SLOT.question == 6 and S.SlotOf("question") == 6 and S.EntryOf(6, "question", before) == "question", "the slot of \"?\" is 6, and the choice \"question\" plays it")
-    check(S.SlotTitle(6) == "Super Sonic", "the slot's title on \"last\"")
-    pick_super("question", "question")
-    check(S.SlotTitle(6) == "?" and GSA1.Char.question == true, "the slot's title on the choice is \"?\"; the character has C.question")
-    check(S.cv.super_last:GetString() == before, "being \"?\" does not change the last Super Sonic (%s)", S.cv.super_last:GetString())
-    S.Open("test")
-    check(S.st.slot == 6, "\"?\": the first selection is slot 6")
-    S.Close("test")
-    pick_super("last", before)
-    check(S.SuperEntry("last", "question") == S.SUPER_FIRST, "\"last\" never gives \"question\", whatever its memory says")
-    S.cv.super:SetString("last")
+    check(S.ENTRY_SLOT.question == 6 and S.SlotOf("question") == 6 and S.ENTRY_SLOT.supersonic_general == 6 and S.EntryOf(6) == "supersonic", "the slot of the other two is 6, and it plays Super Sonic (Vs. Perfect Chaos)")
+    check(S.SlotTitle(6) == "Super Sonic", "the slot's title")
     GSA1.Spawn("tikal")
     check(GSA1.Char and GSA1.Char.kind == 4, "Tikal comes up")
     S.Open("test")
     check(S.st.slot == 0, "Dr. Eggman and Tikal are not on the game's ring: as Tikal the screen starts on Sonic (slot %s)", tostring(S.st.slot))
     S.Close("test")
 end
-GSA1.Spawn("supersonic")
-frames(1)
-check(S.cv.super_last:GetString() == "supersonic", "a Super Sonic from the Options page counts as the last one played")
 GSA1.Spawn("sonic")
 -- back and the mouse
 S.Open("test")
@@ -724,23 +692,23 @@ do
         end
     end
     local want = { "gsa1_charselect_key", "gsa1_charselect_pad", "gsa1_charselect_dialog", "gsa1_charselect_close", "gsa1_charselect_music",
-                   "gsa1_charselect_file", "gsa1_charselect_wide", "gsa1_charselect_super", "gsa1_charselect_qmark" }
+                   "gsa1_charselect_file", "gsa1_charselect_wide", "gsa1_charselect_qmark" }
     local missing = {}
     for _, n in ipairs(want) do if not bound[n] then missing[#missing + 1] = n end end
     check(#missing == 0, "every row of 5.9 has its control (%s)", table.concat(missing, " "))
     -- every gsa1_charselect_* ConVar but the memory is a row of 5.9, with the default 5.9 gives it
     local defaults = { gsa1_charselect_key = "0", gsa1_charselect_pad = "1", gsa1_charselect_dialog = "0", gsa1_charselect_close = "0",
-                       gsa1_charselect_music = "1", gsa1_charselect_file = "0", gsa1_charselect_wide = "0", gsa1_charselect_super = "question",
-                       gsa1_charselect_qmark = "1" }
+                       gsa1_charselect_music = "1", gsa1_charselect_file = "0", gsa1_charselect_wide = "0",
+                       gsa1_charselect_qmark = "1", gsa1_charselect_skins = "1" }
     local extra, wrong = {}, {}
     for n, d in pairs(GSA1.CONVARS) do
-        if string.find(n, "^gsa1_charselect") and n ~= "gsa1_charselect_super_last" then
+        if string.find(n, "^gsa1_charselect") then
             if not defaults[n] then extra[#extra + 1] = n end
             if d.default ~= defaults[n] then wrong[#wrong + 1] = n end
         end
     end
     check(#extra == 0 and #wrong == 0, "no other option, each with the default of 5.9 (%s %s)", table.concat(extra, " "), table.concat(wrong, " "))
-    check(GSA1.CONVARS.gsa1_charselect_super_last ~= nil and not bound.gsa1_charselect_super_last, "gsa1_charselect_super_last is the option's memory: no control")
+    check(GSA1.CONVARS.gsa1_charselect_super == nil and GSA1.CONVARS.gsa1_charselect_super_last == nil and not bound.gsa1_charselect_super, "0.9.9e: the slot's option and its memory are gone, and its combo box")
 end
 
 -- 14. the icon from the disc, at run time ---------------------------------------------------------------------------------------------------------
@@ -1259,8 +1227,7 @@ do
     frames(3)
     check(not S.IsOpen() and GSA1.Char.kind == 5, "gsa1_charselect_close 1: the switch when the voice starts (Amy, kind %d)", GSA1.Char.kind)
     S.cv.close:SetString("0")
-    -- the "?" slot by the option, and the current Super Sonic starts on slot 6
-    S.cv.super:SetString("supersonic")
+    -- the "?" slot, and the current Super Sonic starts on slot 6
     S.Open("test")
     frames(1)
     S.st.slot = 6
@@ -1274,7 +1241,6 @@ do
     S.Open("test")
     check(FE.opens[#FE.opens].slot == 6, "both Super Sonics: the first slot is 6")
     S.Close("test")
-    S.cv.super:SetString("last")
     GSA1.Spawn("sonic")
     frames(2)
 end

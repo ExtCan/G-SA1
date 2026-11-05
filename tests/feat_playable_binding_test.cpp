@@ -12,7 +12,7 @@
 //     yet", and passes while libsa1 still refuses that kind's world (5.3). Otherwise: gsa1.Create(kind) on the floor; THE TICK MASK BY
 //     BEHAVIOUR (review R99.7, a constant would hold with the mask untouched): gsa1.Tick(id, 0, 0, 0, gsa1.BUTTON_X, 1/30) then
 //     gsa1.GetState(id).mode is 11 (Tikal), 17 (Eggman), and a twin world with no button is not; gsa1.Tick's other buttons still pass; A leaves
-//     the mode; "not here": emotes, the face, the look, the board and sa1_follower_create answer a refusal with its words, never a fault.
+//     the mode; "not here": emotes, the face, the look and the board answer a refusal with its words, never a fault. 0.9.9e: sa1_follower_create takes them (tests/feat_follower_binding_test.cpp, libsa1's FPL).
 //
 // playable_api.txt's records, one per line, tab-separated:
 //   const BUTTON_X <number>       playable <kind>       behaviour <RAN | SKIP> <what>
@@ -258,16 +258,23 @@ int main(int argc, char **argv)
         double left = mode_of(id);
         CHECK(left != K.debug_mode, "%s: jump (A) leaves it: mode %.0f", K.title, left);
         // "not here": a refusal with its words, never a fault
-        std::vector<Val> no[5];
+        std::vector<Val> no[4];
         no[0] = L.call("Emote", {Val::number(id), Val::string("a0")});
         no[1] = L.call("FaceMode", {Val::number(id), Val::boolean(true), Val::boolean(false)});
         no[2] = L.call("Look", {Val::number(id), Val::number(1), Val::number(0), Val::number(0), Val::number(0)});
         no[3] = L.call("Board", {Val::number(id), Val::boolean(true)});
-        no[4] = L.call("FollowerCreate", {Val::number(K.kind), Val::vector(32, 0, 8), Val::number(0), Val::number(id)});
         int nr = 0;
         for (const auto &n : no) nr += refused(n) ? 1 : 0;
-        CHECK(nr == 5, "%s: not here: emote \"%s\" (%s), face \"%s\", look \"%s\", board \"%s\", follower \"%s\"", K.title, str_of(no[0], 1).c_str(),
-              str_of(no[0], 2).c_str(), str_of(no[1], 1).c_str(), str_of(no[2], 1).c_str(), str_of(no[3], 1).c_str(), str_of(no[4], 1).c_str());
+        CHECK(nr == 4, "%s: not here: emote \"%s\" (%s), face \"%s\", look \"%s\", board \"%s\"", K.title, str_of(no[0], 1).c_str(),
+              str_of(no[0], 2).c_str(), str_of(no[1], 1).c_str(), str_of(no[2], 1).c_str(), str_of(no[3], 1).c_str());
+        // 0.9.9e: it can be a follower now, of itself too
+        {
+            std::vector<Val> fc = L.call("FollowerCreate", {Val::number(K.kind), Val::vector(32, 0, 8), Val::number(0), Val::number(id)});
+            CHECK(fc.size() >= 1 && fc[0].type == Type::Number, "%s: a follower of its kind is made: %s", K.title, str_of(fc, 1).c_str());
+            if (fc.size() >= 1 && fc[0].type == Type::Number) {
+                L.call("Destroy", {fc[0]});
+            }
+        }
         std::vector<Val> again = tick(id, 0);
         CHECK(again.size() >= 1 && again[0].type == Type::Number, "%s: the world still ticks after those refusals", K.title);
         // a plain jump: their own code, no fault

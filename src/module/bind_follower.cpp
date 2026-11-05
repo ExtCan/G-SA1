@@ -8,7 +8,7 @@
 // `true | nil, message, code` unless noted; codes "unsupported" (libsa1's plain reason: "Big cannot follow yet: ...", "followers
 // do not take emotes, faces or orders"), "limit", "not_ready" (no disc / no map collision yet), "fault", "bad_argument",
 // "not_found". Per-frame functions fill a passed table without allocating. Units: HU, HU/s, degrees, host axes.
-//   gsa1.FollowerKinds([out]) -> out   [kind] = true | "the plain reason" for kinds 0, 2, 3, 5, 6, 7
+//   gsa1.FollowerKinds([out]) -> out   [kind] = true | "the plain reason" for kinds 0, 2, 3, 5, 6, 7 and (0.9.9e) 1, 4
 //   gsa1.FollowerCreate(kind, pos, yawDeg, leaderId | nil, opts) -> id | nil, msg, code
 //       opts (optional) = { upgrades = { "name", ... }, objects = 0 | 1, sounds = bool, seed = n, fix_view = bool (default true =
 //       not SA1_FOLLOW_GAME_VIEW), fix_respawn = bool (default true = not SA1_FOLLOW_GAME_HISTORY) }. leaderId: a character id
@@ -74,7 +74,7 @@ using namespace gsa1::mod;
 
 namespace {
 
-const int kFollowerKinds[] = {SA1_CHAR_SONIC, SA1_CHAR_TAILS, SA1_CHAR_KNUCKLES, SA1_CHAR_AMY, SA1_CHAR_GAMMA, SA1_CHAR_BIG};
+const int kFollowerKinds[] = {SA1_CHAR_SONIC, SA1_CHAR_TAILS, SA1_CHAR_KNUCKLES, SA1_CHAR_AMY, SA1_CHAR_GAMMA, SA1_CHAR_BIG, SA1_CHAR_EGGMAN, SA1_CHAR_TIKAL};
 
 bool arg_absent(ILuaBase *L, int i)
 {

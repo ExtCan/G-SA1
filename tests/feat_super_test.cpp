@@ -1888,7 +1888,9 @@ int main(int argc, char **argv)
 #if !defined(SA1_API_SUPER)
     CHECK(false, "libsa1.h has no Super Sonic section (API 0.4, SA1_API_SUPER)");
 #else
-#if defined(SA1_API_QUESTION)
+#if defined(SA1_API_SKIN)
+    const uint32_t expect_extra = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR | SA1_CREATE_QUESTION | SA1_CREATE_SKIN;     // 0.9.9f: a worn skin
+#elif defined(SA1_API_QUESTION)
     const uint32_t expect_extra = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR | SA1_CREATE_QUESTION;     // 0.9.9: the "?"
 #else
     const uint32_t expect_extra = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR;

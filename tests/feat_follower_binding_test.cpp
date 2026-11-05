@@ -480,7 +480,7 @@ void behaviour(MockLua &L, Rig &R)
         std::vector<Val> k = L.call("FollowerKinds", {});
         uint32_t mask = sa1_follower_kinds();
         std::string wrong;
-        for (int kind : {0, 2, 3, 5, 6, 7}) {
+        for (int kind : {0, 1, 2, 3, 4, 5, 6, 7}) {
             Val v = k.size() == 1 && k[0].type == Type::Table ? k[0].tab->at(kind) : Val();
             bool can = (mask >> kind) & 1u;
             if (can ? !(v.type == Type::Bool && v.b) : !(v.type == Type::String && !v.str.empty())) {
@@ -492,6 +492,32 @@ void behaviour(MockLua &L, Rig &R)
         }
         CHECK(wrong.empty() && ((mask >> SA1_CHAR_TAILS) & 1u), "FollowerKinds equals sa1_follower_kinds() 0x%X with libsa1's reasons%s",
               (unsigned)mask, wrong.c_str());
+    }
+
+    // 0.9.9e (the owner, rounds plan 14.1bc): Dr. Eggman and Tikal as followers, through the whole module: their own code, 300 pairs behind a running Sonic
+    for (int kind : {SA1_CHAR_EGGMAN, SA1_CHAR_TIKAL}) {
+        double sonic = R.create_char(SA1_CHAR_SONIC, 0.0f, 0.0f);
+        double f = R.follower(kind, 0.0f, 0.0f, sonic);
+        CHECK(sonic > 0 && f > 0, "kind %d: a follower of a real Sonic made (%s)", kind, R.msg.c_str());
+        int bad = 0;
+        uint32_t pairs = 0;
+        for (int t = 0; t < 300 && f > 0; t++) {
+            double sx, sy;
+            uint32_t bt;
+            script_run(t, sx, sy, bt);
+            R.pair(sonic, sx, sy, bt);
+            std::vector<Val> r = R.ftick();
+            Val row = r.size() == 1 && r[0].type == Type::Table ? r[0].tab->at(1) : Val();
+            if (row.type != Type::Table || !field_bool(row, "ok")) {
+                bad++;
+            } else {
+                pairs += (uint32_t)field_num(row, "pairs");
+            }
+        }
+        CHECK(bad == 0 && pairs >= 290, "kind %d: FollowersTick ok, %u pairs, %.0f units from him at the end", kind, pairs, R.dist(sonic, f));
+        CHECK(R.dist(sonic, f) < 1200.0, "kind %d: it stays with him (%.0f units)", kind, R.dist(sonic, f));
+        L.call("Destroy", {Val::number(f)});
+        L.call("Destroy", {Val::number(sonic)});
     }
 
     // a Tails follower of a scripted Sonic: 600 pairs of running and turning
@@ -1085,7 +1111,7 @@ int main(int argc, char **argv)
     };
     for (const auto &f : row_fields) rec(gsa1::format("field\tFollowersTick[i]\t%s\t%s", f.k, f.type));
     for (const char *k : {"followers", "workers", "ms_tick", "ms_render", "ms_join", "ms_wall", "frames"}) rec(gsa1::format("field\tFollowersStats\t%s\tnumber", k));
-    rec("field\tFollowerKinds\t[kind]\t0,2,3,5,6,7");
+    rec("field\tFollowerKinds\t[kind]\t0,1,2,3,4,5,6,7");
     rec(gsa1::format("reason\tbad_argument\t%s", gsa1::kReasonCycle));
     rec(gsa1::format("reason\tlimit\t%s", gsa1::kReasonMemory));
     rec(gsa1::format("reason\tlimit\t%s", gsa1::kReasonMaxChars));

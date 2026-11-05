@@ -22,6 +22,9 @@
 --   5d no notches in full sun (099c's second verifier): curbs and stairs under a shadow slanted another way than the sun: a riser the grid's light hits makes no fade around it, a corner on the foot of a step does not
 --     fade a whole cell; ground truly turned from the sun still reads none: a wall, a band, a crease; a sliver and stairs on the grid's rows; what a tall wall shades stays shade
 --   5e what the earlier mutation runs did not see: where a ray starts, the plane through the normal, S.SUN_SAME, the followers' budget, the normals' flag, GSA1.SunShadowTraces, the shadow switched off, nil from the engine
+--   5g 0.9.9d's verifier: 5f's fade on lines at any angle and under a slanted light (wider than 5f says of an axis), a crease at every phase of the rows
+--   5f 0.9.9d, the fade at a shade line (the owner: "The sun shadow disappears in a gradient style."): its width across a straight line and a slanted one, your shadow and a follower's, at every phase of the lattice and
+--     the grid; no pop while walking over a slanted line; no more rays than 0.9.9c's on the same walk
 --   6 cost: the grid's own traces a frame stay 0.9.9b's, what the check adds at speed, at 1 + 3 and 1 + 8 shadows; standing; the budget; no Lua garbage of its own per frame,
 --     sunlit on and off, walking, at speed and through bars of shade
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
@@ -53,6 +56,8 @@ render.BlurRenderTarget = function() end
 
 -- ---- the world ------------------------------------------------------------------------------------------------------------
 local GZ = -143
+-- (section 5f: what it measures, in HU; its walk's rays on 0.9.9c, MEASURED)
+local WIDE_STRAIGHT, MEAN_STRAIGHT, WIDE_SLANT, MEAN_SLANT, WIDE_FOLLOWER, MEAN_FOLLOWER, RAYS_099C = 19, 13, 13, 10, 13, 13, 225
 local CONTENTS_SOLID, CONTENTS_WINDOW, CONTENTS_GRATE, CONTENTS_WATER = 1, 2, 8, 32
 local W = { plane = { 0, 0, 1, GZ }, sky = 4000, boxes = {} }
 local band = bit.band
@@ -65,6 +70,15 @@ local function trace_line(t)
     local out = t.output or {}
     local s, e = t.start, t.endpos
     local sx, sy, sz, ex, ey, ez = s.x, s.y, s.z, e.x, e.y, e.z
+    -- (0.9.9d: W.shade(x, y): a shade line of any slant, for the rays to the sun alone: boxes here can only make straight lines along an axis)
+    if W.shade and mask == (MASK_OPAQUE or 16513) and W.shade(sx, sy) then
+        out.Fraction, out.StartSolid, out.AllSolid, out.Hit, out.HitSky, out.HitNoDraw = 0.01, false, false, true, false, false
+        out.HitPos = out.HitPos or Vector()
+        out.HitNormal = out.HitNormal or Vector()
+        out.HitPos:SetUnpacked(sx, sy, sz + 400)
+        out.HitNormal:SetUnpacked(0, 0, -1)
+        return out
+    end
     local dx, dy, dz = ex - sx, ey - sy, ez - sz
     local best, nx, ny, nz, sky, nodraw, startSolid, allSolid = 1, 0, 0, 0, false, false, false, false
     local p = W.plane
@@ -453,11 +467,11 @@ do
     local bad, lowest, highest = 0, math.huge, -math.huge
     for i = 1, nverts do
         local q = verts[i]
-        local want = FULL * math.max(math.min((q.x - 64) / 32, 1), 0)
+        local want = FULL * math.max(math.min(0.5 + ((q.x - 64) / 32 - 0.5) * (S.SUN_STEEP or 1), 1), 0)     -- (0.9.9d: S.SUN_STEEP; 0.9.9c's whole cell with 1)
         if not nearly(q.c, want, 0.05) then bad = bad + 1 end
         lowest, highest = math.min(lowest, q.c), math.max(highest, q.c)
     end
-    check(nverts == 384 and bad == 0 and nearly(lowest, 0, 0.01) and nearly(highest, FULL, 0.01), "half in the sun: full strength on the sunny side, none in the shade, a fade over one cell (x 64 to 96) between them "
+    check(nverts == 384 and bad == 0 and nearly(lowest, 0, 0.01) and nearly(highest, FULL, 0.01), "half in the sun: full strength on the sunny side, none in the shade, a fade around the middle of the cell (x 64 to 96) between them "
         .. "(%d of %d vertices off, %.2f .. %.2f)", bad, nverts, lowest, highest)
     -- a roof over all of it
     W.boxes = { { -2000, 2000, -2000, 2000, GZ + 200, GZ + 220 } }
@@ -797,7 +811,7 @@ do
     for i = 1, nverts do
         local q = verts[i]
         if q.y > 250 then
-            local want = FULL * math.max(math.min((q.x - 64) / 32, 1), 0)
+            local want = FULL * math.max(math.min(0.5 + ((q.x - 64) / 32 - 0.5) * (S.SUN_STEEP or 1), 1), 0)     -- (0.9.9d: S.SUN_STEEP; 0.9.9c's whole cell with 1)
             if not nearly(q.c, want, 0.05) then bad = bad + 1 end
             lo, hi = math.min(lo, q.c), math.max(hi, q.c)
         end
@@ -1336,7 +1350,15 @@ do
     check(wg <= 0.05 and lg >= 0.9 and ng == 0, "a sun nearly overhead, a riser that hardly faces it: no notch (worst %.3f, lowest %.2f)", wg, lg)
     -- stairs whose steps fall exactly on the grid's rows, every row on a riser at once: nothing around such a point faces the sun, and nothing is lost
     sunmap("80 0 0", -60, 180)
-    local wa, la, na, alone = walk(stairs_x(1, 8, 10.77), -120, 0, 7, 0, 45, fixed_along(1, 0, 10.77))
+    -- (0.9.9d: the grid's rows lie on fixed places, so it is the stairs that are put at every phase: at one of them all the rows fall on risers)
+    local wa, la, na, alone = 0, 1, 0, 0
+    for phase = 0, 10, 1 do
+        local boxes, fixed = stairs_x(1, 8, 10.77), fixed_along(1, 0, 10.77)
+        for _, b in ipairs(boxes) do b[1] = b[1] + phase end
+        for _, p in ipairs(fixed) do p[1] = p[1] + phase end
+        local w1, l1, n1, a1 = walk(boxes, -120, 0, 7, 0, 45, fixed)
+        wa, la, na, alone = math.max(wa, w1), math.min(la, l1), na + n1, alone + a1
+    end
     info("stairs on the grid's rows: worst %.3f, lowest %.2f, %d points turned, %d of them with nothing around them facing the sun", wa, la, na, alone)
     check(wa <= 0.05 and la >= 0.9 and alone > 0, "stairs that fall exactly on the grid's rows: no notch, these points keep what they read (worst %.3f, lowest %.2f, %d such points)", wa, la, alone)
 
@@ -1365,9 +1387,12 @@ do
     W.boxes = {}
     -- bands of ground falling away from the sun: one a cell wide or wider reads none, one narrower than half a cell makes no notch: the width of the surface decides, not how many rows of the grid are on it now
     read_map(bsp(REMASTER))
-    local function band(wd, drop, alongY)
+    -- (at: where the band starts, read at: at + read; 0.9.9d's rows lie on multiples of 12 HU here)
+    local function band(wd, drop, alongY, at, read)
+        at, read = at or 0, read or wd / 2 + 0.13
         W.boxes, W.plane = {}, { 0, 0, 1, GZ }
         local function hf(u)
+            u = u - at
             if u < 0 then return GZ, 0 end
             if u < wd then return GZ - 1.6 * u, -1.6 end
             return GZ - 1.6 * wd - (drop or 0), 0
@@ -1386,7 +1411,7 @@ do
             mc.pos.z = hf(alongY and mc.pos.y or mc.pos.x)
             frame()
             local c
-            if alongY then c = colour_at(0.5, wd / 2 + 0.13) else c = colour_at(wd / 2 + 0.13, 0.5) end
+            if alongY then c = colour_at(0.5, at + read) else c = colour_at(at + read, 0.5) end
             if c then
                 sum, n, lo = sum + c / FULL, n + 1, math.min(lo, c / FULL)
                 if last then
@@ -1411,7 +1436,8 @@ do
     local m12, l12, w12 = band(12)
     info("a band 12 HU wide, a cell: its middle reads mean %.2f, lowest %.2f, worst change %.3f", m12, l12, w12)
     check(m12 >= 0.98 and w12 <= 0.02, "a band 12 HU wide, no wider than a cell: no notch (mean %.2f, lowest %.2f, worst change %.3f)", m12, l12, w12)
-    local md, ld, wdp = band(4, 22)
+    -- (a row on the band: the cell past the drop is left out by the ledge rule, the one before it holds the place read)
+    local md, ld, wdp = band(4, 22, false, 10, 1.13)
     check(md >= 0.98 and ld >= 0.95 and wdp <= 0.02, "a sliver at the top of a drop: its plane does not reach the ground below: no notch (mean %.2f, lowest %.2f, worst change %.3f)", md, ld, wdp)
     -- the same along the grid's other axis
     read_map(bsp(WORLD .. SKYCAM .. SC .. ent({ { "classname", "light_environment" }, { "pitch", "-50" }, { "angles", "0 90 0" } })))
@@ -1486,22 +1512,23 @@ do
     -- plane too reads none
     do
         W.boxes, W.plane = {}, { 0, 0, 1, GZ }
+        -- (0.9.9d: the rows lie on multiples of 12 HU: the crease at 303 has the rows 300 and 312 beside it)
         W.height = function(x)
-            if x < 300 then return GZ, 0, 0 end
-            return GZ - 1.6 * (x - 300), -1.6, 0
+            if x < 303 then return GZ, 0, 0 end
+            return GZ - 1.6 * (x - 303), -1.6, 0
         end
-        place(300 + 9 - 48, 0.61, GZ)
+        place(312 - 48, 0.61, GZ)
         S.ResetSun()
         frames(30)
         local g = S.grid
         local rimAlone = 1
-        for k = 1, 81 do if g.hit[k] and g.wx[k] > 300 then rimAlone = math.min(rimAlone, g.sun[k]) end end
-        place(300 + 12 + 9 - 48, 0.61, GZ)
+        for k = 1, 81 do if g.hit[k] and g.wx[k] > 303 then rimAlone = math.min(rimAlone, g.sun[k]) end end
+        place(324 - 48, 0.61, GZ)
         S.ResetSun()
         frames(30)
         local onRim, rimHi = 0, 0
         for k = 1, 81 do
-            if g.hit[k] and g.wx[k] > 300 then
+            if g.hit[k] and g.wx[k] > 303 then
                 onRim = onRim + 1
                 rimHi = math.max(rimHi, g.sun[k])
             end
@@ -1509,15 +1536,15 @@ do
         W.height = nil
         read_map(bsp(WORLD .. SKYCAM .. SC .. ent({ { "classname", "light_environment" }, { "pitch", "-50" }, { "angles", "0 90 0" } })))
         W.height = function(_, y)
-            if y < 300 then return GZ, 0, 0 end
-            return GZ - 1.6 * (y - 300), 0, -1.6
+            if y < 303 then return GZ, 0, 0 end
+            return GZ - 1.6 * (y - 303), 0, -1.6
         end
-        place(0.61, 300 + 12 + 9 - 48, GZ)
+        place(0.61, 324 - 48, GZ)
         S.ResetSun()
         frames(30)
         local onRim2, rimHi2 = 0, 0
         for k = 1, 81 do
-            if g.hit[k] and g.wy[k] > 300 then
+            if g.hit[k] and g.wy[k] > 303 then
                 onRim2 = onRim2 + 1
                 rimHi2 = math.max(rimHi2, g.sun[k])
             end
@@ -1779,7 +1806,7 @@ do
         settle(30)
         W.boxes = { { -2000, 2000, -2000, 2000, GZ + 200, GZ + 220 } }
         local biggest, before = 0, cmax()
-        for _ = 1, 9 do
+        for _ = 1, math.floor(60 * (S.SUN_KEEP + S.SUN_FADE / 2)) do        -- (0.9.9c: 13 frames, 0.9.9d's longer fade 36)
             frame()
             local c = nverts == 0 and 0 or cmax()
             biggest = math.max(biggest, math.abs(c - before))
@@ -1875,6 +1902,316 @@ do
         check(fb == 0, "the shadow switched off, a roof, on again with a budget of 2: no frame lit (%d)", fb)
         S.ResetSun()
         settle(10)
+    end
+end
+
+-- 5f. the fade at a shade line (0.9.9d) ------------------------------------------------------------------------------------------------
+-- The owner, on 0.9.9c: "The transition between non-shadow and shadowed area looks odd. The sun shadow disappears in a gradient style." Measured here as a person sees it: the vertex colour the receivers really have at fixed places, in steps of
+-- 1 HU across the line, from where it passes 10 % of the shadow's darkness to where it passes 90 %. On 0.9.9c: 28 HU at most, 27.3 on the mean across a straight line, 32 and 29.9 across a slanted one, 34 and 29.7 for a follower (the lattice's 32 HU cell, READ sun_at; MEASURED by this section on build/release_0.9.9c).
+do
+    W.boxes = {}
+    S.ResetSun()
+    -- from the place (x0, y0) along the unit vector (nx, ny), which points from the shade to the sun: the distance between the first point over 10 % and the last under 90 %; nil where the quads do not reach
+    local function width(x0, y0, nx, ny)
+        local first, last
+        for t = -30, 30 do
+            local c = colour_at(x0 + nx * t + 0.25, y0 + ny * t + 0.25)
+            if c then
+                local v = c / FULL
+                if v > 0.1 and not first then first = t end
+                if v < 0.9 then last = t end
+            end
+        end
+        if not first or not last or last < first then return nil end
+        return last - first
+    end
+    -- every line, every phase of the character against it: the widest and the mean
+    local function sweep_lines(shade_of, nx, ny, lines, offs, cross)
+        local worst, sum, n = 0, 0, 0
+        for _, L in ipairs(lines) do
+            W.shade = shade_of(L)
+            for _, o in ipairs(offs) do
+                local px, py = cross(L, o)
+                place(px, py)
+                S.ResetSun()
+                S.grid.sunWas = false
+                settle(4)
+                local w = width(px - nx * o, py - ny * o, nx, ny)
+                if w then
+                    worst, sum, n = math.max(worst, w), sum + w, n + 1
+                end
+            end
+        end
+        W.shade = nil
+        return worst, n > 0 and sum / n or 0, n
+    end
+    local offs = {}
+    for o = -9, 9, 3 do offs[#offs + 1] = o end
+    local lines = {}
+    for L = 69, 165, 8 do lines[#lines + 1] = L end        -- (three cells of the lattice: against the rows of 12 HU the lattice comes round every 96 HU)
+    local w1, m1, n1 = sweep_lines(function(L) return function(x) return x < L end end, 1, 0, lines, offs, function(L, o) return L + o, 0 end)
+    info("the fade across a straight shade line, your shadow: widest %.0f HU, mean %.1f (%d places; 10 %% to 90 %% of the shadow's darkness)", w1, m1, n1)
+    check(n1 >= 40 and w1 <= WIDE_STRAIGHT and m1 <= MEAN_STRAIGHT, "a straight shade line: the fade ends close to the line, at most %d HU, %d on the mean (%.0f, %.1f; 0.9.9c: 28, 27.3)", WIDE_STRAIGHT, MEAN_STRAIGHT, w1, m1)
+    -- WHAT IT COSTS, said by number: the lattice's corners decide where the line lies, so the place the shadow is half faded can be up to half a cell from the true line of shade; a soft fade hid that, a narrow one shows it
+    do
+        local off = 0
+        for L = 65, 95, 2 do
+            W.shade = function(x) return x < L end
+            place(L, 0)
+            S.ResetSun()
+            S.grid.sunWas = false
+            settle(4)
+            for x = 48, 112 do
+                local a, b = colour_at(x + 0.25, 0.25), colour_at(x + 1.25, 0.25)
+                if a and b and a < FULL / 2 and b >= FULL / 2 then off = math.max(off, math.abs(x + 0.75 - L)) end
+            end
+        end
+        W.shade = nil
+        info("where the shadow is half faded against the true line of shade, a straight line: up to %.1f HU apart", off)
+        check(off >= 12 and off <= 18, "the line's place comes from corners 32 HU apart: up to half a cell from the true line (%.1f HU; the owner's checklist says so)", off)
+    end
+    local slanted = {}
+    for L = 0, 60, 10 do slanted[#slanted + 1] = L end
+    local r2 = math.sqrt(0.5)
+    local w2, m2, n2 = sweep_lines(function(L) return function(x, y) return (x + y) * r2 < L end end, r2, r2, slanted, offs, function(L, o) return (L + o) * r2, (L + o) * r2 end)
+    info("the fade across a slanted shade line, your shadow: widest %.0f HU, mean %.1f (%d places)", w2, m2, n2)
+    check(n2 >= 40 and w2 <= WIDE_SLANT and m2 <= MEAN_SLANT, "a slanted shade line: at most %d HU, %d on the mean (%.0f, %.1f; 0.9.9c: 32, 29.9)", WIDE_SLANT, MEAN_SLANT, w2, m2)
+    -- no pop while walking over a slanted line, and across a straight one at an angle: the same bound as section 4's
+    local function walk_over(shade, x0, y0, vx, vy, label)
+        W.shade = shade
+        place(x0, y0)
+        S.ResetSun()
+        settle(20)
+        local last, worst = {}, 0
+        for _ = 1, 240 do
+            mc.pos.x, mc.pos.y = mc.pos.x + vx / 60, mc.pos.y + vy / 60
+            frame()
+            for x = -30, 90, 7 do
+                for y = -30, 90, 7 do
+                    local c = colour_at(x + 0.5, y + 0.5)
+                    local key = x * 1000 + y
+                    if c and last[key] then
+                        local d = math.abs(c - last[key]) / FULL
+                        if d > worst then worst = d end
+                    end
+                    last[key] = c
+                end
+            end
+        end
+        W.shade = nil
+        info("%s over the shade line: a fixed place changed by at most %.3f of the shadow in a frame", label, worst)
+        check(worst <= 0.10, "%s over the shade line: a fixed place changes by at most 0.10 of the shadow in a frame (%.3f)", label, worst)
+    end
+    walk_over(function(x, y) return (x + y) * r2 < 30 end, -40, -40, 85, 85, "walking at 120 HU/s on the slant")
+    walk_over(function(x, y) return (x + y) * r2 < 30 end, 80, 80, -280, -280, "running at 400 HU/s back on the slant")
+    walk_over(function(x, y) return (x + y) * r2 < 30 end, -40, 80, 113, 0, "walking along a row over the slant")
+    walk_over(function(x) return x < 30.5 end, 0, 7, 120, 37, "walking at an angle over a straight line")
+    -- a character standing: nothing moves at all
+    W.shade = function(x, y) return (x + y) * r2 < 30 end
+    place(21, 21)
+    S.ResetSun()
+    settle(20)
+    local v0, moved = {}, 0
+    for i = 1, nverts do v0[i] = verts[i].c end
+    for _ = 1, 120 do
+        frame()
+        for i = 1, math.min(nverts, #v0) do moved = math.max(moved, math.abs(verts[i].c - v0[i])) end
+    end
+    W.shade = nil
+    check(moved <= 0.01, "standing on a slanted line, the grid traced again four times a second: not a change (%.3f)", moved)
+    -- a follower's coarser grid (16 HU)
+    do
+        local Fo2 = GSA1.Followers
+        place(5000, 5000)
+        local pos = Vector(80, 300, GZ)
+        local id = G.Create(0, pos, 0, 0, 0)
+        local e2 = ents.CreateClientside("gsa1_render")
+        local F = { id = id, kind = 0, name = "sonic", title = "Sonic", uid = 100000, info = G.CharacterInfo(0), state = {}, batches = { count = 0 }, batchGen = 1, mats = {}, static = {},
+                    matsDirty = true, ent = e2, drawPos = pos, drawYaw = 0, lod = 1, interp = true, renderGen = 1, follower = true }
+        G.Batches(id, F.batches)
+        e2.char = F
+        Fo2.list[#Fo2.list + 1] = F
+        Fo2.byId[id] = F
+        RunConsoleCommand("gsa1_sunshadow_followers", "1")
+        local worst, sum, n = 0, 0, 0
+        for _, L in ipairs(lines) do
+            W.shade = function(x) return x < L end
+            for _, o in ipairs(offs) do
+                pos:SetUnpacked(L + o, 300, GZ)
+                M.mchars[id].pos.x, M.mchars[id].pos.y, M.mchars[id].pos.z = L + o, 300, GZ
+                S.ResetSun()
+                settle(6)
+                local w = width(L, 300, 1, 0)
+                if w then worst, sum, n = math.max(worst, w), sum + w, n + 1 end
+            end
+        end
+        W.shade = nil
+        info("the fade across a straight shade line, a follower's shadow: widest %.0f HU, mean %.1f (%d places)", worst, n > 0 and sum / n or 0, n)
+        check(n >= 20 and worst <= WIDE_FOLLOWER and sum / n <= MEAN_FOLLOWER, "a follower's shadow: at most %d HU across a straight line, %d on the mean, its grid being 16 HU (%.0f, %.1f; 0.9.9c: 34, 29.7)", WIDE_FOLLOWER, MEAN_FOLLOWER, worst, n > 0 and sum / n or 0)
+        F.removed = true
+        for i = #Fo2.list, 1, -1 do if Fo2.list[i] == F then table.remove(Fo2.list, i) end end
+        Fo2.byId[id] = nil
+        e2:Remove()
+        RunConsoleCommand("gsa1_sunshadow_followers", "3")
+        frames(4)
+    end
+    -- the rows now lie up to half a cell off the character's centre, and may lag S.RETRACE_MOVE behind it as before: how much of the box the quads still reach around the centre, walking any way
+    do
+        W.shade = nil
+        place(0, 0)
+        S.ResetSun()
+        settle(5)
+        local least = math.huge
+        for _ = 1, 300 do
+            mc.pos.x, mc.pos.y = mc.pos.x + 0.9, mc.pos.y + 0.37
+            frame()
+            local lox, hix, loy, hiy = math.huge, -math.huge, math.huge, -math.huge
+            for i = 1, nverts do
+                local q = verts[i]
+                lox, hix, loy, hiy = math.min(lox, q.x), math.max(hix, q.x), math.min(loy, q.y), math.max(hiy, q.y)
+            end
+            if nverts > 0 then least = math.min(least, mc.pos.x - lox, hix - mc.pos.x, mc.pos.y - loy, hiy - mc.pos.y) end
+        end
+        info("walking: the quads reach at least %.1f HU from the character's centre on every side (the box is 48; 0.9.9c: 42.6 on this walk)", least)
+        check(least >= 48 - 6 - S.RETRACE_MOVE - 0.5, "the quads still reach %.1f HU around the character: the box less half a cell less the retrace's lag; 0.9.9c: 42.6", least)
+    end
+    -- no extra question to the engine: the same walk asks no more rays than 0.9.9c did (MEASURED on build/release_0.9.9c by this test: its info line)
+    do
+        W.shade = function(x, y) return (x + y) * r2 < 30 end
+        place(-200, -200)
+        S.ResetSun()
+        settle(10)
+        count_masks()
+        for _ = 1, 400 do
+            mc.pos.x, mc.pos.y = mc.pos.x + 2, mc.pos.y + 2
+            frame()
+        end
+        local rays = traceByMask[MASK_OPAQUE or 16513] or 0
+        W.shade = nil
+        info("a walk of 400 frames over a slanted shade line: %d rays to the sun", rays)
+        check(rays <= RAYS_099C * 1.05, "no extra questions to the engine: %d rays on a walk where 0.9.9c asked %d", rays, RAYS_099C)
+    end
+    place(0, 0)
+    S.ResetSun()
+    settle(5)
+end
+
+-- 5g. what 5f and the crease of section 4 do not show (0.9.9d's verifier, SADC/build/research/r099d/verify/: fade_new.txt, anyangle_new.txt, crease_new.txt): the same fade on lines at any angle and under a slanted light; a crease at every phase of the rows ---
+do
+    -- the width as a person sees it: 10 % to 90 % of what the walk's plateau reaches (under a slanted light the shadow is less dark)
+    local function width(x0, y0, nx, ny)
+        local vals, top = {}, 0
+        for t = -36, 36 do
+            local c = colour_at(x0 + nx * t + 0.25, y0 + ny * t + 0.25)
+            vals[t] = c and c / FULL or false
+            if c and c / FULL > top then top = c / FULL end
+        end
+        if top <= 0.05 then return nil end
+        local first, last
+        for t = -36, 36 do
+            local v = vals[t]
+            if v then
+                if v > 0.1 * top and not first then first = t end
+                if v < 0.9 * top then last = t end
+            end
+        end
+        if not first or not last or last < first then return nil end
+        return last - first
+    end
+    local function light(pitch, yaw)
+        local MAP = WORLD .. SKYCAM .. ent({ { "classname", "shadow_control" }, { "angles", pitch .. " " .. yaw .. " 0" }, { "color", "187 187 187" }, { "distance", "1000" }, { "disableallshadows", "0" } }) ..
+            ent({ { "classname", "light_environment" }, { "origin", "891 149 -112" }, { "targetname", "sunsunsun" }, { "style", "34" }, { "pitch", "-50" }, { "angles", "0 34 0" }, { "_light", "255 240 204 550" }, { "_ambient", "116 154 192 400" } }) ..
+            ent({ { "classname", "env_sun" }, { "pitch", "-53" }, { "angles", "0 72 0" }, { "use_angles", "1" } })
+        place(0, 0)
+        read_map(bsp(MAP))
+        W.boxes, W.height, W.shade = {}, nil, nil
+        S.ResetSun()
+        S.grid.sunWas = false
+        settle(4)
+    end
+    -- bounds: what 0.9.9d measures, widest and mean; beside them 0.9.9c's. Fewer places than the verifier's run, and other ones: the widest stays within its numbers, the mean can differ by a little
+    for _, r in ipairs({ { 90, 0, 29, 15.5, "49 / 31.8" }, { 60, 298, 24, 16.5, "47 / 32.0" } }) do
+        light(r[1], r[2])
+        local worst, sum, n = 0, 0, 0
+        for ang = 0, 165, 15 do
+            local nx, ny = math.cos(math.rad(ang)), math.sin(math.rad(ang))
+            for L = 69, 165, 32 do
+                W.shade = function(x, y) return x * nx + y * ny < L end
+                for _, o in ipairs({ -9, 3 }) do
+                    place(nx * (L + o), ny * (L + o))
+                    S.ResetSun()
+                    S.grid.sunWas = false
+                    settle(4)
+                    local w = width(nx * L, ny * L, nx, ny)
+                    if w then worst, sum, n = math.max(worst, w), sum + w, n + 1 end
+                end
+            end
+        end
+        W.shade = nil
+        info("5g lines at every 15 degrees, shadow_control %d %d: widest %d, mean %.1f (%d places); the verifier's fuller run, 0.9.9d %d, 0.9.9c %s", r[1], r[2], worst, n > 0 and sum / n or 0, n, r[3], r[5])
+        check(n >= 60 and worst <= r[3] and sum / n <= r[4], "5g lines at any angle, shadow_control %d %d: at most %d HU, %.1f on the mean; NOT the 18 of an axis under a straight-down light (%d, %.1f)", r[1], r[2], r[3], r[4], worst, n > 0 and sum / n or 0)
+    end
+    local lines, offs = {}, { -9, -3, 3, 9 }
+    for L = 69, 165, 16 do lines[#lines + 1] = L end
+    for _, r in ipairs({ { 60, 30, 24, 22, "34 / 29.4" }, { 45, 30, 30, 21, "35 / 31.2" }, { 30, 0, 37, 26.5, "38 / 34.8" } }) do
+        light(r[1], r[2])
+        local worst, sum, n = 0, 0, 0
+        for _, L in ipairs(lines) do
+            W.shade = function(x) return x < L end
+            for _, o in ipairs(offs) do
+                place(L + o, 0)
+                S.ResetSun()
+                S.grid.sunWas = false
+                settle(4)
+                local w = width(L, 0, 1, 0)
+                if w then worst, sum, n = math.max(worst, w), sum + w, n + 1 end
+            end
+        end
+        W.shade = nil
+        info("5g across a low light's azimuth, shadow_control %d %d: widest %d, mean %.1f (%d places); the verifier's fuller run, 0.9.9d %d, 0.9.9c %s", r[1], r[2], worst, n > 0 and sum / n or 0, n, r[3], r[5])
+        check(n >= 24 and worst <= r[3] and sum / n <= r[4], "5g across a low light, shadow_control %d %d: at most %d HU, %.1f on the mean: the lower the light the less is gained (%d, %.1f)", r[1], r[2], r[3], r[4], worst, n > 0 and sum / n or 0)
+    end
+    read_map(bsp(REMASTER))
+    W.boxes, W.height, W.shade = {}, nil, nil
+    place(0, 0)
+    S.ResetSun()
+    settle(5)
+    -- a crease at every phase of the rows of 12 HU. On a row, x = 300, section 4's walk reads 0.000; that is the best phase, not the rule. Under the feet it is gone; further out it is not, and no worse than 0.9.9c's 0.488 and 0.985
+    do
+        local n20, n30, n40 = 0, 0, 0
+        for c0 = 300, 311 do
+            W.boxes, W.plane = {}, { 0, 0, 1, GZ }
+            local function hz(x) if x < c0 then return GZ, 0, 0 end return GZ - 1.6 * (x - c0), -1.6, 0 end
+            W.height = function(x) return hz(x) end
+            place(c0 - 60.37, 0.61, GZ)
+            S.ResetSun()
+            frames(20)
+            local prev = {}
+            for _ = 1, 60 do
+                mc.pos.x = mc.pos.x + 2
+                mc.pos.z = (hz(mc.pos.x))
+                frame()
+                for dx = -60, 60, 3 do
+                    local px = c0 + dx + 0.5
+                    local c = colour_at(px, 0.5)
+                    if c and prev[dx] then
+                        local d = math.abs(c - prev[dx]) / FULL
+                        local far = math.abs(px - mc.pos.x)
+                        if far <= 20 then n20 = math.max(n20, d) end
+                        if far <= 30 then n30 = math.max(n30, d) end
+                        if far <= 40 then n40 = math.max(n40, d) end
+                    end
+                    prev[dx] = c
+                end
+            end
+            W.height = nil
+        end
+        info("5g a crease at 12 phases, walked over: within 20 HU of the feet %.3f, 30 HU %.3f, 40 HU %.3f of the shadow in a frame (0.9.9c: 0.488, 0.488, 0.985)", n20, n30, n40)
+        check(n20 <= 0.002, "5g a crease at any phase: nothing moves within 20 HU of the feet (%.3f; 0.9.9c 0.488)", n20)
+        check(n30 <= 0.54 and n40 <= 0.95, "5g a crease at any phase: further out it still jumps, the bound says how much (%.3f, %.3f; 0.9.9c 0.488, 0.985)", n30, n40)
+        place(0, 0, GZ)
+        S.ResetSun()
+        settle(5)
     end
 end
 

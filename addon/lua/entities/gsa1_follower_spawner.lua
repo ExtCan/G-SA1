@@ -14,6 +14,7 @@ ENT.DisableDuplicator = true
 local KINDS = {
     { 2, "tails", "Tails" }, { 0, "sonic", "Sonic" }, { 3, "knuckles", "Knuckles" },
     { 6, "gamma", "E-102 Gamma" }, { 5, "amy", "Amy" }, { 7, "big", "Big" },
+    { 1, "eggman", "Dr. Eggman" }, { 4, "tikal", "Tikal" },     -- (0.9.9e)
 }
 
 for _, k in ipairs(KINDS) do

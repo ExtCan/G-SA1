@@ -1287,7 +1287,7 @@ function W.PageRows(entry, list)
             end
         end
     end
-    for _, u in ipairs(W.UNPLAYABLE and W.UNPLAYABLE[entry] or {}) do
+    for _, u in ipairs(W.UNPLAYABLE and (W.UNPLAYABLE[entry] or (entry == "metalsonic" and W.UNPLAYABLE.sonic)) or {}) do
         if not offered[u[1]] then
             rows[#rows + 1] = { key = "a" .. u[1], num = u[1], name = u[2] ~= "" and u[2] or ("(empty) a" .. u[1]),
                                 frames = "", plays = "", group = W.NOT_USABLE, greyed = u[3], variants = {} }

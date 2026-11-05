@@ -77,6 +77,8 @@ end
 -- a character hit by another (PvP), or by the world: the victim's client hits its character (0.9.2: with the attacker's
 -- class for the session log's hurt lines, L7)
 function I.SendHurt(victim, amount, dtype, source, attacker, kill, pvp)
+    if victim.GSA1Photo then return end         -- (0.9.9d: in photo mode nothing lands, in any damage mode: feat/sv_photo.lua)
+    if IsValid(attacker) and attacker.GSA1Photo then return end     -- (0.9.9e: and nothing comes from someone in photo mode)
     net.Start(NET.HURT)
     net.WriteFloat(amount)
     net.WriteUInt(dtype or 0, 32)
@@ -90,6 +92,7 @@ end
 
 net.Receive(NET.HIT, function(len, ply)
     if not IsValid(ply) or not is_char(ply) or not SV.damage:GetBool() then return end
+    if ply.GSA1Photo then return end         -- (0.9.9e: someone in photo mode hits no one: the victim's GSA1Photo alone left this open, r099d/verify2/hit_probe.txt)
     local idx = net.ReadUInt(16)
     local attack = net.ReadUInt(5)
     net.ReadUInt(2)                      -- level (informational)

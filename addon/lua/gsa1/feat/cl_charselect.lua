@@ -18,6 +18,7 @@ local band, bor, bnot = bit.band, bit.bor, bit.bnot
 
 local KEY_MOVE_LEFT, KEY_MOVE_RIGHT = KEY_LEFT or 89, KEY_RIGHT or 91
 local KEY_LETTER_A, KEY_LETTER_D = KEY_A or 11, KEY_D or 14
+local KEY_MOVE_UP, KEY_LETTER_W = KEY_UP or 88, KEY_W or 33      -- 0.9.9f: a skin's Up, without a pad (the owner named the D-pad)
 local KEY_PICK, KEY_PICK_PAD, KEY_PICK_SPACE = KEY_ENTER or 64, KEY_PAD_ENTER or 51, KEY_SPACE or 65
 local KEY_GO_BACK, KEY_CLOSE = KEY_BACKSPACE or 66, KEY_ESCAPE or 70
 local M_LEFT, M_RIGHT = MOUSE_LEFT or 107, MOUSE_RIGHT or 108
@@ -38,35 +39,17 @@ local cv = {
         .. "in Garry's Mod)", 0, 1),
     wide   = GSA1.ConVar("gsa1_charselect_wide", 0, "Character Select on wide screens: 0 = 4:3 with the sky continued, 1 = "
         .. "stretched", 0, 1),
-    super  = GSA1.ConVar("gsa1_charselect_super", "question", "Character Select, the ? slot plays: question = the Question Mark, last = the "
-        .. "Super Sonic you played last, supersonic = Vs. Perfect Chaos, supersonic_general = General Gameplay"),
     -- 0.9.9 (sadc docs/research/gsa1_099_plan.md 5.9, small099.md 3.2)
-    qmark  = GSA1.ConVar("gsa1_charselect_qmark", 1, "The question mark's texture, on the menu and on the character: 1 = the gold "
+    qmark  = GSA1.ConVar("gsa1_charselect_qmark", 1, "The question mark's texture: 1 = the gold "
         .. "in the menu's own archive (sstx_body), 0 = as the Dreamcast draws it (the words Player Select mirrored over it)", 0, 1),
-    -- the option's memory, not an option: no control (the plan's 5.9)
-    super_last = GSA1.ConVar("gsa1_charselect_super_last", "", "Character Select: the Super Sonic you played last (kept by "
-        .. "G-SA1)"),
+    -- 0.9.9f (the owner, rounds plan 14.1bd; sadc docs/research/metal099e.md 5.2)
+    skins  = GSA1.ConVar("gsa1_charselect_skins", 1, "Character Select: Up on Sonic switches to Metal Sonic (off: Up does what it did)", 0, 1),
 }
 S.cv = cv
 
 local function log(fmt, ...)
     if GSA1.Log then GSA1.Log("charselect", fmt, ...) end
 end
-
--- 0.9.9 (sadc docs/research/gsa1_099_plan.md, addendum A4): the slot's default is the "?" now. Garry's Mod keeps ConVars, so a saved "last" (0.9.8's
--- default) moves to "question" once per installation (a cookie, as cl_super.lua's voice move), with one log line: a later choice of "last"
--- stays, and so does a saved choice of a Super Sonic. true when it changed the setting
-function S.MigrateSlot()
-    if not (cookie and cookie.GetNumber and cookie.Set) or cookie.GetNumber("gsa1_charselect_super_099", 0) ~= 0 then
-        return false
-    end
-    cookie.Set("gsa1_charselect_super_099", "1")
-    if cv.super:GetString() ~= "last" then return false end
-    cv.super:SetString("question")
-    log("the ? slot: a saved \"The Super Sonic you played last\" moved once to \"The Question Mark\" (0.9.9); choose it again on the Character page and it stays")
-    return true
-end
-S.MigrateSlot()
 
 S.st = nil                      -- the open panel's state (nil: closed)
 S.keyWas, S.startWas = false, false
@@ -130,7 +113,12 @@ end
 
 -- the title of a slot's button
 function S.SlotTitle(slot)
-    if slot == S.SUPER_SLOT then return cv.super:GetString() == "question" and "?" or "Super Sonic" end
+    if slot == S.SUPER_SLOT then return "Super Sonic" end
+    local sk = S.st and S.st.skin and S.SLOT_SKINS[slot]
+    if sk then
+        local e = GSA1.CharacterByName and GSA1.CharacterByName(sk[1])
+        return e and e.title or sk[1]
+    end
     local c = GSA1.CharacterByName and GSA1.CharacterByName(S.SLOT_ENTRY[slot])
     return c and c.title or tostring(S.SLOT_ENTRY[slot])
 end
@@ -142,17 +130,52 @@ function S.FirstSlot()
     return S.SlotOf(GSA1.cv and GSA1.cv.character and GSA1.cv.character:GetString() or "sonic")
 end
 
--- the entry a slot plays under the option
+-- the entry a slot plays
 function S.EntryName(slot)
-    return S.EntryOf(slot, cv.super:GetString(), cv.super_last:GetString())
+    local sk = S.st and S.st.skin and S.SLOT_SKINS[slot]
+    if sk then return sk[1] end
+    return S.EntryOf(slot)
 end
 
--- a Super Sonic that comes up (a pick, the Options page) is the one "played last"
-hook.Add("GSA1CharacterCreated", "gsa1_charselect", function(C)
-    if C and (C.name == "supersonic" or C.name == "supersonic_general") and cv.super_last:GetString() ~= C.name then
-        cv.super_last:SetString(C.name)
+-- 0.9.9f: Up on a slot with skins: the skin on the spot, again the slot's own character. The game does not know (Up is still forwarded on Design R, where it does nothing while idle, MEASURED, and moves the
+-- optional dialog's cursor: metal099e.md RM.5). A module without skins or a disc without the files: st.skin stays false and the log says why, so the pick cannot name a skin the screen did not show
+function S.ToggleSkin(st)
+    local sk = S.SLOT_SKINS[st.slot]
+    if not sk then return false end
+    local name, on = sk[1], not st.skin
+    local K = GSA1.Skins
+    local skin = K and K.SKINS[name]
+    local ok, msg, code = true, nil, nil
+    if not (skin and gsa1 and gsa1.SUPER and gsa1.SUPER.CREATE_SKIN and gsa1.FrontendSkin) then
+        ok, msg = false, "this module has no skins"
+    elseif st.design == "R" then
+        if on then
+            ok, msg, code = gsa1.FrontendSkin(K.DescOf(skin), K.Voiceless(skin))
+        else
+            ok, msg, code = gsa1.FrontendSkin(nil)
+        end
     end
-end)
+    if not ok then
+        st.skin = false
+        log("the skin %s: refused: %s (%s)", name, tostring(msg), tostring(code))
+        return false
+    end
+    st.skin = on
+    log("slot %d: %s", st.slot, on and name or tostring(S.EntryOf(st.slot)))
+    return true
+end
+
+-- the line on a slot with skins; nil: none
+function S.SkinHint(st)
+    if not cv.skins:GetBool() then return nil end
+    local sk = S.SLOT_SKINS[st.slot]
+    if not sk then return nil end
+    local e = GSA1.CharacterByName and GSA1.CharacterByName(sk[1])
+    local o = GSA1.CharacterByName and GSA1.CharacterByName(S.EntryOf(st.slot))
+    local title, own = e and e.title or sk[1], o and o.title or tostring(S.EntryOf(st.slot))
+    if st.skin then return string.upper(title) .. "   (Up: " .. own .. ")" end
+    return "Up: " .. title
+end
 
 -- music ----------------------------------------------------------------------------------------------------------------------
 -- one source of the track whatever gsa1_sound_bgm says (RC2): the jukebox engine's channel 1, the game's music silenced, your
@@ -212,6 +235,8 @@ function S.PaintS(st, W, H)
     if st.fallback then
         draw.SimpleText(st.fallback, "GSA1CharSelectHint", W / 2, H * 0.89, COL_HINT, mid, mid)
     end
+    local hint = S.SkinHint(st)
+    if hint then draw.SimpleText(hint, "GSA1CharSelectHint", W / 2, H * 0.79, COL_TEXT, mid, mid) end
 end
 
 function S.Move(dir)
@@ -243,6 +268,7 @@ local function step_s(st)
     st.stickWas = dir
     if band(pressed, S.PAD_LEFT) ~= 0 then S.Move(-1) end
     if band(pressed, S.PAD_RIGHT) ~= 0 then S.Move(1) end
+    if band(pressed, S.PAD_UP) ~= 0 and cv.skins:GetBool() then S.ToggleSkin(st) end
     if band(pressed, S.PAD_A + S.PAD_START) ~= 0 then return S.Finish(st.slot) end
     if band(pressed, S.PAD_B + S.PAD_BACK) ~= 0 then return S.Close("back") end
 end
@@ -250,6 +276,7 @@ end
 local function key_s(st, code)
     if code == KEY_MOVE_LEFT or code == KEY_LETTER_A then return S.Move(-1) end
     if code == KEY_MOVE_RIGHT or code == KEY_LETTER_D then return S.Move(1) end
+    if (code == KEY_MOVE_UP or code == KEY_LETTER_W) and cv.skins:GetBool() then return S.ToggleSkin(st) end
     if code == KEY_PICK or code == KEY_PICK_PAD or code == KEY_PICK_SPACE then return S.Finish(st.slot) end
     if code == KEY_GO_BACK then return S.Close("back") end
 end
@@ -311,6 +338,11 @@ local function start_r(st)
     end
     st.design, st.F = "R", gsa1.FRONTEND
     st.scr, st.batches, st.events, st.state, st.m = {}, {}, {}, {}, {}
+    if st.skin then
+        -- opened while you are him: it opens on him
+        st.skin = false
+        S.ToggleSkin(st)
+    end
     st.keys, st.pulse, st.mask, st.frame, st.slots = {}, 0, st.padWas, 0, S.SLOTS
     st.names = {}
     -- the characters' textures come in the budgeted way, the selected kind's first (T.Material's urgent T.Get)
@@ -363,6 +395,7 @@ local function key_r(st, code)
     if code == KEY_MOVE_LEFT or code == KEY_LETTER_A then return pulse(st, F.LEFT, code) end
     if code == KEY_MOVE_RIGHT or code == KEY_LETTER_D then return pulse(st, F.RIGHT, code) end
     if code == KEY_GO_BACK then return pulse(st, F.B, code) end
+    if (code == KEY_MOVE_UP or code == KEY_LETTER_W) and cv.skins:GetBool() and tonumber(st.state.phase) == 0 then return S.ToggleSkin(st) end
 end
 
 -- the screen's bounding box of these vertices, on W x H; nil: none
@@ -479,6 +512,8 @@ local function step_r(st)
         end
         sx, sy = 0, 0
     else
+        -- 0.9.9f: on a slot with skins, only while the screen is idle (phase 0); Up is still forwarded, always (RM.5)
+        if band(pressed, S.PAD_UP) ~= 0 and S.SLOT_SKINS[st.slot] and cv.skins:GetBool() and tonumber(st.state.phase) == 0 then S.ToggleSkin(st) end
         if band(pad, S.PAD_LEFT) ~= 0 then b = bor(b, F.LEFT) end
         if band(pad, S.PAD_RIGHT) ~= 0 then b = bor(b, F.RIGHT) end
         if band(pad, S.PAD_UP) ~= 0 then b = bor(b, F.UP) end
@@ -646,6 +681,11 @@ local function paint_r(st, W, H)
     st.drawn2d = paint_2d(st, m, false, show, H_mat, T)
     st.drawn3d = paint_3d(st, m, T)
     st.drawn2d = st.drawn2d + paint_2d(st, m, true, show, H_mat, T)
+    local hint = S.SkinHint(st)
+    if hint then
+        fonts(H)
+        draw.SimpleText(hint, "GSA1CharSelectHint", W / 2, H * 0.80, COL_TEXT, TEXT_ALIGN_CENTER or 1, TEXT_ALIGN_CENTER or 1)
+    end
 end
 
 function S.PaintR(st, W, H)
@@ -762,6 +802,13 @@ function S.Open(how)
     local raw = pad_read()
     local st = { how = how or "?", slot = S.FirstSlot(), padWas = raw, stickWas = 0, design = "S",
                  uiWas = gui.IsGameUIVisible(), t0 = t0 }
+    do
+        -- 0.9.9f: opening while you are a skin of this slot shows him (S.ToggleSkin, in start_r for the game's screen)
+        local me = GSA1.Char and GSA1.Char.name or (GSA1.cv and GSA1.cv.character and GSA1.cv.character:GetString())
+        for _, n in ipairs(S.SLOT_SKINS[st.slot] or {}) do
+            if n == me then st.skin = true end
+        end
+    end
     S.st = st
     st.panel = make_panel(st)
     local ok, why, refused = start_r(st)
@@ -896,11 +943,18 @@ hook.Add("PopulateMenuBar", "gsa1_charselect", function(bar)
     local m = bar:AddOrGetMenu("G-SA1")
     m:AddOption("Character Select...", function() S.Open("menubar") end)
     m:AddSpacer()
-    for _, c in ipairs(GSA1.CHARACTERS) do
+    for _, c in ipairs(GSA1.ListedCharacters()) do
         m:AddOption(c.title, function() GSA1.Spawn(c.name) end)
     end
     m:AddSpacer()
     m:AddOption("Remove character", function() RunConsoleCommand("gsa1_remove") end)
+    S.menubarMenu = m
+end)
+-- 0.9.9e: the menubar was filled before the unlocking: the "?" goes at its end
+hook.Add("GSA1QuestionUnlocked", "gsa1_charselect", function()
+    local m = S.menubarMenu
+    if not (m and m.AddOption and (not m.IsValid or m:IsValid())) then return end
+    m:AddOption("?", function() GSA1.Spawn("question") end)
 end)
 
 -- the icon from your disc (never shipped; written at run time) -----------------------------------------------------------------
@@ -1010,15 +1064,16 @@ function S.BuildOptions(panel)
     panel:CheckBox("Show the game's Game / Instruction / Cancel dialog", "gsa1_charselect_dialog")
     combo(panel, "After a pick", "gsa1_charselect_close", {
         { "the game's 5-second pose (A skips it after the voice)", "0" }, { "switch when the voice starts", "1" } })
+    panel:CheckBox("Up on Sonic switches to Metal Sonic", "gsa1_charselect_skins")
+    panel:ControlHelp("Up on the D-pad (or the Up key, or W) while Sonic is selected. Off: Up does what it did.")
     panel:CheckBox("Play Choose Your Buddy!", "gsa1_charselect_music")
     panel:ControlHelp("Your jukebox pauses where it is and goes on afterwards. Off: no music, the jukebox goes on.")
     panel:CheckBox("Show File and Clear in the bottom bar", "gsa1_charselect_file")
     combo(panel, "Wide screens", "gsa1_charselect_wide", { { "4:3 with the sky continued", "0" }, { "stretched", "1" } })
-    combo(panel, "The ? slot plays", "gsa1_charselect_super", S.SUPER_CHOICES)
     combo(panel, "The question mark's texture", "gsa1_charselect_qmark", {
         { "gold (the menu's sstx_body; not what the game's code picks)", "1" },
         { "as the Dreamcast draws it (the words Player Select mirrored over it)", "0" } })
-    panel:ControlHelp("Both the question mark on this screen and the character \"?\". The texture was never tiling: the game's model "
+    panel:ControlHelp((GSA1.QuestionUnlocked() and "Both the question mark on this screen and the character \"?\". " or "The question mark on this screen. ") .. "The texture was never tiling: the game's model "
         .. "asks for the texture with the words Player Select and spreads them over every curved face. Your disc also has this unused gold.")
 end
 if GSA1.AddCharacterOption then GSA1.AddCharacterOption(180, "charselect", S.BuildOptions) end

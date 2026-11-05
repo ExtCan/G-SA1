@@ -31,6 +31,7 @@
 
 #include "GarrysMod/Lua/Interface.h"
 
+#include "skin_args.hpp"
 #include "../core/audio.hpp"
 #include "../core/bsp.hpp"
 #include "../core/config.hpp"
@@ -67,7 +68,7 @@ static_assert(offsetof(lua_State, luabase) == (sizeof(void *) == 8 ? 120 : 72),
 using GarrysMod::Lua::ILuaBase;
 namespace LT = GarrysMod::Lua::Type;
 
-#define GSA1_MODULE_VERSION "0.9.9c"
+#define GSA1_MODULE_VERSION "0.9.9e"
 #define GSA1_API_VERSION 6
 
 namespace {
@@ -1371,6 +1372,9 @@ GSA1_FN(gsa1_lua_Create)
     }
     // 0.9.3: the extras table (Super Sonic's world)
     gsa1::CreateExtra extra;
+#if defined(SA1_API_SKIN)
+    gsa1::skinargs::SkinArgs skin_args;     // 0.9.9f: lives through the create
+#endif
     int t6 = LUA->GetType(6);
     if (t6 != LT::Nil && t6 != LT::None) {
         if (t6 != LT::Table) {
@@ -1394,6 +1398,23 @@ GSA1_FN(gsa1_lua_Create)
         if (found) {
             start_rings = v < 0.0 ? -1 : (int32_t)std::min(v, (double)gsa1::kStartRingsMax);
         }
+#if defined(SA1_API_SKIN)
+        // 0.9.9f: extras.skin: feat/sh_skins.lua GSA1.Skins.DescOf
+        LUA->PushString("skin");
+        LUA->RawGet(t);
+        int ts = LUA->GetType(-1);
+        if (ts == LT::Table) {
+            std::string serr;
+            bool sok = skin_args.read(LUA, LUA->Top(), serr);
+            LUA->Pop();
+            if (!sok) {
+                return push_nil_msg(LUA, serr.c_str(), "bad_extra");
+            }
+            extra.skin = &skin_args.d;
+        } else {
+            LUA->Pop();
+        }
+#endif
     }
     if (!g_world_ok) {
         return push_nil_msg(LUA, "no world collision yet: call gsa1.WorldLoad(game.GetMap()) first");

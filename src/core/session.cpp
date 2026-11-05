@@ -605,6 +605,9 @@ int32_t Session::create(int32_t kind, const float pos[3], float yaw, std::string
     }
     // 0.9.3: Super Sonic's world (sa1_character_desc.super_flags is at the struct's tail: struct_size covers it)
     d.flags |= ex.flags;
+#if defined(SA1_API_SKIN)
+    d.skin = ex.skin;
+#endif
 #if defined(SA1_API_SUPER)
     if (ex.super_given) {
         d.flags |= SA1_CREATE_SUPER;
@@ -915,8 +918,34 @@ uint32_t Session::whoosh_characters() const
     return n;
 }
 
+bool voice_class(const sa1_event &e)
+{
+    if (e.type == SA1_EVENT_VOICE) {
+        return true;
+    }
+    return e.type == SA1_EVENT_SOUND && ((e.id >= 1112u && e.id <= 1263u) || e.id > 1274u);
+}
+
+bool Session::set_voiceless(int32_t id, bool on)
+{
+    Character *c = get(id);
+    if (!c) {
+        return false;
+    }
+    c->voiceless = on;
+    return true;
+}
+
 bool Session::admit_sound(const sa1_event &e)
 {
+    // 0.9.9f: a voiceless skin: a stop always passes (voice_class)
+    if (e.character != 0) {
+        Character *vc = get((int32_t)e.character);
+        if (vc && vc->voiceless && voice_class(e)) {
+            vc->voices_muted++;
+            return false;
+        }
+    }
     // 0.9.8 (096 4.17): never a follower's jingle or music cue; a stop always passes; its sounds and voices with its sounds on
     if (e.character != 0 && (e.type == SA1_EVENT_SOUND || e.type == SA1_EVENT_SOUND_STOP || e.type == SA1_EVENT_VOICE ||
                              e.type == SA1_EVENT_JINGLE)) {
@@ -1521,7 +1550,13 @@ void Session::build_batches(Character &c)
         if (tris > kMaxBatchTriangles) {
             continue;
         }
-#if defined(SA1_API_QUESTION)
+#if defined(SA1_API_SKIN)
+        // 0.9.9: the question mark's model draws from SA1_ARCHIVE_QUESTION, which num_archives does not count on purpose; 0.9.9f: a skin's parts from SA1_ARCHIVE_SKIN, and without this he comes out
+        // untextured with no error (the Character Select screen batches through its holder: core/frontend.cpp sets its create_extra)
+        bool textured = d.archive >= 0 && d.texture >= 0 && ((uint32_t)d.archive < std::max(1u, c.num_archives) ||
+                        ((c.create_extra & SA1_CREATE_QUESTION) && (uint32_t)d.archive == SA1_ARCHIVE_QUESTION) ||
+                        ((c.create_extra & SA1_CREATE_SKIN) && (uint32_t)d.archive == SA1_ARCHIVE_SKIN));
+#elif defined(SA1_API_QUESTION)
         // 0.9.9: the question mark's model draws from SA1_ARCHIVE_QUESTION, which num_archives does not count on purpose
         bool textured = d.archive >= 0 && d.texture >= 0 && ((uint32_t)d.archive < std::max(1u, c.num_archives) ||
                         ((c.create_extra & SA1_CREATE_QUESTION) && (uint32_t)d.archive == SA1_ARCHIVE_QUESTION));

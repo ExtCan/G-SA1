@@ -217,14 +217,23 @@ const size_t kMaxFollowers = 112;
 // super_given: super_flags is passed (SA1_CREATE_SUPER) - SA1_SUPER_NO_DRAIN, SA1_SUPER_KEEP_AT_ZERO,
 // SA1_SUPER_FAITHFUL_REVERT; the sea plane (SA1_SUPER_SEA_PLANE: the Perfect Chaos water that kills a reverted Sonic) is
 // never passed: G-SA1's GRID worlds do not have it, so at 0 rings he only turns back into normal Sonic.
+// 0.9.9f (metal099e.md 4.5): what a voiceless character does not say: SA1_EVENT_VOICE and the tones of the short voices, bank 6's 1112-1263 and the clips above 1274. Its own player sounds, every other
+// sound and jingle stay, and a stop always passes
+bool voice_class(const sa1_event &e);
+
 struct CreateExtra {
     uint32_t flags = 0;
     bool super_given = false;
     uint32_t super_flags = 0;
+#if defined(SA1_API_SKIN)
+    const sa1_skin_desc *skin = nullptr;    // 0.9.9f (SA1_CREATE_SKIN): read during create()
+#endif
 };
 #if defined(SA1_API_SUPER)
 const bool kSuperApi = true;
-#if defined(SA1_API_QUESTION)
+#if defined(SA1_API_SKIN)
+const uint32_t kCreateExtraFlags = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR | SA1_CREATE_QUESTION | SA1_CREATE_SKIN;   // 0.9.9f: a worn skin
+#elif defined(SA1_API_QUESTION)
 const uint32_t kCreateExtraFlags = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR | SA1_CREATE_QUESTION;   // 0.9.9: the "?"
 #else
 const uint32_t kCreateExtraFlags = SA1_CREATE_SUPER_CAPABLE | SA1_CREATE_WATER_FLOOR;
@@ -284,6 +293,8 @@ struct Character {
     int32_t start_rings = -1;          // the start rings given to create() (-1: the game's 0; Super Sonic: libsa1's 50)
     // 0.9.3 (Super Sonic): the CreateExtra given to create() and the form after the last tick
     uint32_t create_extra = 0;         // CreateExtra::flags
+    bool voiceless = false;            // 0.9.9f (a skin, set_voiceless): his voices stay out of the mixer, his sounds do not (voice_class)
+    uint64_t voices_muted = 0;
     bool super_given = false;          // CreateExtra::super_given
     uint32_t super_flags = 0;          // CreateExtra::super_flags (with super_given)
     bool super_capable = false;        // kind 8, or Sonic with SA1_CREATE_SUPER_CAPABLE: Session::order works
@@ -538,6 +549,8 @@ public:
     bool set_board_sounds(bool on);
     bool board_sounds() const { return board_sounds_; }
     uint64_t board_tones_dropped() const { return board_tones_dropped_; }
+    // 0.9.9f: a skin's voice setting (host deviation, metal099e.md D3); false: no such character
+    bool set_voiceless(int32_t id, bool on);
     int32_t create_puppet(int32_t kind, std::string &err);
     // 0.9.2a (sadc docs/research/gsa1_091b_itembox.md E2 with its review R.4.1): destroying a character also drops its
     // events still queued for poll_events (a removed or restarted character's fault, death or sounds never reach the next

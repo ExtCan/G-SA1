@@ -83,7 +83,7 @@ hook.Add("GSA1CharacterCreated", "gsa1_playable", function(C, how)
 end)
 
 -- the page's lines
-P.REASONS = "Dr. Eggman and Tikal have no emotes, faces, head look or boards and cannot be followers; a follower can follow them. With no "
+P.REASONS = "Dr. Eggman and Tikal have no emotes, faces, head look or boards. They can be followers and a follower can follow them (the Followers page says what they do). With no "
     .. "emote wheel, call your followers back with the button on the Followers page."
 function P.StatusLines()
     local out = { P.REASONS }
@@ -147,6 +147,6 @@ function P.BuildOptions(panel)
     choice_combo(panel, "Debug button on the controller", "gsa1_debug_pad", S and S.PAD_BUTTONS or { { 0, "None" }, { 0x8000, "Y" } })
     panel:ControlHelp("X sends the action button on your controller, so it is not the default")
     live_label(panel, P.StatusLines)
-    if GSA1.Question and GSA1.Question.BuildOptions then GSA1.Question.BuildOptions(panel) end
+    if GSA1.Question and GSA1.Question.BuildOptions and GSA1.QuestionUnlocked() then GSA1.Question.BuildOptions(panel) end
 end
 if GSA1.AddCharacterOption then GSA1.AddCharacterOption(175, "playable", P.BuildOptions) end

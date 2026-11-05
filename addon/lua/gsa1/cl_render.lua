@@ -171,14 +171,38 @@ local BOX_DIRS = {
 }
 
 -- sampled once per rendered frame
+-- 0.9.9d (gsa1_light_body, default 1; the owner: "Knuckles still turns completely black on walls"; MEASURED in their game, render.ComputeLighting with the normal (0 1 0) on gm_construct_remaster_csm: inside the wall
+-- (1283 -1032 109) 0 0 0, at the body (1283 -1009 86) 0.128 0.238 0.379): on a wall the game's position lies ON the polygon and the body is drawn at position + up * height / 2 (READ func_8C0C46AC, sadc code_8C0C46AC.c), so the
+-- point straight above the root is in the wall. The point now goes along the character's own up (gsa1.GetState's upx, upy, upz, 0.9.9c), and an upright one's numbers are exactly as before (tests/feat_lightbody_test.lua). A point
+-- still in solid (a wall thicker than the body, a character sunk in) asks nothing: the last good light and its origin stay. With nothing to keep (the very first frame of a character there) 0.9.9c's point is asked, whatever it
+-- says, and that stays until the body's middle is free. Far followers as before: every 4th frame. Off, or a module without the up, or a nonsense up: exactly 0.9.9c's point, no util.PointContents. KNOWN LIMITS: a character on a
+-- slope samples along its tilt, a few units from where 0.9.9c did; on a double-sided wall in the middle of a thin brush the point is the body's middle over the polygon, 8 HU nearer the visible face than the body's middle over that face.
+local light_probe = Vector()
+local CONTENTS_SOLID_BIT = CONTENTS_SOLID or 1
 local function update_lighting(C)
     if C.lightFrame == FrameNumber() then return end
     -- (0.9.8: a far follower's cube every 4th frame)
     if C.lod == 2 and C.light and C.lightFrame and FrameNumber() - C.lightFrame < 4 then return end
     C.lightFrame = FrameNumber()
+    local center = C.info.center or 20
+    local p, st = C.drawPos, C.state
+    local ux, uy, uz = st and st.upx, st and st.upy, st and st.upz
+    local body = false
+    if ux and uy and uz and ux * ux + uy * uy + uz * uz > 0.25 and GSA1.cv.light_body and GSA1.cv.light_body:GetBool() then
+        light_probe:SetUnpacked(p.x + ux * center, p.y + uy * center, p.z + uz * center)
+        if band(util.PointContents(light_probe) or 0, CONTENTS_SOLID_BIT) == 0 then
+            body = true
+        elseif C.light and C.lightOrigin then
+            return
+        end
+    end
     C.lightOrigin = C.lightOrigin or Vector()
-    C.lightOrigin:Set(C.drawPos)
-    C.lightOrigin.z = C.lightOrigin.z + (C.info.center or 20)
+    if body then
+        C.lightOrigin:Set(light_probe)
+    else
+        C.lightOrigin:Set(p)
+        C.lightOrigin.z = C.lightOrigin.z + center
+    end
     C.light = C.light or {}
     for i = 0, 5 do
         C.light[i] = render.ComputeLighting(C.lightOrigin, BOX_DIRS[i])
@@ -405,7 +429,7 @@ local function draw_batches(C, pass, first_person, te, main, filter, override)
         render.SetLocalModelLights()
     end
     local effects = cv.effects:GetBool()
-    local shadows = not cv.shadow or cv.shadow:GetBool()
+    local shadows = (not cv.shadow or cv.shadow:GetBool()) and not (GSA1.PhotoNoShadow and GSA1.PhotoNoShadow())
     local objects = objects_on()
     -- (fardraw 4.1 step 1: a far follower with room in the budget streams through the module; the file loads after this one, so N is looked up here)
     local NM = GSA1.NativeMesh
@@ -507,7 +531,7 @@ local function draw_depth(C, color, first_person, te)
     if C.matsDirty then GSA1.ResolveMaterials(C) end
     local cv = GSA1.cv
     local effects = cv.effects:GetBool()
-    local shadows = not cv.shadow or cv.shadow:GetBool()
+    local shadows = (not cv.shadow or cv.shadow:GetBool()) and not (GSA1.PhotoNoShadow and GSA1.PhotoNoShadow())
     local objects = objects_on()
     local static = not C.interp
     local depthMaterial = GSA1.Tex.DepthMaterial

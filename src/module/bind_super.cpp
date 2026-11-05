@@ -372,6 +372,13 @@ void super_open(ILuaBase *L, int t)
     raw_num(L, c, "ARCHIVE_QUESTION", SA1_ARCHIVE_QUESTION);
     raw_num(L, c, "COPT_QUESTION_SPIN", SA1_COPT_QUESTION_SPIN);
 #endif
+#if defined(SA1_API_SKIN)
+    raw_num(L, c, "CREATE_SKIN", SA1_CREATE_SKIN);                  // 0.9.9f: a worn skin (feat/cl_skins.lua)
+    raw_num(L, c, "ARCHIVE_SKIN", SA1_ARCHIVE_SKIN);
+    raw_num(L, c, "COPT_SKIN_ANIM", SA1_COPT_SKIN_ANIM);
+    raw_num(L, c, "SKIN_ANIM_FLY", SA1_SKIN_ANIM_FLY);
+    raw_num(L, c, "SKIN_ANIM_WALK", SA1_SKIN_ANIM_WALK);
+#endif
 #endif
     raw_num(L, c, "EQUIPMENT", 0x8000);
     raw_num(L, c, "START_RINGS", 50);
@@ -420,7 +427,30 @@ void super_open(ILuaBase *L, int t)
     L->RawSet(t);
 }
 
+#if defined(SA1_API_SKIN)
+// 0.9.9f: gsa1.SetVoiceless(id, on) -> true | nil, message (metal099e.md 4.5, host deviation D3; feat/cl_skins.lua): his voices stay out of the mixer, every other sound stays. Also: .muted, how many
+GSA1_FN(gsa1_super_SetVoiceless)
+{
+    double id = 0.0;
+    gsa1::Session *se = session();
+    if (!se || !se->ready()) {
+        return push_nil_msg(LUA, "G-SA1 is not initialised (the disc is not loaded yet)", "not_ready");
+    }
+    if (!arg_number(LUA, 1, id) || !LUA->IsType(2, LT::Bool)) {
+        return push_nil_msg(LUA, "SetVoiceless(id, on)", "bad_argument");
+    }
+    if (!se->set_voiceless((int32_t)id, LUA->GetBool(2))) {
+        return push_nil_msg(LUA, "no such character", "not_found");
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+#endif
+
 const gsa1::FeatureFn k_super_fns[] = {
+#if defined(SA1_API_SKIN)
+    {"SetVoiceless", gsa1_super_SetVoiceless},
+#endif
     {"SuperOrder", gsa1_super_SuperOrder},
     {"SuperState", gsa1_super_SuperState},
     {"SuperInfo", gsa1_super_SuperInfo},

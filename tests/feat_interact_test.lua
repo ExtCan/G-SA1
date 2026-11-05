@@ -933,6 +933,33 @@ recv_s[NET.HIT](0, ply)
 check(count_s(NET.HURT) == hurts + 1 and #other.damage == 0,
     "PvP (decision 4): a homing attack on another character sends it a hit with knock-back (gsa1_hurt) and, in rings "
     .. "mode, no Garry's Mod damage")
+-- 0.9.9e (r099d/verify2/hit_probe.txt; the owner's answer 13: in photo mode you are untouchable, and you touch no one): someone in photo mode hits no one, in either damage mode. NET.HIT asked only the victim's mark
+do
+    local function one_hit(target_index, pos)
+        M.T = M.T + 1
+        S.sread = reader({ target_index, 3, 1, 1, pos, Vector(1, 0, 0), 400, 0 })
+        recv_s[NET.HIT](0, ply)
+    end
+    ply.GSA1Photo = true
+    other.GSA1Photo = false      -- (the mock's other has __index = ply)
+    local h0, d0 = count_s(NET.HURT), #other.damage
+    one_hit(2, Vector(150, 0, 30))
+    check(count_s(NET.HURT) == h0 and #other.damage == d0, "photo mode, rings mode: the attacker's hit reaches no one (%d hits, %d damage calls)", count_s(NET.HURT) - h0, #other.damage - d0)
+    SCV.gsa1_sv_damage_mode.v = "1"
+    h0, d0 = count_s(NET.HURT), #other.damage
+    one_hit(2, Vector(150, 0, 30))
+    check(count_s(NET.HURT) == h0 and #other.damage == d0, "photo mode, health mode: no hit and no Garry's Mod damage (%d hits, %d damage calls)", count_s(NET.HURT) - h0, #other.damage - d0)
+    SCV.gsa1_sv_damage_mode.v = "0"
+    -- I.SendHurt itself, from whoever calls it
+    h0 = count_s(NET.HURT)
+    SI.SendHurt(other, 10, 0, Vector(0, 0, 0), ply, false, true)
+    check(count_s(NET.HURT) == h0, "photo mode: I.SendHurt with that attacker sends nothing")
+    ply.GSA1Photo = nil
+    other.GSA1Photo = nil
+    h0, d0 = count_s(NET.HURT), #other.damage
+    one_hit(2, Vector(150, 0, 30))
+    check(count_s(NET.HURT) == h0 + 1, "out of photo mode: the same hit lands again")
+end
 -- an NPC killed by the character: removed as killed in its game
 local rm = n_of("ObjRemove")
 S_call("OnNPCKilled", zombie, ply)

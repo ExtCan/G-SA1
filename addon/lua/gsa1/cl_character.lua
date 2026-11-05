@@ -78,6 +78,8 @@
 -- after your tick; events by their character (GSA1.DispatchEvent: a follower's never reach your on_event; every other event
 -- as before), GSA1.PollAllEvents when you have no character; GSA1.EV, GSA1.GamePaused; first person is about YOUR character
 -- (GSA1.FirstPersonFor). A follower runs none of the GSA1Character* hooks and GSA1PreTick / GSA1PostTick.
+-- 0.9.9d (sadc docs/research/photo099d.md 3.2; feat/cl_photo.lua): four one-line seams for photo mode, none of which changes anything while it is off: GSA1.PhotoThink at the top of Think, its gate in tick_character (C.last keeps moving, so the first
+-- tick after sees one frame), its term on the sound's pause, GSA1.PhotoCmd at the top of the CreateMove hook.
 GSA1 = GSA1 or {}
 
 local BTN_JUMP, BTN_ACTION, BTN_ACTION2 = 1, 2, 4
@@ -259,6 +261,10 @@ local function create_character(kind, pos, yaw, how, old, rings, def)
         local eok, ex = pcall(GSA1.CreateExtras, kind, how, rings, def, old)
         if eok then extras = ex elseif GSA1.Log then GSA1.Log("error", "GSA1.CreateExtras: %s", tostring(ex)) end
     end
+    -- 0.9.9f: a skin without its extras (a module without the flag): refused by name: he never comes up as a plain Sonic (metal099e.md 5.1)
+    if def and def.form == "skin" and not (type(extras) == "table" and extras.skin) then
+        return nil, string.format("%s needs a module with skins (this one has none)", def.title or "?")
+    end
     local id, err = gsa1.Create(kind, pos, yaw, ups, rings, extras)
     local create_ms = (SysTime() - t0) * 1000
     prof("Create", t0)
@@ -274,6 +280,9 @@ local function create_character(kind, pos, yaw, how, old, rings, def)
     local C = {
         id = id, kind = kind, name = def and def.name or tostring(kind), title = def and def.title or tostring(kind),
         def = def, form = def and def.form or nil, question = (def and def.form == "question") or nil,
+        -- 0.9.9f: C.skin: feat/sh_skins.lua's entry. C.noSuper: the "?" and a skin never turn Super: feat/cl_super.lua reads it
+        skin = (def and def.form == "skin" and GSA1.Skins and GSA1.Skins.Of(def)) or nil,
+        noSuper = (def and (def.form == "question" or def.form == "skin")) or nil,
         info = gsa1.CharacterInfo(kind) or {}, state = {}, batches = { count = 0 }, batchGen = -1, mats = {},
         static = {}, matsDirty = true, last = SysTime(), spawnPos = pos, spawnYaw = yaw, ent = ent, nextNet = 0,
         nextActive = 0, drawPos = Vector(pos), upgrades = ups, startRings = rings, extras = extras,
@@ -339,10 +348,17 @@ function GSA1.Remove(silent, switching)
 end
 
 function GSA1.Spawn(name)
-    if not name or name == "" then name = GSA1.cv.character:GetString() end
+    if not name or name == "" then
+        name = GSA1.cv.character:GetString()
+        -- 0.9.9e: a saved "?" before it is unlocked: Sonic, the ConVar's default (feat/cl_question.lua has the same at load and on a change)
+        if GSA1.LockedName(name) then
+            name = "sonic"
+            GSA1.cv.character:SetString(name)
+        end
+    end
     local kind, def = GSA1.KindByName(name)
     if not kind then
-        GSA1.Chat("unknown character '%s' (sonic, tails, knuckles, amy, gamma, big, eggman, tikal, supersonic, supersonic_general, question)", tostring(name))
+        GSA1.Chat("unknown character '%s' (%s)", tostring(name), GSA1.CharacterNamesText())
         return
     end
     GSA1.pendingSpawn = nil
@@ -752,6 +768,7 @@ end
 local DEAD_KEEP = bit.bor(IN_JUMP or 2, IN_ATTACK or 1, IN_ATTACK2 or 2048)
 hook.Add("CreateMove", "gsa1_input", GSA1.Guard("CreateMove", function(cmd)
     if not GSA1.Char then return end
+    if GSA1.PhotoCmd then GSA1.PhotoCmd(cmd) end
     if GSA1.InputBlocked and GSA1.InputBlocked() then
         input_state.sx, input_state.sy, input_state.buttons = 0, 0, 0
     else
@@ -813,7 +830,7 @@ local function update_audio()
         end
         origin, ang = audio_eye, audio_ang
     end
-    local paused = game_paused() or (cv_mute_focus and cv_mute_focus:GetBool() and not system.HasFocus())
+    local paused = game_paused() or (cv_mute_focus and cv_mute_focus:GetBool() and not system.HasFocus()) or (GSA1.PhotoFrozen ~= nil and GSA1.PhotoFrozen())
     -- (0.9.4d: the listener's axes into reused Vectors, not two new ones a frame)
     local fwd, up
     if GSA1.AngleAxes then
@@ -849,6 +866,7 @@ end
 local function tick_character(now)
     local C = GSA1.Char
     if not C or not GSA1.mod then return end
+    if GSA1.PhotoFrozen and GSA1.PhotoFrozen() then C.last = now return end
     local dt = math.Clamp(now - C.last, 0, 0.25)
     C.last = now
     -- paused now, or during the frame that just ended (Think does not run while single player is paused, so the first
@@ -974,6 +992,7 @@ end
 hook.Add("Think", "gsa1_tick", GSA1.Guard("Think", function()
     local now = SysTime()
     if GSA1.HitchFrame then GSA1.HitchFrame(now) end
+    if GSA1.PhotoThink then GSA1.PhotoThink(now) end
     if GSA1.InitThink then GSA1.InitThink() end
     if GSA1.AudioThink then GSA1.AudioThink() end
     if GSA1.WorldThink then GSA1.WorldThink() end
@@ -1167,7 +1186,7 @@ end, "gsa1_rebuild")
 local function complete_names(cmd, args)
     local out = {}
     local typed = string.lower(string.Trim(args or ""))
-    for _, c in ipairs(GSA1.CHARACTERS) do
+    for _, c in ipairs(GSA1.ListedCharacters()) do
         if typed == "" or string.StartWith(c.name, typed) then out[#out + 1] = cmd .. " " .. c.name end
     end
     return out
@@ -1175,7 +1194,7 @@ end
 
 concommand.Add("gsa1_spawn", function(ply, cmd, args)
     GSA1.Spawn(args[1])
-end, complete_names, "G-SA1: become a character (sonic, tails, knuckles, amy, gamma, big, eggman, tikal, supersonic, supersonic_general, question) where you stand")
+end, complete_names, "G-SA1: become a character (sonic, tails, knuckles, amy, gamma, big, eggman, tikal, supersonic, supersonic_general) where you stand")
 
 concommand.Add("gsa1_remove", function()
     GSA1.Remove(false)
@@ -1207,7 +1226,7 @@ concommand.Add("gsa1_upgrades_all", function(ply, cmd, args)
     if args[2] then
         kind = GSA1.KindByName(args[2])
         if not kind then
-            GSA1.Msg("unknown character '%s' (sonic, tails, knuckles, amy, gamma, big, eggman, tikal, supersonic, supersonic_general, question)", tostring(args[2]))
+            GSA1.Msg("unknown character '%s' (%s)", tostring(args[2]), GSA1.CharacterNamesText())
             return
         end
     end

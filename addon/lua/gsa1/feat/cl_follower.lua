@@ -1813,6 +1813,7 @@ function Fo.BuildPage(panel)
         .. "camera.")
     panel:CheckBox("Followers", "gsa1_follower")
     choice_combo(panel, "Character to spawn", "gsa1_follower_kind", Fo.KindChoices())
+    panel:ControlHelp(Fo.PLAYABLE_NOTE)
     live_label(panel, Fo.StatusLines)
     panel:Button("Spawn a follower", "gsa1_follower_spawn")
     panel:Button("Remove the last", "gsa1_follower_remove")
@@ -1859,7 +1860,7 @@ function Fo.BuildPage(panel)
     panel:ControlHelp("Their boards follow the game's own pick in their own game. The board a follower leaves counts towards your "
         .. "left boards (Board page). The box's own board stays there for you.")
     -- the keys
-    panel:Help("Call your followers back (in the open emote wheel). Dr. Eggman, Tikal and ? have no wheel: use the button Call them back to me, or gsa1_follower_call")
+    panel:Help("Call your followers back (in the open emote wheel). As a character with no wheel, such as Dr. Eggman or Tikal: use the button Call them back to me, or gsa1_follower_call")
     local b = vgui.Create("DBinder", panel)
     if b.SetConVar then b:SetConVar("gsa1_follower_call_key") end
     if b.SetTall then b:SetTall(28) end

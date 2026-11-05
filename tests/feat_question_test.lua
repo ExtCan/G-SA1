@@ -177,6 +177,7 @@ local function log_count(text)
     end
 end
 
+RunConsoleCommand("iwonderwhotheseventhcharacteris")   -- (0.9.9e: the "?" is an unlockable: tests/feat_unlock_test.lua; this test wants it)
 -- 0. the entry ---------------------------------------------------------------------------------------------------------------------------
 local kq, dq = GSA1.KindByName("question")
 check(kq == 8 and dq.title == "?" and dq.form == "question" and dq.nowheel == true and dq.noUpgrades == true, "the entry: \"?\", kind 8, its own form")
@@ -186,8 +187,8 @@ check(GSA1.CharacterByKind(8).name == "supersonic" and GSA1.CharacterByName("8")
     select(2, GSA1.KindByName("super")).name == "supersonic", "kind 8 and \"super\" stay Super Sonic (Vs. Perfect Chaos)")
 check(Q.IsDef(dq) and not Q.IsDef(GSA1.CharacterByKind(8)) and not Q.IsDef(nil), "GSA1.Question.IsDef")
 check(GetConVar("gsa1_question_rings"):GetInt() == 50 and GetConVar("gsa1_question_drain"):GetInt() == 0 and GetConVar("gsa1_question_water"):GetInt() == 1 and
-    GetConVar("gsa1_question_spin"):GetInt() == 1 and GetConVar("gsa1_charselect_qmark"):GetInt() == 1 and GetConVar("gsa1_charselect_super"):GetString() == "question",
-    "the defaults (5.9, addendum A4): rings 50, no drain, water on, spin on, gold, the slot on \"question\"")
+    GetConVar("gsa1_question_spin"):GetInt() == 1 and GetConVar("gsa1_charselect_qmark"):GetInt() == 1 and GetConVar("gsa1_charselect_super") == nil,
+    "the defaults (5.9): rings 50, no drain, water on, spin on, gold; 0.9.9e: no gsa1_charselect_super")
 
 -- 1. row 3: tick Sonic's upgrades first; row 1: the extras -------------------------------------------------------------------------------
 setcv("gsa1_upgrade_light_speed_shoes", 1)
@@ -291,18 +292,11 @@ check(W.CurrentEntry() ~= "question", "row 19: W.CurrentEntry() as \"?\": %s", t
 local lines = table.concat(S.StatusLines(), " ")
 check(string.find(lines, "? is a character of its own, not one of these two", 1, true) ~= nil, "row 20: the Super Sonic page's status says it is not one of the Super Sonics")
 check(string.find(lines, "Vs. Perfect Chaos form", 1, true) == nil and string.find(lines, "cannot turn Super", 1, true) == nil, "row 20: not \"(the Vs. Perfect Chaos form)\", not \"cannot turn Super\"")
-check(CS.SlotTitle(6) == "?", "row 21: S.SlotTitle(6) on the default \"question\": \"?\"")
-setcv("gsa1_charselect_super", "last")
-check(CS.SlotTitle(6) == "Super Sonic", "row 21: S.SlotTitle(6) on \"last\": Super Sonic")
-setcv("gsa1_charselect_super", "question")
+check(CS.SlotTitle(6) == "Super Sonic" and CS.EntryName(6) == "supersonic", "row 21, 0.9.9e: the slot is Super Sonic (Vs. Perfect Chaos), the \"?\" unlocked or not")
 check(CS.SlotOf("question") == 6 and CS.FirstSlot() == 6, "Character Select opens on slot 6 as \"?\"")
 
 -- 5. rows 6, 7, 17; S.SuperEntry ---------------------------------------------------------------------------------------------------------
 check(GetConVar("gsa1_character"):GetString() == "question", "row 17: gsa1_character remembers the name")
-check(GetConVar("gsa1_charselect_super_last"):GetString() == "", "row 7: being \"?\" does not change gsa1_charselect_super_last")
-check(CS.SuperEntry("question", "supersonic") == "question" and CS.SuperEntry("last", "supersonic") == "supersonic" and CS.SuperEntry("last", "question") ~= "question" and
-    CS.SuperEntry("last", "") == CS.SUPER_FIRST, "S.SuperEntry: the choice gives \"question\"; \"last\" never becomes it")
-check(#CS.SUPER_CHOICES == 4 and CS.SUPER_CHOICES[4][1] == "The Question Mark" and CS.SUPER_CHOICES[4][2] == "question", "the 4th choice")
 GSA1.Remove(true)
 check(GSA1.Char == nil and W.CurrentEntry() ~= "question", "row 19: with gsa1_character \"question\" and no character: W.CurrentEntry() is %s", tostring(W.CurrentEntry()))
 setcv("gsa1_character", "eggman")
@@ -311,13 +305,12 @@ GSA1.Spawn("eggman")
 check(W.CurrentEntry() ~= "eggman", "row 19: as Dr. Eggman: %s", tostring(W.CurrentEntry()))
 setcv("gsa1_upgrade_light_speed_shoes", 1)
 GSA1.Spawn("supersonic")
-check(GetConVar("gsa1_charselect_super_last"):GetString() == "supersonic" and GSA1.Char.question == nil and GSA1.Char.kind == 8, "a real Super Sonic: \"last\" holds him, no C.question")
+check(GSA1.Char.question == nil and GSA1.Char.kind == 8, "a real Super Sonic: no C.question")
 frames(3)
 check(R.extras[GSA1.Char.id].start_rings == 7 and #R.ups[GSA1.Char.id] > 0, "... with his own options and Sonic's upgrades, as before")
 GSA1.Spawn("question")
 C = GSA1.Char
 frames(3)
-check(GetConVar("gsa1_charselect_super_last"):GetString() == "supersonic", "row 7: \"?\" again: \"last\" still holds him")
 -- the page: row 6 (the upgrade block once, Super Sonic's note), row 12 (the whoosh's help)
 do
     local made, METHODS = {}, nil
@@ -369,7 +362,7 @@ do
     check(cp.boxes.gsa1_question_drain == "The ?: lose a ring every second (Perfect Chaos' rule). It stays what it is at 0", "the control: the drain")
     check(cp.boxes.gsa1_question_water == "The ?: runs on water", "the control: the water")
     check(cp.boxes.gsa1_question_spin == "The ?: spins as on the character menu. Off: it faces the way it runs", "the control: the spin")
-    check(string.find(cp.chose, "The Question Mark=question", 1, true) ~= nil, "the slot's combo has \"The Question Mark\"")
+    check(string.find(cp.chose, "The Question Mark=question", 1, true) == nil and string.find(cp.chose, "?=question", 1, true) ~= nil, "0.9.9e: the Character list has \"?\" once it is unlocked; the slot's combo is gone")
     check(string.find(cp.chose, "gold (the menu's sstx_body; not what the game's code picks)=1", 1, true) ~= nil and
         string.find(cp.chose, "as the Dreamcast draws it (the words Player Select mirrored over it)=0", 1, true) ~= nil, "the control: the texture's combo, two choices")
     local sp = page(super_entry)
