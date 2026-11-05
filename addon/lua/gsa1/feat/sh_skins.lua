@@ -23,6 +23,10 @@ K.SKINS = {
                     { 57, 65, 21, 59 }, { 59, 61, 23, 62 }, { 59, 61, -1, -1 }, { 62, 62, -1, -1 }, { 62, 62, -1, -1 },                     -- the left leg
                 } },
         anim = { [10] = 132, [11] = 133, [12] = 134, [13] = 134 }, anim_walk = { [9] = 131 }, lift = 1.0,   -- Sonic's row -> the row drawn: Super Sonic's flying; the walk behind gsa1_metal_walk_fly
+        -- the way between a walk and a run: row 9 flies while he moves faster than a held walk can (MEASURED: a stick up to 0.8 holds at most 0.205; from 0.85 he only passes through on the way to row 10)
+        anim_fast = { [9] = 132 }, fast_on = 0.25, fast_off = 0.215,
+        -- the Light Speed glow: the parts again, three shells offset along their normals up to `inflate` SA1 units, in this colour, where the game draws Sonic's aura. Mecha Sonic (1.0.0) only names orange here
+        glow = { color = { 0.55, 0.10, 1.00 }, inflate = 0.30 },
         voice = false,                                      -- voiceless (gsa1_metal_voice gives him Sonic's)
     },
 }
@@ -57,6 +61,8 @@ function K.DescOf(skin)
         model_file = skin.model.file, model_sha1 = skin.model.sha1, model_load = skin.model.load, model_first = skin.model.first, model_end = skin.model.last,
         model_root = skin.model.root, tex_file = skin.textures.file, tex_sha1 = skin.textures.sha1, keep = skin.textures.keep, scale = skin.rig.scale, lift = skin.lift or 0,
         turn = K.TURNS[skin.rig.turn or "none"] or 0, ball_texture = skin.rig.ball_texture or -1, parts = parts, anim = pairs_of(skin.anim), anim_walk = pairs_of(skin.anim_walk),
+        anim_fast = pairs_of(skin.anim_fast), fast_on = skin.fast_on or 0, fast_off = skin.fast_off or 0,
+        glow_r = skin.glow and skin.glow.color[1] or 0, glow_g = skin.glow and skin.glow.color[2] or 0, glow_b = skin.glow and skin.glow.color[3] or 0, glow_inflate = skin.glow and skin.glow.inflate or 0,
     }
 end
 

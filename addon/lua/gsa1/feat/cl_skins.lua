@@ -9,6 +9,7 @@ K.cv = K.cv or {
     fly = GSA1.ConVar("gsa1_metal_fly", 1, "Metal Sonic: run with Super Sonic's flying (off: Sonic's own run on him). At once, no re-creation", 0, 1),
     walk_fly = GSA1.ConVar("gsa1_metal_walk_fly", 0, "Metal Sonic: fly when walking too (Sonic's row 9 becomes Super Sonic's 131): toes may touch for a frame", 0, 1),
     voice = GSA1.ConVar("gsa1_metal_voice", 0, "Metal Sonic: speak with Sonic's voice (off: voiceless, sound effects stay). At once", 0, 1),
+    glow = GSA1.ConVar("gsa1_metal_glow", 1, "Metal Sonic: glow when charged, where Sonic's Light Speed glow would draw. At once", 0, 1),
 }
 local cv = K.cv
 
@@ -33,6 +34,7 @@ function K.ApplyAnim(C)
         v = gsa1.SUPER.SKIN_ANIM_FLY
         if cv.walk_fly:GetBool() then v = v + gsa1.SUPER.SKIN_ANIM_WALK end
     end
+    if cv.glow:GetBool() and gsa1.SUPER.SKIN_ANIM_GLOW then v = v + gsa1.SUPER.SKIN_ANIM_GLOW end
     local ok, err, code = gsa1.SetCharOption(C.id, gsa1.SUPER.COPT_SKIN_ANIM, v)
     if not ok then log("the running: refused: %s (%s)", tostring(err), tostring(code)) end
     return ok == true
@@ -52,8 +54,8 @@ hook.Add("GSA1CharacterCreated", "gsa1_skins", function(C, how)
     if not (C and C.skin) then return end
     K.ApplyAnim(C)
     K.ApplyVoice(C)
-    log("%s %s: over Sonic's world; running %s, walking %s, %s", C.title or "?", how or "created", cv.fly:GetBool() and "flies" or "as Sonic",
-        (cv.fly:GetBool() and cv.walk_fly:GetBool()) and "flies" or "as Sonic", K.Voiceless(C.skin) and "voiceless" or "with Sonic's voice")
+    log("%s %s: over Sonic's world; running %s, walking %s, %s, %s", C.title or "?", how or "created", cv.fly:GetBool() and "flies" or "as Sonic",
+        (cv.fly:GetBool() and cv.walk_fly:GetBool()) and "flies" or "as Sonic", K.Voiceless(C.skin) and "voiceless" or "with Sonic's voice", cv.glow:GetBool() and "glows when charged" or "no glow")
 end)
 
 local function anim_changed()
@@ -65,6 +67,7 @@ end
 if cvars and cvars.AddChangeCallback then
     cvars.AddChangeCallback("gsa1_metal_fly", anim_changed, "gsa1_skins")
     cvars.AddChangeCallback("gsa1_metal_walk_fly", anim_changed, "gsa1_skins")
+    cvars.AddChangeCallback("gsa1_metal_glow", anim_changed, "gsa1_skins")
     cvars.AddChangeCallback("gsa1_metal_voice", voice_changed, "gsa1_skins")
 end
 
@@ -77,5 +80,7 @@ function K.BuildOptions(panel)
     panel:ControlHelp("Sonic's slow walk flies too (Super Sonic's slow move): his toes may touch the ground for a frame.")
     panel:CheckBox("Metal Sonic: speak with Sonic's voice", "gsa1_metal_voice")
     panel:ControlHelp("Off: voiceless. Sound effects stay either way. At once.")
+    panel:CheckBox("Metal Sonic: glow when charged", "gsa1_metal_glow")
+    panel:ControlHelp("His own model again, slightly larger, in purple, where Sonic's Light Speed glow would draw. At once.")
 end
 if GSA1.AddCharacterOption then GSA1.AddCharacterOption(178, "skins", K.BuildOptions) end

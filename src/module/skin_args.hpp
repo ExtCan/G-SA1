@@ -73,7 +73,7 @@ struct SkinArgs {
     std::string model_file, model_sha1, tex_file, tex_sha1;
     std::vector<uint16_t> keep;
     std::vector<sa1_skin_part> parts;
-    std::vector<uint16_t> anim, walk;       // pairs
+    std::vector<uint16_t> anim, walk, fast; // pairs
     sa1_skin_desc d;
     SkinArgs() { d = sa1_skin_desc(); }
 
@@ -94,6 +94,23 @@ struct SkinArgs {
             err = "extras.skin: keep, parts, anim, anim_walk: arrays of whole numbers, parts by four, anim by two";
             return false;
         }
+        // 0.9.9g: the way between a walk and a run, the glow; absent: none
+        std::vector<int> f;
+        double fast_on = 0.0, fast_off = 0.0, gr = 0.0, gg = 0.0, gb = 0.0, inflate = 0.0;
+        L->PushString("anim_fast");
+        L->RawGet(t);
+        bool has_fast = L->GetType(-1) == LT::Table;
+        L->Pop();
+        if (has_fast && (!get_array(L, t, "anim_fast", 0.0, 1023.0, 16, f) || f.size() % 2 != 0)) {
+            err = "extras.skin: anim_fast: an array of whole numbers, by two";
+            return false;
+        }
+        get_number(L, t, "fast_on", fast_on);
+        get_number(L, t, "fast_off", fast_off);
+        get_number(L, t, "glow_r", gr);
+        get_number(L, t, "glow_g", gg);
+        get_number(L, t, "glow_b", gb);
+        get_number(L, t, "glow_inflate", inflate);
         keep.assign(k.begin(), k.end());
         parts.resize(p.size() / 4);
         for (size_t i = 0; i < parts.size(); i++) {
@@ -126,6 +143,15 @@ struct SkinArgs {
         d.num_anim = (uint32_t)(anim.size() / 2);
         d.anim_walk = reinterpret_cast<const uint16_t (*)[2]>(walk.data());
         d.num_anim_walk = (uint32_t)(walk.size() / 2);
+        fast.assign(f.begin(), f.end());
+        d.anim_fast = reinterpret_cast<const uint16_t (*)[2]>(fast.data());
+        d.num_anim_fast = (uint32_t)(fast.size() / 2);
+        d.fast_on = (float)fast_on;
+        d.fast_off = (float)fast_off;
+        d.glow_rgb[0] = (float)gr;
+        d.glow_rgb[1] = (float)gg;
+        d.glow_rgb[2] = (float)gb;
+        d.glow_inflate = (float)inflate;
         return true;
     }
 };

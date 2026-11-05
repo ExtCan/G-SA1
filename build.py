@@ -709,6 +709,12 @@ def build_and_test(args, keys):
                       "or GARRYSMOD_DIR, or pass --gmod)" % (k, GMOD_LUA_SHARED or "(Garry's Mod not found)"))
             failed, again = run_test_programs(k, cmds, host, args.test_jobs)
             ok = ok and not failed
+            # 0.9.9g: no font and no made text picture under the addon (the project's repos/sync_repos.py; the public tree has no repos folder)
+            fonts_test = os.path.join(os.path.dirname(ROOT), "repos", "sync_repos_fonts_test.py")
+            if "windows" in triple and os.path.exists(fonts_test):
+                r_fonts = subprocess.run([sys.executable, "-I", fonts_test], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+                print("[%s] sync_repos_fonts_test: %s" % (k, "ok" if r_fonts.returncode == 0 else "FAILED\n" + r_fonts.stdout), flush=True)
+                ok = ok and r_fonts.returncode == 0
             print("[%s] %d test program(s) run, %s%s" % (k, len(cmds), ("FAILED: " + ", ".join(failed)) if failed
                                                          else "all passed", "; run again alone: " + ", ".join(again)
                                                          if again else ""), flush=True)

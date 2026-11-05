@@ -378,6 +378,7 @@ void super_open(ILuaBase *L, int t)
     raw_num(L, c, "COPT_SKIN_ANIM", SA1_COPT_SKIN_ANIM);
     raw_num(L, c, "SKIN_ANIM_FLY", SA1_SKIN_ANIM_FLY);
     raw_num(L, c, "SKIN_ANIM_WALK", SA1_SKIN_ANIM_WALK);
+    raw_num(L, c, "SKIN_ANIM_GLOW", SA1_SKIN_ANIM_GLOW);            // 0.9.9g
 #endif
 #endif
     raw_num(L, c, "EQUIPMENT", 0x8000);

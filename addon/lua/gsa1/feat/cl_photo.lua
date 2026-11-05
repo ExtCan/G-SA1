@@ -693,14 +693,20 @@ function P.HintLines(maxw, width_of)
     return lines
 end
 local function hint_width(s) return (surface.GetTextSize(s)) end
+P.HINT_SIZE = 32    -- DermaLarge's size: the text module's element keeps it (feat/cl_text.lua: gsa1_text_fonts; off, or the font not found: exactly DermaLarge)
 hook.Add("DrawOverlay", "gsa1_photo", function()
     if P.state ~= "on" or P.moved or not GSA1.Char or not cv.hint:GetBool() or SysTime() - (P.t0 or 0) > 4 then return end
-    surface.SetFont("DermaLarge")
+    local Tx = GSA1.Text
+    local font = Tx and Tx.FontFor and Tx.FontFor("photo_hint", P.HINT_SIZE) or "DermaLarge"
+    surface.SetFont(font)
     local sw, sh = ScrW(), ScrH()
-    if not P.hintLines or P.hintW ~= sw then P.hintLines, P.hintW = P.HintLines(sw * 0.9, hint_width), sw end
+    if not P.hintLines or P.hintW ~= sw or P.hintFont ~= font then P.hintLines, P.hintW, P.hintFont = P.HintLines(sw * 0.9, hint_width), sw, font end
     local _, lh = surface.GetTextSize("A")
     for i, s in ipairs(P.hintLines) do
-        draw.SimpleText(s, "DermaLarge", sw / 2, sh * 0.8 + (i - 1) * lh, color_white, TEXT_ALIGN_CENTER or 1, TEXT_ALIGN_CENTER or 1)
+        local y = sh * 0.8 + (i - 1) * lh
+        if not (Tx and Tx.Draw and Tx.Draw(s, "photo_hint", P.HINT_SIZE, color_white, sw / 2, y, 1, 1)) then
+            draw.SimpleText(s, font, sw / 2, y, color_white, TEXT_ALIGN_CENTER or 1, TEXT_ALIGN_CENTER or 1)
+        end
     end
 end)
 

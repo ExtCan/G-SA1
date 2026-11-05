@@ -40,6 +40,41 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.9f changes: Metal Sonic's transitions and glow, text saved as pictures
+
+From the owner's test of 0.9.9e. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod and against the Dreamcast's own code. An independent check found no reason to hold it back from a test.
+
+* **Metal Sonic's run and walk transitions** no longer show Sonic's pose. Going into a run, he now holds his last pose and fades into flying, and he flies a little sooner. A slow walk stays Sonic's walk.
+* **A purple Light Speed glow for Metal Sonic.** When Sonic's glow would come on, his parts are drawn again as three slightly inflated shells, pulsing as the game's own aura does. There's a box to turn it off. Colour and size are single numbers in his entry, so Mecha Sonic in 1.0.0 only needs to name orange.
+* **Text in a chosen font, saved as pictures.** Text is drawn once at your game's resolution and saved in `garrysmod/data/gsa1/textcache`, so it doesn't have to be made again. A new resolution makes new pictures. The folder holds at most 256 files and 16 MB, and has a clear button on the new Text page. For now it's used on photo mode's reminder and Character Select's skin line, and if a font isn't there, those two use today's font.
+
+**No font ships with G-SA1.** The fonts in this test are the owner's own copies on the owner's PC, kept outside the addon, and the repo's sync now refuses font files.
+
+**Known limits:**
+
+* Sonic's pose still shows in the walk, the stand and the last part of a stop, and when you reverse the stick at a run (the brake and the push-off after it). Tell me if that bothers you.
+* After a short full push, then holding the stick a little under full, he can keep flying at walking speed.
+* The glow doesn't show in the spin ball, because there are no parts to copy there. It appears and goes at once, as Sonic's does.
+* On the Text page, the lines don't update until the page is rebuilt, so look in the folder itself to see what's there.
+
+### The owner checklist
+
+1. Metal Sonic: push from a stand and let go, then walk slowly. No Sonic-style swing at the start of the run or the slowing down, and the slow walk is still Sonic's. Does going from the held pose into flying look like a take-off or a freeze?
+2. Let go after a run: he flies for a moment, then settles to the stand in about 0.4 s with no pop.
+3. Light Speed Shoes and Crystal Ring ticked: hold the action button until charged. He glows purple, pulsing gently, and it stops at the dash. Are the size and colour right? Does the frame rate drop?
+4. Untick "Metal Sonic: glow when charged": no glow, at once.
+5. Q menu > Options > G-SA1 > Text: Character Select's skin line should say Bauhaus Std found. Photo mode's reminder says either FOT-Rodin Pro UB found, or that the engine did not take it, which answers whether `.otf` works. The log has the same lines.
+6. Character Select on Sonic's slot, and photo mode's first four seconds: the text is in the new font, sharp, with no dark box or rim, in the right place.
+7. `garrysmod/data/gsa1/textcache` holds a PNG for each text. A second session makes no new ones. Changing the resolution makes new ones. The clear button empties the folder, and they come back when next shown.
+8. Untick "Use these fonts": both texts are as they were in 0.9.9e.
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_metal_glow` | 1 | Character: "Metal Sonic: glow when charged" |
+| `gsa1_text_fonts` | 1 | Text: "Use these fonts" |
+
 ## What 0.9.9e changes: Metal Sonic, Eggman and Tikal as followers, a wall that stops you
 
 From the owner's test of 0.9.9d and their ideas. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod and against the Dreamcast's own code. Two independent checks found no reason to hold it back from a test, and their remaining points are below.

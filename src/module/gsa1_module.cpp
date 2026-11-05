@@ -68,7 +68,7 @@ static_assert(offsetof(lua_State, luabase) == (sizeof(void *) == 8 ? 120 : 72),
 using GarrysMod::Lua::ILuaBase;
 namespace LT = GarrysMod::Lua::Type;
 
-#define GSA1_MODULE_VERSION "0.9.9e"
+#define GSA1_MODULE_VERSION "0.9.9f"
 #define GSA1_API_VERSION 6
 
 namespace {

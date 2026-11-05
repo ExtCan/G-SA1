@@ -38,6 +38,11 @@ double num_of(const std::vector<Val> &r, size_t i)
 }
 
 #if defined(SA1_API_SKIN)
+extern "C" {
+struct sa1k_char;
+struct sa1k_char *sa1k_char_of(const sa1_context *ctx, sa1_character_id id);
+uint32_t sa1k_test_glow_bytes(const struct sa1k_char *sc);
+}
 sa1_event ev(int32_t type, uint32_t id)
 {
     sa1_event e;
@@ -78,6 +83,13 @@ Val skin_desc()
                                             52, 52, -1, -1, 52, 52, -1, -1, 57, 65, 21, 59, 59, 61, 23, 62, 59, 61, -1, -1, 62, 62, -1, -1, 62, 62, -1, -1}));
     t.tab->set(Val::string("anim"), array({10, 132, 11, 133, 12, 134, 13, 134}));
     t.tab->set(Val::string("anim_walk"), array({9, 131}));
+    t.tab->set(Val::string("anim_fast"), array({9, 132}));
+    t.tab->set(Val::string("fast_on"), Val::number(0.25));
+    t.tab->set(Val::string("fast_off"), Val::number(0.215));
+    t.tab->set(Val::string("glow_r"), Val::number(0.55));
+    t.tab->set(Val::string("glow_g"), Val::number(0.10));
+    t.tab->set(Val::string("glow_b"), Val::number(1.00));
+    t.tab->set(Val::string("glow_inflate"), Val::number(0.30));
     return t;
 }
 
@@ -169,7 +181,7 @@ int main(int argc, char **argv)
     Val K = g.tab->field("SUPER");
     CHECK(K.type == Type::Table && K.tab->field("CREATE_SKIN").num == (double)SA1_CREATE_SKIN && K.tab->field("ARCHIVE_SKIN").num == (double)SA1_ARCHIVE_SKIN &&
               K.tab->field("COPT_SKIN_ANIM").num == (double)SA1_COPT_SKIN_ANIM && K.tab->field("SKIN_ANIM_FLY").num == (double)SA1_SKIN_ANIM_FLY &&
-              K.tab->field("SKIN_ANIM_WALK").num == (double)SA1_SKIN_ANIM_WALK && SA1_CREATE_SKIN == 0x4000u && SA1_ARCHIVE_SKIN == 61u,
+              K.tab->field("SKIN_ANIM_WALK").num == (double)SA1_SKIN_ANIM_WALK && K.tab->field("SKIN_ANIM_GLOW").num == (double)SA1_SKIN_ANIM_GLOW && SA1_CREATE_SKIN == 0x4000u && SA1_ARCHIVE_SKIN == 61u,
           "gsa1.SUPER.CREATE_SKIN 0x4000, ARCHIVE_SKIN 61, COPT_SKIN_ANIM, SKIN_ANIM_*: libsa1's numbers");
     if (gdi.empty()) {
         std::printf("  info  no disc: the behaviour part is skipped\n");
@@ -216,6 +228,8 @@ int main(int argc, char **argv)
     if (id <= 0.0) {
         return finish();
     }
+    // 0.9.9g: the entry's colour reached libsa1: the shells were built (the internal test hook; what they look like: skin_test S11)
+    CHECK(sa1k_test_glow_bytes(sa1k_char_of(se->ctx(), (sa1_character_id)id)) > 0u, "T6 extras.skin's glow reached libsa1: %u bytes of shells", (unsigned)sa1k_test_glow_bytes(sa1k_char_of(se->ctx(), (sa1_character_id)id)));
     auto tick = [&](double buttons = 0.0) {
         return L.call("Tick", {Val::number(id), Val::number(0), Val::number(0), Val::number(0), Val::number(buttons), Val::number(1.0 / 30.0)});
     };

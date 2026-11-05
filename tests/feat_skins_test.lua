@@ -16,7 +16,7 @@ cookie = { GetNumber = function(k, d) return tonumber(cookies[k]) or d end, Set 
 
 local G = M.module({ speed = 300, features = { super = 5, jukebox = 1, emote = 3, follower = 2, frontend = 1 } })
 G.SUPER = G.SUPER or { KIND = 8, KIND_SONIC = 0, CREATE_QUESTION = 0x2000, ARCHIVE_QUESTION = 62, COPT_QUESTION_SPIN = 8, CREATE_WATER_FLOOR = 0x1000, NO_DRAIN = 1, KEEP_AT_ZERO = 2, START_RINGS = 50 }
-G.SUPER.CREATE_SKIN, G.SUPER.ARCHIVE_SKIN, G.SUPER.COPT_SKIN_ANIM, G.SUPER.SKIN_ANIM_FLY, G.SUPER.SKIN_ANIM_WALK = 0x4000, 61, 9, 1, 2
+G.SUPER.CREATE_SKIN, G.SUPER.ARCHIVE_SKIN, G.SUPER.COPT_SKIN_ANIM, G.SUPER.SKIN_ANIM_FLY, G.SUPER.SKIN_ANIM_WALK, G.SUPER.SKIN_ANIM_GLOW = 0x4000, 61, 9, 1, 2, 4
 local creates, options, voiceless = {}, {}, {}
 local create = G.Create
 function G.Create(kind, pos, yaw, ups, rings, extras)
@@ -95,6 +95,11 @@ local function character_page()
 end
 
 -- ---- T1: the entry -----------------------------------------------------------------------------------------------------------------------------------------------------
+do
+    local desc = GSA1.Skins.DescOf(GSA1.Skins.SKINS.metalsonic)
+    check(desc.glow_r == 0.55 and desc.glow_g == 0.10 and desc.glow_b == 1.00 and desc.glow_inflate == 0.30, "T1 the glow is the entry's data: colour and inflation in DescOf")
+    check(desc.fast_on == 0.25 and desc.fast_off == 0.215 and desc.anim_fast[1] == 9 and desc.anim_fast[2] == 132, "T1 the way between a walk and a run is the entry's data")
+end
 local K, W, S, F = GSA1.Skins, GSA1.Wheel, GSA1.CharSelect, GSA1.Faces
 local d = GSA1.CharacterByName("metalsonic")
 check(d and d.kind == 0 and d.form == "skin" and d.title == "Metal Sonic" and not d.secret, "T1 the entry: kind 0, form skin, not secret")
@@ -118,6 +123,7 @@ do
     check(string.find(text, "Metal Sonic", 1, true) ~= nil, "T1 the Quick spawn list on the Character page has him")
     check(string.find(text, "gsa1_metal_fly", 1, true) and string.find(text, "gsa1_metal_walk_fly", 1, true) and string.find(text, "gsa1_metal_voice", 1, true), "T7 his three options have controls on the page")
     check(string.find(text, "gsa1_charselect_skins", 1, true) ~= nil, "T7 gsa1_charselect_skins has a control on the page")
+    check(string.find(text, "gsa1_metal_glow", 1, true) ~= nil, "T7 gsa1_metal_glow has a control on the page")
     local upgrades = 0
     for _ in string.gmatch(text, "gsa1_upgrade_light_speed_shoes") do upgrades = upgrades + 1 end
     check(upgrades <= 1, "T1 no extra upgrade block (%d)", upgrades)
@@ -143,13 +149,13 @@ do
     check(voiceless[C.id] == true, "T3 voiceless at creation")
     local anim
     for _, o in ipairs(options) do if o.opt == 9 then anim = o.v end end
-    check(anim == 1, "T3 SA1_COPT_SKIN_ANIM at creation: fly on, walk off (%s)", tostring(anim))
+    check(anim == 5, "T3 SA1_COPT_SKIN_ANIM at creation: fly on, walk off, glow on (%s)", tostring(anim))
     -- the options at once
     options = {}
     M.convars.gsa1_metal_walk_fly:SetString("1")
     if cvars and cvars.Run then cvars.Run("gsa1_metal_walk_fly") end
     K.ApplyAnim(C)
-    check(options[#options] and options[#options].opt == 9 and options[#options].v == 3, "T7 gsa1_metal_walk_fly: fly + walk at once, no re-creation (%s)", options[#options] and tostring(options[#options].v) or "none")
+    check(options[#options] and options[#options].opt == 9 and options[#options].v == 7, "T7 gsa1_metal_walk_fly: fly + walk + glow at once, no re-creation (%s)", options[#options] and tostring(options[#options].v) or "none")
     M.convars.gsa1_metal_walk_fly:SetString("0")
     M.convars.gsa1_metal_voice:SetString("1")
     K.ApplyVoice(C)

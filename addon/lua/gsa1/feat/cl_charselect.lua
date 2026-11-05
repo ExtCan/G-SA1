@@ -218,6 +218,17 @@ local function fonts(H)
         antialias = true })
 end
 
+-- the skin line, through the text module when it has this font (feat/cl_text.lua: gsa1_text_fonts; off, or the font not found: exactly today's)
+local function skin_line(hint, W, H, frac)
+    local mid = TEXT_ALIGN_CENTER or 1
+    local Tx = GSA1.Text
+    local size = math.max(12, math.floor(H / 54))
+    local font = Tx and Tx.FontFor and Tx.FontFor("charselect_skin", size) or "GSA1CharSelectHint"
+    if not (Tx and Tx.Draw and Tx.Draw(hint, "charselect_skin", size, COL_TEXT, W / 2, H * frac, mid, mid)) then
+        draw.SimpleText(hint, font, W / 2, H * frac, COL_TEXT, mid, mid)
+    end
+end
+
 -- the buttons of Design S, in the panel's Paint
 function S.PaintS(st, W, H)
     fonts(H)
@@ -236,7 +247,7 @@ function S.PaintS(st, W, H)
         draw.SimpleText(st.fallback, "GSA1CharSelectHint", W / 2, H * 0.89, COL_HINT, mid, mid)
     end
     local hint = S.SkinHint(st)
-    if hint then draw.SimpleText(hint, "GSA1CharSelectHint", W / 2, H * 0.79, COL_TEXT, mid, mid) end
+    if hint then skin_line(hint, W, H, 0.79) end
 end
 
 function S.Move(dir)
@@ -684,7 +695,7 @@ local function paint_r(st, W, H)
     local hint = S.SkinHint(st)
     if hint then
         fonts(H)
-        draw.SimpleText(hint, "GSA1CharSelectHint", W / 2, H * 0.80, COL_TEXT, TEXT_ALIGN_CENTER or 1, TEXT_ALIGN_CENTER or 1)
+        skin_line(hint, W, H, 0.80)
     end
 end
 
