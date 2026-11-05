@@ -238,6 +238,10 @@ local function camera_panel(panel)
     panel:ControlHelp("Big's fishing line and the rings and item boxes that appear while he fishes follow the camera you "
         .. "see. Off: the game uses a camera of its own behind the character (as in 0.9.4). While Big's fishing camera "
         .. "shows (below), they follow that camera instead, and this switch only says where it starts from.")
+    -- 0.9.9c (feat/cl_climbcam.lua)
+    panel:CheckBox("Keep the camera out of the wall while Knuckles climbs", "gsa1_cam_climb")
+    panel:ControlHelp("The camera follows his body on the wall, with no jump when he grabs it or leaves it, first person too. Off: as 0.9.9b, "
+        .. "the camera starts from inside the wall.")
     -- 0.9.8 (sadc docs/research/gsa1_098_plan.md 2.4 C11): a feature's rows at the end of this page
     if GSA1.CameraPanelExtra then GSA1.CameraPanelExtra(panel) end
 end
@@ -302,6 +306,10 @@ local function rendering_panel(panel)
         .. "for the props on this map, on the ground and on props. Off: nothing of it is drawn or computed. The game's "
         .. "round shadow above stays on its own switch.")
     panel:CheckBox("Sun shadow in first person too", "gsa1_sunshadow_fp")
+    -- 0.9.9c (the owner's note: "Sun Shadows appear in Shadowed areas when they should only be in bright spots")
+    panel:CheckBox("Sun shadow only where the sun reaches", "gsa1_sunshadow_sunlit")
+    panel:ControlHelp("The shadow fades out on ground in the shade of roofs, walls and the map's other shaded places, asked towards the map's own "
+        .. "sun. Off: everywhere, as a prop's shadow. A map with no sun of its own: everywhere; the line below says so.")
     panel:NumSlider("Sun shadow darkness (0 = the map's own colour)", "gsa1_sunshadow_dark", 0, 100, 0)
     panel:NumSlider("Sun shadow pictures per second (0 = every frame)", "gsa1_sunshadow_rate", 0, 60, 0)
     panel:NumSlider("Followers with a sun shadow (the nearest; 0 = none)", "gsa1_sunshadow_followers", 0, 8, 0)

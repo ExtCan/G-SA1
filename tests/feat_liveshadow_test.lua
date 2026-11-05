@@ -333,6 +333,8 @@ local function logs_with(plain)
     for _, l in ipairs(logs) do if string.find(l.text, plain, 1, true) then out[#out + 1] = l.text end end
     return out
 end
+-- 0.9.9c: this file pins the drawing and the traces of 0.9.9b, which the new option leaves as they were when off; tests/feat_sunlit_test.lua has it on
+if S.cv.sunlit then S.cv.sunlit:SetString("0") end
 GSA1.LoadModule()
 GSA1.World.state, GSA1.World.info = "applied", { min_z = -10000 }
 GSA1.worldMap, GSA1.worldInfo = game.GetMap(), { min_z = -10000 }

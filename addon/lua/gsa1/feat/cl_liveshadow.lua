@@ -1,5 +1,5 @@
 -- G-SA1 feature "liveshadow": the characters' SUN SHADOW, drawn by G-SA1 (round 0.9.5; sadc docs/research/gsa1_095_plan.md
--- 4.17 with its review R.7, gsa1_090_render.md 5.2 S2 with its review; the owner's binding answer 14.1ad 5 and his explicit
+-- 4.17 with its review R.7, gsa1_090_render.md 5.2 S2 with its review; the owner's binding answer 14.1ad 5 and their explicit
 -- note: "The G-SA1 drawn sun shadow should be toggleable"). Garry's Mod shadows the props on a map from the map's sun, but
 -- not a G-SA1 character (its meshes are not a model: no render-to-texture shadow); this draws one like a prop's, and the
 -- game's own round shadow (gsa1_shadow, cl_render.lua) stays as it is. Nothing here changes game logic.
@@ -47,7 +47,7 @@
 --     UNVERIFIED that it is util.TraceLine's).
 --     The quads are tested against the depth buffer like any world surface, no depth bias: on displacements a quad between
 --     four hit points lies more than S.LIFT under the surface for 0.34 % (gm_snowrider_day_v3) / 0.36 % (gm_highway14800)
---     of the sampled points (0.21 % at his logged ground positions on gm_snowrider_day_v3, nearly all of them on a
+--     of the sampled points (0.21 % at their logged ground positions on gm_snowrider_day_v3, nearly all of them on a
 --     displacement; only at creases; measured from the maps' displacement lumps), and a bias would show the shadow through
 --     near walls (SADC/build/research/fix095a/diagnosis.md section 4). That measures the collision surface the traces hit
 --     against itself: that the drawn surface is the same mesh is an assumption, UNVERIFIED on this machine; if it fails, no
@@ -99,6 +99,62 @@
 --     for them too. First person is about your character (GSA1.FirstPersonFor): a follower stays whole there, and so does its shadow. Their
 --     time is the hitch section "FollowerShadow" (the perf line's "sun shadow" stays yours), the page's line has it too; an error in their
 --     part stops only them.
+--   * ONLY WHERE THE SUN REACHES (0.9.9c, gsa1_sunshadow_sunlit, default 1; the owner's note: "Sun Shadows appear in Shadowed areas when they
+--     should only be in bright spots". A prop's shadow in Garry's Mod has the same fault: a projected shadow asks nothing about the sun).
+--     WHAT DECIDES THE SHADE: the map's baked light, and VRAD bakes the sun from the FIRST light_environment alone, in its direction, not
+--     shadow_control's (READ, source-sdk-2013 utils/vrad/lightmap.cpp ParseLightEnvironment, GatherSampleSkyLightSSE; trace.cpp): a ray from the
+--     luxel towards the sun reaches a sky face, or it is blocked by a world brush of MASK_OPAQUE (nodraw sides too, windows and water not); a
+--     ray that hits nothing counts as seen; a surface turned away from the sun gets none. So the check asks towards light_environment even when
+--     the shadow itself falls along shadow_control: on gm_construct_remaster_csm the shadow falls straight down and the sun comes from pitch
+--     -50, yaw 34 (MEASURED: the map's light lumps hold that normal; SADC/build/research/r099c/fix/notes.txt and fix2/notes.txt have the numbers below).
+--     HOW IT ASKS: a lattice of ground samples fixed in the world (S.SUN_CELL, shared by your character and every follower): each corner asks one
+--     trace towards the sun, MASK_OPAQUE, from its ground, the plane of the point of a grid that first needs it, the answer kept S.SUN_KEEP s. That plane comes through the point's own normal, the HitNormal of
+--     its grid trace: a normal made from the grid's neighbours can lean over a ledge (099c's verifier: on the sunny top of a ledge the shadow faded away after 4 s). A corner says only whether the sun gets to
+--     that place. A ray stopped within S.SUN_STEP of height above its start gets a second ray from that much higher; if that one gets there, the blocker was a low step and the corner counts as sun: the narrow shade
+--     of a curb or a stair's riser is no reason to fade a whole cell of the lattice (099c's second verifier: a corner on the foot of a step did). Taller things, walls, roofs: shade, as ever. WHAT THAT COSTS: the shade of
+--     a step up to 26 HU high, or up to 44 where the ray went furthest before it stopped, is not drawn: a shadow lies on it, as in 0.9.9b; a ray or two on stairs. MEASURED: second rays are 0.2-0.7 % of the corners on four of
+--     the five maps below, and they change the agreement with the map's light by 0.03 points or less on those four (gm_snowrider_day_v3: 5.9 %, 72.7 to 71.2, 3 of its 198 samples).
+--     Whether a surface faces the sun is the point's own. A point that faces it asks its corners. A point turned from it asks nothing, so the side of a step never answers for its top; what it reads goes by how wide its
+--     surface is as the grid sees it (sun_broad: from its plane and where that meets its neighbours' planes, not from how many rows lie on it now, so it does not change as the rows move): S.SUN_WIDE cells or more: none, as
+--     VRAD gives it; a cell or less, a sliver such as a riser under a steep light: what the points around it that face the sun read, so a row of the grid falling on a riser makes no notch (099c's second verifier: on
+--     a map whose shadow is slanted another way than the sun, in full sun, a fixed place changed by 0.943 of the shadow in a frame on stairs, 0.720 on a curb; now about what the box off gives, 0.01-0.03, MEASURED,
+--     tests/feat_sunlit_test.lua section 5d); between, in proportion. Under S.SUN_FACING broad ground fades towards none, as a baked surface does; a sliver keeps what its corners say. WHAT THAT COSTS: no ray, and a surface
+--     turned from the sun no wider than a cell (12 HU of your grid, 16 of a follower's) gets the shadow, as in 0.9.9b. A point of a shadow's grid takes the bilinear mean of its four corners, counting only those on its own surface (S.SUN_SAME), so the fade is a
+--     property of the place: it does not swim with the grid, a walk across a shade line on even ground changes nothing suddenly (where a shade line crosses steps it can: each tread reads different corners, 0.6-0.98 of the shadow in a frame on stairs and curbs at such a line, MEASURED by 099c's third verifier, rare, no worse than before its fix), and a shadow half in the sun
+--     keeps its sunny part at full strength and fades out over one cell on the shaded side. Only the ground under the shadow is asked, never the
+--     character. A corner asked again with another answer (a roof that moved: S.SUN_KEEP) goes over in S.SUN_FADE s; in time too the value belongs to the
+--     place, not to a point of the moving grid (a fade on the grid's points made a fixed spot of the ground swing by a quarter of the shadow while walking,
+--     MEASURED in the test). One place where the moving grid does show: a crease in the ground whose far side is broad and turned from the sun has its line at the nearest grid points, as the shadow's cells have: right beside it
+--     a fixed place changes by up to 0.53 of the shadow in a frame under the character, by up to 0.99 where the grid's outer rows pass over it (a row there alone on such ground reads what is around it, until the next row joins it), further than a cell from it by 0.000.
+--     A band of 16 HU turned from the sun, by turns one row or two: 0.59 at most, 0.15 by 20 HU, none from 32 (MEASURED, SADC/build/research/r099c/fix2/crease_after.txt). That the outer rows hold no picture of a character is READ from the box's size, UNVERIFIED by eye.
+--     WHAT IS NOT ANSWERED YET: traces a frame are bounded (S.SUN_YOU, S.SUN_THEM corners), a corner not traced yet does not count and is asked the next frame. A point with no answer at all keeps its value while
+--     the shadow stays about where that was asked; a new shadow, or one that jumped S.SUN_JUMP, starts from nothing: what is not known yet is not drawn. So a shadow arriving in the shade is never lit for a
+--     frame (099c's verifier: 1-3 frames at full darkness, with several followers, a teleport, a tall character); one arriving in the sun can come a frame or a few late. A KNOWN LIMIT: at very high speed the budget runs out and
+--     a shadow's values start from nothing each frame, so in open sun vertices fall short of full: on flat ground none up to 5000 HU/s at 60 fps with 1 + 3 or 1 + 8 (on a slope or stairs a grid spans more of the lattice: from 3000-3600 HU/s at 60 fps and 1500-2000 at 30 fps for the followers' shadows, your own from 2500-3600 at 30 fps, MEASURED by 099c's third verifier); 1 + 8 at 6000: 19 of 150 frames; at 8000: all, and 1 + 3 100 of 150; lower
+--     speeds at lower frame rates, 1 + 8 at 3000 HU/s and 30 fps 9 of 75, at 2500 HU/s and 20 fps all, 1 + 3 2 of 50 (MEASURED, 099c's second verifier, re-run the same on this code). The highest speed in a log searched is 3602 HU/s, at about 57 fps.
+--     MEASURED on five of the owner's maps (all ground within 400 HU of where the logs have them, indoor floors too; rays through world brushes and displacements, no props), % agreeing with the map's own
+--     light: the ray on gm_construct_remaster_csm, gm_construct, gm_construct_in_flatgrass_v3 99.0, 99.2, 97.7, on gm_c17map 97.7 and gm_snowrider_day_v3 73.7 (those two with a proxy for the truth); always
+--     drawing 31.7, 31.8, 55.7, 54.7, 67.2; along shadow_control 73.4, 81.3, 87.6, 97.7 (the same direction there); the lattice as built 99.1, 98.75, 97.6, 96.15, 71.2, so it loses up to 1.6 points of the ray's on the first
+--     four, 2.5 on the fifth, whose 198 samples move half a point each. Cells of 24, 32 and 48 HU differ by little on the same samples; the 12 and 16 HU rows were run on a quarter of them only (1970 of 7830 on the first map).
+--     099c's verifier counted more luxels, those in the corners of a lightmap's rectangle outside the face's polygon too, which agree only 72-78 % (099c's second verifier, MEASURED on two maps; the height a ray starts from
+--     changes nothing, 1 or 8 HU): by that count the ray 92.8, 92.1, 91.0, 88.6, 80.4, always drawing 33.8, 31.4, 43.7, 46.6, 70.7. For ground that exists the first numbers are the fairer ones.
+--     WHAT IT GETS WRONG, and which way: a tree's leaves or a prop with no collision (a trace goes through them; if the map baked their shade,
+--     drawn in shade); a func_brush overhead (it stops a trace, the map baked no shade: not drawn in light). A physics prop overhead should not stop it: Source's filter skips a non-brush model unless the mask
+--     has CONTENTS_MONSTER, and MASK_OPAQUE has none (READ source-sdk-2013 util_shared.cpp StandardFilterRules; UNVERIFIED that Garry's Mod's filter follows it); for the same reason the ray needs no player
+--     filter. A sun that another addon or the map turned off at run time, Real CSM's among them (a trace cannot know: the ground it finds "lit" stays so, drawn on ground that
+--     is now dark, and Real CSM's lamps may come from env_sun's direction, not light_environment's). A window: lit through it, as baked. Water: as
+--     baked, it stops nothing. A map with no light_environment, or none usable (no light, within 10 degrees of horizontal, its entities unreadable):
+--     not asked, drawn everywhere as 0.9.9b, since there is no sun to fall back on and every prop's shadow is drawn there too. A map with a
+--     light_environment and no sky over this ground, an indoor one: shade, not drawn: VRAD lit none of it either. A corner with no answer does not count; a point whose own ray starts in solid: drawn.
+--     So what cannot be known falls on the side of 0.9.9b's shadow.
+--     COST, A STATED LIMIT, ON BY DEFAULT: own Lua 0.0 bytes a frame, on and off (MEASURED, tests/feat_sunlit_test.lua section 6). Each ray's result is engine objects the harness cannot weigh, as each grid trace's: on top of the
+--     grid's 81 + 49 a follower, at 1500 HU/s 3.9 to 5.3 rays a frame for your shadow on flat ground, 12.7 to 15 up stairs (their height bands ask more corners; second rays 0 to 0.35 of that), 35 to 46 for 1 + 8; standing about 0.1 a
+--     frame per shadow. Their weight in bytes is UNVERIFIED. So the check does add engine garbage per frame, a little; a ray is the only question that names a direction. To be rid of it: untick "Sun shadow only where the sun reaches".
+--     Off (0): none of this runs, exactly 0.9.9b's drawing and traces.
+--     THE OTHER WAYS (SADC/build/research/r099c/fix/notes.txt): render.ComputeLighting / GetLightColor read the leaf's few stored samples, by the wiki "ambient and dynamic", and need a threshold no map states; even the
+--     best one for each map agrees less than the ray (80-87 %, UNVERIFIED that the formula is the engine's) and they cannot tell a lamp from the sun. The map's lightmap itself is right on 98.7-99.8 % with a threshold, but
+--     Lua has no call that reads it (render.GetSurfaceColor by the wiki is a surface's colour, UNVERIFIED whether lit), and reading it from the file means the map's tree in the Lua heap, which the stutter study says not to
+--     grow. The log therefore gets a few samples of those calls next to the ray's answer, at most S.PROBE_EACH each way per map, for the next round: "sun check sample".
 -- Q menu > Options > G-SA1 > Rendering: the switches, the followers' slider and a status line (GSA1.SunShadowLine).
 GSA1 = GSA1 or {}
 local S = GSA1.SunShadow
@@ -134,6 +190,7 @@ S.WHY = {
         .. "have answered first)",
     noground = "no ground under the character that the shadow can lie on, within the light's distance (or ground falling "
         .. "away from the sun too steeply: its cells count as ledges)",
+    shade = "the ground under the character is in the shade (\"Sun shadow only where the sun reaches\" is on)",
 }
 local WHY = S.WHY
 local HOOK = "gsa1_sunshadow"
@@ -204,6 +261,20 @@ function S.ParseEntities(text, step)
             end
         end
     end
+    -- (0.9.9c: VRAD aims a light with a "target" at that entity; only the first light_environment's, once)
+    local le = found.light_environment.kv
+    local target = le and le.target
+    if target and target ~= "" then
+        for block in string.gmatch(text, "{([^{}]*)}") do
+            if string.find(block, target, 1, true) then
+                local kv = keyvalues(block)
+                if kv.targetname == target then
+                    found.light_environment.targetOrigin = numbers(kv.origin)
+                    break
+                end
+            end
+        end
+    end
     return found
 end
 
@@ -218,9 +289,49 @@ local function fmt3(t)
     return string.format("(%s, %s, %s)", tostring(t[1] or 0), tostring(t[2] or 0), tostring(t[3] or 0))
 end
 
+-- 0.9.9c: the baked sun of the found entities, the one that decides the map's shade: { known = true, dx, dy, dz (unit, the way its light
+-- travels), text } or { known = false, why, text }. VRAD's rules (the top of this file): the first light_environment; a "target", else the
+-- "angle" key (-1 up, -2 down) or the angles' yaw, the "pitch" key or the angles' pitch; a pitch is negative downward
+function S.SunOf(found, why)
+    local le = found and found.light_environment
+    local kv = le and le.n > 0 and le.kv or nil
+    if not kv then
+        local w = why or "the map has no light_environment"
+        return { known = false, why = w, text = "not asked here, drawn everywhere: " .. w }
+    end
+    local function none(w) return { known = false, why = w, text = "not asked here, drawn everywhere: " .. w } end
+    local c = numbers(kv._light)
+    if c and ((c[1] or 0) <= 0 and (c[2] or 0) <= 0 and (c[3] or 0) <= 0 or (c[4] and c[4] <= 0)) then
+        return none("the map's light_environment gives no light")
+    end
+    local a = numbers(kv.angles) or { 0, 0, 0 }
+    local pitch = tonumber(kv.pitch) or 0
+    if pitch == 0 then pitch = a[1] or 0 end
+    local angle = tonumber(kv.angle) or 0
+    local x, y, z
+    local o, t = numbers(kv.origin), le.targetOrigin
+    if t and o and #t >= 3 and #o >= 3 then
+        local ex, ey, ez = t[1] - o[1], t[2] - o[2], t[3] - o[3]
+        local n = math.sqrt(ex * ex + ey * ey + ez * ez)
+        if n <= 0 then return none("the map's light_environment points at itself") end
+        x, y, z = ex / n, ey / n, ez / n
+    elseif angle == -1 then
+        x, y, z = 0, 0, 1
+    elseif angle == -2 then
+        x, y, z = 0, 0, -1
+    else
+        x, y, z = forward(-pitch, angle ~= 0 and angle or (a[2] or 0))
+    end
+    if z > -S.MIN_DOWN then
+        return none(string.format("the map's light_environment (pitch %s) points within 10 degrees of horizontal or up", tostring(pitch)))
+    end
+    return { known = true, dx = x, dy = y, dz = z, text = string.format("asked towards the map's baked sun, light_environment pitch %s, yaw %s",
+        tostring(pitch), tostring(angle ~= 0 and angle or (a[2] or 0))) }
+end
+
 -- the light of the found entities: { source = "shadow_control" | "light_environment" | "down", dx, dy, dz (unit, the
 -- direction the light travels), color = { r, g, b }, distance, disabled, sky3d (false: the map has no sky_camera; true also
--- when its entities could not be read), text }
+-- when its entities could not be read), sun (S.SunOf), text }
 function S.LightOf(found, why)
     local D = S.DEFAULT
     local L = { source = "down", dx = 0, dy = 0, dz = -1, color = { D.color[1], D.color[2], D.color[3] },
@@ -229,6 +340,7 @@ function S.LightOf(found, why)
     local le = found and found.light_environment
     local sky = found and found.sky_camera
     L.sky3d = not sky or sky.n > 0
+    L.sun = S.SunOf(found, why)
     local notes = {}
     local sckv = sc and sc.n > 0 and sc.kv or nil
     if sckv then
@@ -325,8 +437,8 @@ local function step_light()
         return
     end
     S.light, S.lightMap, S.job = L, map, nil
-    log("sun shadow: %s; pictures: %s; followers with one: %s", L.text, cv.rate:GetFloat() > 0 and cv.rate:GetString() .. " a second" or
-        "every frame", cv.followers:GetString())
+    log("sun shadow: %s; pictures: %s; followers with one: %s; only where the sun reaches: %s (%s)", L.text, cv.rate:GetFloat() > 0 and
+        cv.rate:GetString() .. " a second" or "every frame", cv.followers:GetString(), cv.sunlit:GetString(), L.sun.text)
 end
 S.StepLight = step_light
 
@@ -352,9 +464,10 @@ S.stats = { refreshes = 0, refreshMs = 0, traces = 0, frames = 0, frameMs = 0 }
 -- use it); stats: whose traces these are
 local function new_grid(n, stats)
     local g = { n = n, stats = stats, hit = {}, wx = {}, wy = {}, wz = {}, fade = {}, depth = {}, u = {}, v = {}, cells = {}, ncells = 0,
-                box = 48 }
+                box = 48, sun = {}, nx = {}, ny = {}, nz = {}, facing = {}, normals = false, sunWas = false, sunPending = false, dark = false, sx = 0, sy = 0, sz = 0 }
     for k = 1, n * n do
         g.hit[k], g.wx[k], g.wy[k], g.wz[k], g.fade[k], g.depth[k], g.u[k], g.v[k] = false, 0, 0, 0, 0, 0, 0, 0
+        g.sun[k], g.nx[k], g.ny[k], g.nz[k], g.facing[k] = 0, 0, 0, 1, 1
     end
     for c = 1, (n - 1) * (n - 1) do g.cells[c] = 0 end
     return g
@@ -406,6 +519,9 @@ local function trace_grid(g, C, L, cx, cy, cz, box)
     local hit, wx, wy, wz, dep = g.hit, g.wx, g.wy, g.wz, g.depth
     local lift = S.LIFT
     local any = false
+    -- (0.9.9c: the surface's own normal, for the sun check alone: sun_at)
+    local normals = cv.sunlit:GetBool() and L.sun ~= nil and L.sun.known
+    local nx, ny, nz = g.nx, g.ny, g.nz
     for k = 1, NN do
         local i, j = (k - 1) % N, math.floor((k - 1) / N)
         local xv = -box + 2 * box * i / (N - 1)
@@ -429,6 +545,10 @@ local function trace_grid(g, C, L, cx, cy, cz, box)
                 any = true
                 wx[k], wy[k], wz[k] = hp.x - dx * lift, hp.y - dy * lift, hp.z - dz * lift
                 dep[k] = depth
+                if normals then
+                    local hn = r.HitNormal
+                    if hn then nx[k], ny[k], nz[k] = hn.x, hn.y, hn.z else nx[k], ny[k], nz[k] = 0, 0, 0 end
+                end
             end
         end
     end
@@ -450,6 +570,7 @@ local function trace_grid(g, C, L, cx, cy, cz, box)
     end
     g.ncells = nc
     g.px, g.py, g.pz, g.at, g.C, g.box = px, py, pz, SysTime(), C, box
+    g.normals = normals
 end
 
 -- the silhouette box of a character this frame: its half size, its centre (the drawn root, up by the character's centre)
@@ -533,6 +654,294 @@ local function emit_cells(g, nc, cr, cg, cb)
     end
 end
 
+-- ---- where the sun reaches (0.9.9c; ONLY WHERE THE SUN REACHES at the top of this file) -----------------------------------------------------------
+S.SUN_CELL = 32                     -- HU: the lattice of ground samples, fixed in the world. From 24 to 48 HU agreed alike with the maps' baked light (12 and 16: run on a quarter of the samples, alike there); the
+                                    -- fade across a shade line is one cell wide, about what a lightmap's own edge is, and a grid's points 12 or 16 HU apart show it
+S.SUN_SLOTS = 2048                  -- the lattice's answers kept, by a hash of the corner: a clash only asks again
+S.SUN_BAND = 32                     -- HU: heights a corner keeps apart (two levels on one x, y): the band of the point asking
+S.SUN_SAME = 48                     -- HU: a corner whose ground lies further than this from the point asking is another surface: it does not count
+S.SUN_LIFT = 8                      -- HU: its ray starts this far off its ground (a plane through a point of a curved surface can lie under the surface). MEASURED, agreement with the baked light at 4 / 8 / 12 / 16: 99.12 99.09 98.91 98.58,
+                                    -- 98.90 98.75 98.74 98.71, 97.65 97.60 97.58 97.57, 96.15 96.16 96.04 95.95; gm_snowrider_day_v3's 198 samples 69.2 72.7 72.2 71.7
+S.SUN_STEP = 18                     -- HU of height: a ray stopped within this of its start gets a second ray from this much higher (sun_ray). About what a player walks over, UNVERIFIED for Garry's Mod. MEASURED, 12 or 24: within 0.1 points of this on four maps
+S.SUN_FAR = 56755                   -- HU: a ray to the sun, VRAD's MAX_TRACE_LENGTH
+S.SUN_KEEP = 4                      -- s: an answer kept (what moves: doors, props); a standing shadow asks about 6 corners a second again
+S.SUN_FADE = 0.25                   -- s: an answer that changes (something moved into the sun's way) goes over from the old one in this time
+S.SUN_FACING = 0.1                  -- how far a point's surface must face the sun (the cosine) for all of its sun: under it less, to none at 0. Flat ground under the lowest sun used (10 degrees) has 0.17
+S.SUN_PLANE = 0.25                  -- of a grid's cell, along the light: how far a neighbour may lie off a point's plane and still be on it
+S.SUN_WIDE = 1.4                    -- cells: a surface this wide or wider, turned from the sun, reads none; a cell or less reads what is around it (sun_broad). Under the square root of 2: ground across the grid at any angle is this wide
+S.SUN_JUMP = 96                     -- HU (x + y + z): a shadow that moved so far since its points were last asked starts from nothing: more than a frame's run at 30 fps, less than a teleport
+S.SUN_YOU, S.SUN_THEM = 32, 48      -- corners asked in a frame at most, for your shadow / for all the followers': the rest the next frame
+S.PROBE_EACH, S.PROBE_EVERY = 6, 5  -- "sun check sample" log lines: per answer and map, seconds apart
+local MASK_SUN = MASK_OPAQUE or 16513                   -- VRAD's blockers: no windows, no water, no grates
+local SF = { left = 0, st = {}, kx = {}, ky = {}, kb = {}, zg = {}, lit = {}, at = {}, from = {}, t0 = {}, n = 0, traces = 0, fading = false,
+             probe = { [0] = 0, [1] = 0, next = 0 } }
+S.sunfield = SF
+local TRS = { start = Vector(), endpos = Vector(), mask = MASK_SUN, output = {} }
+
+-- empties the answers (the first use, a new map's light; and the tests)
+function S.ResetSun()
+    local st, kx, ky, kb, zg, lit, at, from, t0 = SF.st, SF.kx, SF.ky, SF.kb, SF.zg, SF.lit, SF.at, SF.from, SF.t0
+    for i = 1, S.SUN_SLOTS do st[i], kx[i], ky[i], kb[i], zg[i], lit[i], at[i], from[i], t0[i] = 0, 0, 0, 0, 0, 0, 0, 0, 0 end
+    SF.n = S.SUN_SLOTS
+end
+
+-- a ray towards the sun from a point: 1 it gets there, or hits nothing (VRAD's miss is "seen"); 0 something stops it; -1 it started in solid. Stopped within S.SUN_STEP of height above its start, a second ray from
+-- that much higher says whether it was only a low step: then this counts as sun, since the narrow shade of a curb or a stair's riser is no reason to fade a whole cell of the lattice
+local sun_ray
+function sun_ray(x, y, z, sun, again)
+    local st, en = TRS.start, TRS.endpos
+    local far = S.SUN_FAR
+    st:SetUnpacked(x, y, z)
+    en:SetUnpacked(x - sun.dx * far, y - sun.dy * far, z - sun.dz * far)
+    local r = util.TraceLine(TRS)
+    if r == nil then r = TRS.output end
+    SF.traces = SF.traces + 1
+    if r.StartSolid or r.AllSolid then return -1 end
+    if not r.Hit or r.HitSky then return 1 end
+    if not again and r.Fraction * far * -sun.dz <= S.SUN_STEP then
+        SF.left = SF.left - 1
+        return sun_ray(x, y, z + S.SUN_STEP, sun, true) == 1 and 1 or 0
+    end
+    return 0
+end
+
+-- what the log gets beside the ray's answer: the engine's own lighting at that place, for a later round to weigh (ONLY WHERE THE SUN REACHES)
+local function probe_line(x, y, z, ans, sun)
+    local at = Vector(x, y, z + 20)
+    local a, b = render.ComputeLighting(at, Vector(-sun.dx, -sun.dy, -sun.dz)), render.ComputeLighting(at, Vector(sun.dx, sun.dy, sun.dz))
+    local c = render.GetSurfaceColor and render.GetSurfaceColor(Vector(x, y, z + 16), Vector(x, y, z - 16))
+    log("sun check sample: the ray says %s at (%.0f %.0f %.0f); render.ComputeLighting towards the sun (%.3f %.3f %.3f), away from it (%.3f %.3f %.3f); "
+        .. "render.GetSurfaceColor %s", ans == 1 and "sun" or "shade", x, y, z, a.x, a.y, a.z, b.x, b.y, b.z, c and string.format("(%.3f %.3f %.3f)", c.x, c.y, c.z) or "none")
+end
+
+-- a corner of the lattice in this band: its slot, asked now if it has no fresh answer; 0 when this frame's budget is spent and it has no answer at all. Its ground is the plane of the point asking, through
+-- that point's own normal (nx, ny, nz, facing the sun: sun_points does not ask for the others), so one trace a corner, two beside a low step. Asked again with another answer, it goes over from the old one in S.SUN_FADE s (sun_value)
+local function sun_corner(ix, iy, band, L, now, g, k, nx, ny, nz)
+    local cell = S.SUN_CELL
+    local h = (ix * 61 + iy * 1021 + band * 131) % S.SUN_SLOTS + 1
+    local st, at = SF.st, SF.at
+    local mine = st[h] ~= 0 and SF.kx[h] == ix and SF.ky[h] == iy and SF.kb[h] == band
+    if mine and now >= at[h] and now - at[h] < S.SUN_KEEP then return h end
+    if SF.left <= 0 then return mine and h or 0 end
+    SF.left = SF.left - 1
+    local had = mine and st[h] == 1
+    local old = had and SF.lit[h] or 0
+    if had and now - SF.t0[h] < S.SUN_FADE and now >= SF.t0[h] then
+        old = SF.from[h] + (old - SF.from[h]) * (now - SF.t0[h]) / S.SUN_FADE
+    end
+    SF.kx[h], SF.ky[h], SF.kb[h], at[h] = ix, iy, band, now
+    local x, y = ix * cell, iy * cell
+    local vz = g.wz[k]
+    local gz = vz
+    if nz >= 0.3 then gz = vz - (nx * (x - g.wx[k]) + ny * (y - g.wy[k])) / nz end
+    SF.zg[h] = gz
+    local sun, lift = L.sun, S.SUN_LIFT
+    local ans = sun_ray(x + nx * lift, y + ny * lift, gz + nz * lift, sun)
+    if ans < 0 then
+        st[h] = 2
+        return h
+    end
+    st[h], SF.lit[h] = 1, ans
+    if had and old ~= ans then
+        SF.from[h], SF.t0[h] = old, now
+    else
+        SF.from[h], SF.t0[h] = ans, 0
+    end
+    local P = SF.probe
+    if now >= P.next and P[ans] < S.PROBE_EACH and GSA1.LogEnabled and GSA1.LogEnabled() then
+        P.next = now + S.PROBE_EVERY
+        P[ans] = P[ans] + 1
+        if not pcall(probe_line, x, y, gz, ans, sun) then P[0], P[1] = S.PROBE_EACH, S.PROBE_EACH end
+    end
+    return h
+end
+
+-- a corner's value now: its answer, or on the way to it
+local function sun_value(h, now)
+    local v = SF.lit[h]
+    local dt = now - SF.t0[h]
+    if dt < S.SUN_FADE and dt >= 0 then
+        SF.fading = true
+        return SF.from[h] + (v - SF.from[h]) * dt / S.SUN_FADE
+    end
+    return v
+end
+
+-- no corner counts (a narrow ledge, a beam, all four in walls): the point's own ray, kept like a corner on a finer lattice; a point with no answer is drawn. -1: not asked yet
+local function sun_own(x, y, z, sun, now)
+    local ix, iy, band = math.floor(x / 8), math.floor(y / 8), math.floor(z / 8) + 100000
+    local h = (ix * 61 + iy * 1021 + band * 131) % S.SUN_SLOTS + 1
+    local st = SF.st
+    local mine = st[h] == 3 and SF.kx[h] == ix and SF.ky[h] == iy and SF.kb[h] == band
+    if mine and now >= SF.at[h] and now - SF.at[h] < S.SUN_KEEP then return SF.lit[h] end
+    if SF.left <= 0 then return mine and SF.lit[h] or -1 end
+    SF.left = SF.left - 1
+    local ans = sun_ray(x, y, z + S.SUN_LIFT, sun)
+    if ans < 0 then ans = 1 end
+    st[h], SF.kx[h], SF.ky[h], SF.kb[h], SF.at[h], SF.lit[h], SF.from[h], SF.t0[h] = 3, ix, iy, band, now, ans, ans, 0
+    return ans
+end
+
+-- how much sun at a point of a shadow's grid that faces the sun, 0 .. 1: the bilinear mean of the four corners on its own surface (a trace with no normal counts as flat ground). -1: not known yet (the budget)
+local function sun_at(g, k, L, now)
+    local nx, ny, nz = g.nx[k], g.ny[k], g.nz[k]
+    if nx == 0 and ny == 0 and nz == 0 then nz = 1 end
+    local sun = L.sun
+    local x, y, z = g.wx[k], g.wy[k], g.wz[k]
+    local cell = S.SUN_CELL
+    local fx, fy = x / cell, y / cell
+    local ix, iy = math.floor(fx), math.floor(fy)
+    local ax, ay = fx - ix, fy - iy
+    local band = math.floor(z / S.SUN_BAND)
+    local st, zg, same = SF.st, SF.zg, S.SUN_SAME
+    local sum, W, late = 0, 0, false
+    local h = sun_corner(ix, iy, band, L, now, g, k, nx, ny, nz)
+    if h == 0 then late = true
+    elseif st[h] == 1 and math.abs(zg[h] - z) <= same then
+        local w = (1 - ax) * (1 - ay)
+        sum, W = sum + w * sun_value(h, now), W + w
+    end
+    h = sun_corner(ix + 1, iy, band, L, now, g, k, nx, ny, nz)
+    if h == 0 then late = true
+    elseif st[h] == 1 and math.abs(zg[h] - z) <= same then
+        local w = ax * (1 - ay)
+        sum, W = sum + w * sun_value(h, now), W + w
+    end
+    h = sun_corner(ix, iy + 1, band, L, now, g, k, nx, ny, nz)
+    if h == 0 then late = true
+    elseif st[h] == 1 and math.abs(zg[h] - z) <= same then
+        local w = (1 - ax) * ay
+        sum, W = sum + w * sun_value(h, now), W + w
+    end
+    h = sun_corner(ix + 1, iy + 1, band, L, now, g, k, nx, ny, nz)
+    if h == 0 then late = true
+    elseif st[h] == 1 and math.abs(zg[h] - z) <= same then
+        local w = ax * ay
+        sum, W = sum + w * sun_value(h, now), W + w
+    end
+    local v
+    if W > 1e-3 then v = sum / W
+    elseif late then return -1
+    else
+        v = sun_own(x, y, z, sun, now)
+        if v < 0 then return -1 end
+    end
+    return v
+end
+
+-- a point's plane in the grid's own terms: how fast the depth along the light changes along the grid's rows and columns (the next i, the next j). nil: a surface edge-on to the light
+local function plane_slope(g, k, L)
+    local ax, ay, az = g.nx[k], g.ny[k], g.nz[k]
+    if ax == 0 and ay == 0 and az == 0 then az = 1 end
+    local nl = ax * L.dx + ay * L.dy + az * L.dz
+    if nl > -1e-3 then return nil end
+    return -(ax * RIGHT.x + ay * RIGHT.y + az * RIGHT.z) / nl, (ax * UP.x + ay * UP.y + az * UP.z) / nl
+end
+
+-- how far a point's plane runs towards its neighbour m, 0 .. s (a cell), by depth: to where it meets m's plane when that lies between the two; else all the way when m lies on it, else not at all.
+-- Ak: k's slope towards m; along: 1 the rows, 2 the columns; way: 1 or -1 along them
+local function sun_reach(g, L, k, m, s, Ak, along, way)
+    local dd = g.depth[m] - g.depth[k]
+    local on = math.abs(dd - Ak * s) <= S.SUN_PLANE * s
+    local a, b = plane_slope(g, m, L)
+    if not a then return on and s or 0 end
+    local Am = (along == 1 and a or b) * way
+    local t = (dd - Am * s) / (Ak - Am)        -- (parallel planes: infinite, or nothing over nothing when they are one)
+    if t > 0 and t < s then return t end
+    return on and s or 0
+end
+
+-- how far a point's plane runs along one axis of the grid, from its reach each way. The grid's rim and a point with no hit tell nothing: a neighbour on the plane on the side that can be read says it goes on, anything less counts once
+local function sun_span(e1, e2, s)
+    if e1 and e2 then return e1 + e2 end
+    local e = e1 or e2 or 0
+    return e >= s and 2 * s or e
+end
+
+-- how wide the surface of a point is, as the grid sees it (across the way it falls, in the plane the grid's rows lie in), from its plane and where that meets its neighbours' planes, so it is a property of the surface: it
+-- does not change as the grid's rows move over it. 0: a cell wide or less, such as a riser under a steep light: a row falls on it only now and then, so what it reads would blink. 1: S.SUN_WIDE cells or more: rows are always on it
+local function sun_broad(g, k, L)
+    local a, b = plane_slope(g, k, L)
+    if not a then return 0 end
+    local N, hit = g.n, g.hit
+    local s = 2 * g.box / (N - 1)
+    local i, j = (k - 1) % N, math.floor((k - 1) / N)
+    local wu = sun_span(i > 0 and hit[k - 1] and sun_reach(g, L, k, k - 1, s, -a, 1, -1), i < N - 1 and hit[k + 1] and sun_reach(g, L, k, k + 1, s, a, 1, 1), s)
+    local wv = sun_span(j > 0 and hit[k - N] and sun_reach(g, L, k, k - N, s, -b, 2, -1), j < N - 1 and hit[k + N] and sun_reach(g, L, k, k + N, s, b, 2, 1), s)
+    local G = math.sqrt(a * a + b * b)
+    local w = G > 1e-3 and math.max(wu * math.abs(a), wv * math.abs(b)) / G or math.max(wu, wv)
+    return math.max(math.min((w / s - 1) / (S.SUN_WIDE - 1), 1), 0)
+end
+
+-- what a point turned from the sun reads: on broad ground none; on a sliver, a riser the grid's light happens to hit, what the points around it that face the sun read, so one row of points makes no notch and asks
+-- no corner. Nothing around it faces the sun (stairs whose steps fall exactly on the grid's rows): it keeps what it read, less what its surface is broad
+local function sun_turned(g, k, T, L)
+    local N, hit, F = g.n, g.hit, g.facing
+    local broad = sun_broad(g, k, L)
+    local i, j = (k - 1) % N, math.floor((k - 1) / N)
+    local sum, n = 0, 0
+    for dj = -1, 1 do
+        if j + dj >= 0 and j + dj < N then
+            for di = -1, 1 do
+                if i + di >= 0 and i + di < N then
+                    local m = k + di + dj * N
+                    if hit[m] and F[m] > 0 then sum, n = sum + T[m], n + 1 end
+                end
+            end
+        end
+    end
+    T[k] = (n > 0 and sum / n or T[k]) * (1 - broad)
+end
+
+-- this grid's points: g.sun. One not known yet (the budget) keeps its value and is asked again next frame, and so is the grid while a corner it uses is on its way to a new answer; but a value belongs near where it
+-- was asked: a new shadow, or one that jumped S.SUN_JUMP, starts from nothing, so what it does not know yet is not drawn, in the sun for a frame or two, and never lit in the shade
+local function sun_points(g, L, now, px, py, pz, was)
+    if SF.n == 0 or SF.L ~= L then
+        S.ResetSun()
+        SF.L = L
+        SF.probe[0], SF.probe[1], SF.probe.next = 0, 0, 0
+    end
+    local hit, T, F, nx, ny, nz = g.hit, g.sun, g.facing, g.nx, g.ny, g.nz
+    local NN = g.n * g.n
+    if not was or math.abs(px - g.sx) + math.abs(py - g.sy) + math.abs(pz - g.sz) >= S.SUN_JUMP then
+        for k = 1, NN do T[k] = 0 end
+    end
+    g.sx, g.sy, g.sz = px, py, pz
+    local late, turned = false, false
+    SF.fading = false
+    local sun, lim = L.sun, S.SUN_FACING
+    for k = 1, NN do
+        if hit[k] then
+            local ax, ay, az = nx[k], ny[k], nz[k]
+            if ax == 0 and ay == 0 and az == 0 then az = 1 end
+            F[k] = -(ax * sun.dx + ay * sun.dy + az * sun.dz)
+        end
+    end
+    for k = 1, NN do
+        if hit[k] then
+            local f = F[k]
+            if f <= 0 then
+                turned = true
+            else
+                local v = sun_at(g, k, L, now)
+                if v < 0 then
+                    late = true
+                else
+                    -- (broad ground that hardly faces the sun fades towards none, as a baked surface does; a thin thing keeps what its corners say)
+                    if f < lim then v = v * (1 - sun_broad(g, k, L) * (1 - f / lim)) end
+                    T[k] = v
+                end
+            end
+        end
+    end
+    if turned then
+        for k = 1, NN do
+            if hit[k] and F[k] <= 0 then sun_turned(g, k, T, L) end
+        end
+    end
+    g.sunPending = late or SF.fading
+end
+
 -- a shadow's grid, placed at the drawn root of THIS frame: first the grid again when due (the top of this file), then each hit point's
 -- texture coordinates, its place in the light's view around the character's centre now (the picture's orientation: u along the view's
 -- right, v down its up, as in a perspective view), and its fade, its depth along the light below the feet now (from the hit point: the
@@ -541,12 +950,24 @@ local function place_grid(g, C, L, now)
     local box, cx, cy, cz = box_of(C)
     local p = C.drawPos
     local px, py, pz = p.x, p.y, p.z
+    -- (0.9.9c: where the sun reaches: THE TOP OF THIS FILE. Off, or a map with no sun to ask: as 0.9.9b)
+    local sunOn = cv.sunlit:GetBool() and L.sun ~= nil and L.sun.known
+    local traced = false
     if g.C ~= C or not g.at or now - g.at >= S.RETRACE_EVERY - 1e-6 or
-       math.abs(px - g.px) + math.abs(py - g.py) + math.abs(pz - g.pz) >= S.RETRACE_MOVE then
+       math.abs(px - g.px) + math.abs(py - g.py) + math.abs(pz - g.pz) >= S.RETRACE_MOVE or (sunOn and not g.normals) then
         trace_grid(g, C, L, cx, cy, cz, box)
+        traced = true
     end
     local nc = g.ncells
+    g.dark = false
     if nc == 0 then return 0 end
+    local sv, brightest = g.sun, 0
+    if sunOn then
+        if traced or not g.sunWas or g.sunPending then sun_points(g, L, now, px, py, pz, g.sunWas) end
+        g.sunWas = true
+    else
+        g.sunWas = false
+    end
     local rx, ry, rz, ux, uy, uz = RIGHT.x, RIGHT.y, RIGHT.z, UP.x, UP.y, UP.z
     local dx, dy, dz = L.dx, L.dy, L.dz
     local k2 = 0.5 / box
@@ -558,9 +979,16 @@ local function place_grid(g, C, L, now)
             local ex, ey, ez = x - cx, y - cy, z - cz
             U[k] = 0.5 + (ex * rx + ey * ry + ez * rz) * k2
             V[k] = 0.5 - (ex * ux + ey * uy + ez * uz) * k2
-            fade[k] = 1 - math.min(math.max(((x - px) * dx + (y - py) * dy + (z - pz) * dz + lift) * over, 0), 1)
+            local f = 1 - math.min(math.max(((x - px) * dx + (y - py) * dy + (z - pz) * dz + lift) * over, 0), 1)
+            if sunOn then
+                local s0 = sv[k]
+                if s0 > brightest then brightest = s0 end
+                f = f * s0
+            end
+            fade[k] = f
         end
     end
+    if sunOn and brightest <= 0.002 then g.dark = true end
     return nc
 end
 
@@ -589,8 +1017,13 @@ end
 -- your character's receiver quads
 local function draw_receivers(C, L, fn, now)
     if not S.picture or S.pictureC ~= C then return end
+    SF.left = S.SUN_YOU
     local nc = place_grid(G, C, L, now)
     if nc == 0 then return end
+    if G.dark then
+        S.shadeFrame = fn       -- (all of it in the shade: no draw; the reason, why_not)
+        return
+    end
     local cr, cg, cb = quad_colour(L)
     local tone = render.GetToneMappingScaleLinear and render.GetToneMappingScaleLinear()
     if tone and render.SetToneMappingScaleLinear then render.SetToneMappingScaleLinear(TONE_ONE) end
@@ -622,7 +1055,7 @@ end
 
 local function fo_release(s)
     s.F, s.picture, s.seen, s.refreshAt = nil, false, nil, nil
-    s.g.C, s.g.at, s.g.ncells = nil, nil, 0
+    s.g.C, s.g.at, s.g.ncells, s.g.sunWas = nil, nil, 0, false
 end
 
 local function fo_stop(err)
@@ -694,6 +1127,7 @@ end
 local function fo_quads(L, fn, now)
     local slots = FS.slots
     local cr, cg, cb
+    SF.left = S.SUN_THEM
     for i = 1, #slots do
         local s = slots[i]
         local F = s.F
@@ -701,7 +1135,7 @@ local function fo_quads(L, fn, now)
             s.seen = fn
             if s.picture then
                 local nc = place_grid(s.g, F, L, now)
-                if nc > 0 then
+                if nc > 0 and not s.g.dark then
                     if not cr then
                         cr, cg, cb = quad_colour(L)
                         local tone = render.GetToneMappingScaleLinear and render.GetToneMappingScaleLinear()
@@ -838,6 +1272,7 @@ end
 -- why this frame has no quads (nil: it has), in the order that names the real cause first
 local function why_not(C, L, fn)
     if S.quadsFrame == fn then return nil end
+    if S.shadeFrame == fn then return WHY.shade end
     if not L then return WHY.reading end
     if L.disabled then return WHY.disabled end
     if not (C and C.batches and C.drawPos) then return WHY.nochar end
@@ -873,6 +1308,11 @@ local function post_render()
     if L and not L.disabled then fo_frame_end(L, fn) end
 end
 
+-- 0.9.9c: all the traces of this feature so far, for the perf line (cl_log.lua): each one's result is engine objects, the part of its garbage no test here can see
+function GSA1.SunShadowTraces()
+    return S.stats.traces + FS.stats.traces + SF.traces
+end
+
 -- first person with gsa1_sunshadow_fp: cl_render.lua's DrawCharacter prepares the frame's batches without drawing them
 local function pre_render()
     local C = GSA1.Char
@@ -896,8 +1336,9 @@ function GSA1.SunShadowLine()
         if n > 0 then fo = string.format("; %d follower%s with one (%.2f ms per frame for all)", n, n == 1 and "" or "s",
             FS.stats.ms / math.max(FS.stats.frames, 1)) end
     end
-    return string.format("Sun shadow: %s%s%s%s", L.text, st.frames > 0 and string.format(" (%.2f ms per frame)",
-        st.frameMs / st.frames) or "", why and ("; not drawn now: " .. why) or "", fo)
+    local sun = (cv.sunlit:GetBool() and L.sun) and ("; only where the sun reaches: " .. L.sun.text) or ""
+    return string.format("Sun shadow: %s%s%s%s%s", L.text, st.frames > 0 and string.format(" (%.2f ms per frame)",
+        st.frameMs / st.frames) or "", sun, why and ("; not drawn now: " .. why) or "", fo)
 end
 
 -- on / off: the hooks exist only while it is on (off costs nothing)
@@ -919,7 +1360,7 @@ function S.Apply()
         hook.Remove("PostDrawOpaqueRenderables", HOOK)
         hook.Remove("PostRender", HOOK)
         if GSA1.Char then GSA1.Char.viewWanted = nil end
-        G.ncells, G.at, S.picture = 0, nil, false       -- (on again: the first quads trace a grid at once)
+        G.ncells, G.at, S.picture, G.sunWas = 0, nil, false, false       -- (on again: the first quads trace a grid at once)
         for _, s in ipairs(FS.slots) do fo_release(s) end
         FS.want = nil
         S.why, S.whySince, S.whyDone, S.postAt = nil, nil, false, nil

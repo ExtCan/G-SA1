@@ -624,6 +624,581 @@ do
     GSA1.Log = real_log
 end
 
+-- 0.9.9c: G-SA1's garbage number has a place that is not cut (the verifier of the stutter study: with the sun shadow's field in the perf line 363 of 412 windows lost it), and one "gc" line per
+-- cycle of the Lua collector, so the next stutter question reads from the log
+do
+    local got = {}
+    local real_log = GSA1.Log
+    GSA1.Log = function(kind, fmt, ...)
+        local okf, text = pcall(string.format, fmt, ...)
+        got[#got + 1] = { kind = kind, text = okf and text or tostring(fmt) }
+        return real_log(kind, fmt, ...)
+    end
+    local function lines(kind)
+        local out = {}
+        for _, l in ipairs(got) do if l.kind == kind then out[#out + 1] = l.text end end
+        return out
+    end
+    -- the perf line, as long as the owner's at 5 followers with the sun shadow on, a menu open
+    local C0, GM0, VL0 = GSA1.Char, GSA1.GcMeter, GSA1.ViewsLine
+    GSA1.Char = { id = 1, title = "Sonic", state = { mode = 4, action = 14, ground = true, pairs = 1, x = 1, y = 2, z = 3, draws = 40, sprites = 15, blend_layers = 0.21 }, triangles = 2971,
+                  batches = { count = 26 }, blendedBatches = 6, spriteBatches = 2, alpha = 0.5, drawPos = Vector(1, 2, 3) }
+    local FIELD = "Lua garbage 262 KB per frame (all of the game's Lua: the median of 475 frames without a collector free, 83 with one; 14.1 MB/s), of it G-SA1's hooks 77.25 KB (29.5 %: "
+        .. "PostDrawOpaqueRenderables / gsa1_sunshadow 38.31, Think / gsa1_tick 14.80, Draw / the character 5.10; 1 hook samples disturbed by the collector, 143 hooks measured; a menu open in "
+        .. "562 frames: its pages are not measured)"
+    GSA1.GcMeter = { TakeField = function() return FIELD end, Frame = function() end }
+    GSA1.ViewsLine = function() return "main 1, depth pass 1, shadow depth 0, water 1, depth after the opaque pass 0, the Faces page's close-up 1, sun shadow 1" end
+    local trN = 1000
+    GSA1.SunShadowTraces = function()
+        trN = trN + 36
+        return trN
+    end
+    local V = GSA1.LogState.views
+    got = {}
+    for _ = 1, 660 do
+        V.frames, V.so, V.sb, V.mo, V.mb, V.soo = 10, 28, 18, 3, 2, 10
+        GSA1.HitchAdd("SunShadow", 0.0003)
+        GSA1.HitchAdd("FollowerShadow", 0.0003)
+        GSA1.HitchAdd("Followers", 0.0007)
+        GSA1.HitchAdd("FollowerDraw", 0.0003)
+        think(1 / 60)
+    end
+    GSA1.LogFlush()
+    local perf
+    for l in string.gmatch(M.files[LOG] or "", "[^\n]*") do
+        if string.find(l, " perf ", 1, true) and string.find(l, "sun shadow 0.30 ms per frame", 1, true) then perf = l end
+    end
+    check(perf and #perf > 830 and string.find(perf, "of it G-SA1's hooks 77.25 KB", 1, true) ~= nil and string.find(perf, "PostDrawOpaqueRenderables / gsa1_sunshadow 38.31", 1, true) ~= nil and
+        string.find(perf, "its pages are not measured)", 1, true) ~= nil and string.sub(perf, -4) ~= " ...", "the perf line with the sun shadow's field keeps G-SA1's garbage number, its hooks, its end (%d characters)", perf and #perf or 0)
+    check(perf and #perf < 1800, "and it stays well inside its new limit of 2000 (%d characters)", perf and #perf or 0)
+    check(perf and string.find(perf, "sun shadow 0.30 ms per frame, ", 1, true) ~= nil and string.find(perf, " traces per frame", 1, true) ~= nil, "the sun shadow's field has its traces per frame")
+    -- its number: that window's traces over its frames, each window from its own start, the first one too (099c's second verifier: the first read 0.0), and nothing from before it
+    do
+        local trs = 12345
+        GSA1.SunShadowTraces = function() return trs end
+        GSA1.LogState.win, GSA1.LogState.sunTraces0 = nil, nil
+        got = {}
+        for _ = 1, 1900 do
+            V.frames, V.so, V.sb, V.mo, V.mb, V.soo = 10, 28, 18, 3, 2, 10
+            GSA1.HitchAdd("SunShadow", 0.0003)
+            trs = trs + 5
+            think(1 / 60)
+        end
+        local vals = {}
+        for _, l in ipairs(lines("perf")) do
+            local v = string.match(l, "([%d.]+) traces per frame")
+            if v then vals[#vals + 1] = tonumber(v) end
+        end
+        local good = #vals >= 3
+        for _, v in ipairs(vals) do if v < 4.9 or v > 5.1 then good = false end end
+        check(good, "the traces per frame: the true number in every window, the first too (%s)", table.concat(vals, ", "))
+        -- a window that began with no such count has no field, rather than a number from nothing
+        GSA1.SunShadowTraces = nil
+        GSA1.LogState.win, GSA1.LogState.sunTraces0 = nil, nil
+        think(1 / 60)
+        GSA1.SunShadowTraces = function() return trs end
+        got = {}
+        for _ = 1, 660 do
+            V.frames, V.so, V.sb, V.mo, V.mb, V.soo = 10, 28, 18, 3, 2, 10
+            GSA1.HitchAdd("SunShadow", 0.0003)
+            trs = trs + 5
+            think(1 / 60)
+        end
+        local first = lines("perf")[1] or ""
+        check(string.find(first, "sun shadow 0.30 ms per frame", 1, true) ~= nil and string.find(first, " traces per frame", 1, true) == nil, "a window begun with no count of them: no number")
+    end
+    GSA1.SunShadowTraces = nil
+    GSA1.Log("msg", "%s", string.rep("x", 900))
+    GSA1.LogFlush()
+    check(string.find(M.files[LOG] or "", string.rep("x", 800) .. " ...", 1, true) ~= nil and not string.find(M.files[LOG] or "", string.rep("x", 801), 1, true), "any other line is still cut at 800")
+    GSA1.Char, GSA1.GcMeter, GSA1.ViewsLine = C0, GM0, VL0
+
+    -- the collector's cycles, from a sawtooth as the owner's logs show it. A frame of 16.7 ms; 200 KB a frame; the stall in a frame where the heap still grows; the fall starts 0.2 s later, 2 s long
+    local function fresh()
+        local G = GSA1.LogState.gcs
+        G.state, G.top, G.topPlay, G.floor, G.floorAt, G.fallAt, G.stall, G.m0, G.m1, G.mAt, G.play, G.prevTop = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1
+        G.paused, G.pauseSince, G.cut, G.lostOne, G.n, G.lines, G.lost, G.stallMin, G.stallMax, G.periodMin, G.periodMax, G.periodN, G.topMax = false, false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        G.pauseAt, G.suspect = -1000, false
+        return G
+    end
+    local clock, heap = 1000, 400 * 1024
+    local function feed(dt, counted)
+        clock = clock + dt
+        GSA1.LogGc(clock, dt, heap, counted ~= false)
+    end
+    -- grow to the top (MB), the stall there, 12 frames more of growth, then the fall to the floor over 120 frames with some frames growing, then 200 frames of growth
+    local function cycle(topMB, floorMB, stallS)
+        while heap < topMB * 1024 do
+            heap = heap + 200
+            feed(1 / 60)
+        end
+        heap = heap + 160
+        feed(stallS)
+        for _ = 1, 12 do
+            heap = heap + 200
+            feed(1 / 60)
+        end
+        local start = heap
+        for i = 1, 120 do
+            heap = start + (floorMB * 1024 - start) * i / 120 + (i % 7 == 0 and 300 or 0)
+            feed(1 / 60)
+        end
+        for _ = 1, 200 do
+            heap = heap + 200
+            feed(1 / 60)
+        end
+    end
+    local G = fresh()
+    got = {}
+    cycle(825, 403, 0.123)
+    cycle(788, 403, 0.113)
+    cycle(838, 410, 0.143)
+    local gc = lines("gc")
+    check(#gc == 3, "one gc line per cycle (%d in 3)", #gc)
+    local function num(text, pat) return tonumber(string.match(text or "", pat) or "") end
+    local t1, f1, s1 = num(gc[1], "top ([%d.]+) MB"), num(gc[1], "floor ([%d.]+) MB"), num(gc[1], "stall (%d+) ms")
+    check(t1 and t1 >= 825 and t1 < 828 and f1 and f1 >= 403 and f1 < 404 and s1 == 123, "the top (the highest reading), the floor (the lowest after it), the stall: %s", gc[1] or "-")
+    check(string.find(gc[1] or "", "period not known", 1, true) ~= nil, "the first cycle has no period: %s", gc[1] or "-")
+    local p2 = num(gc[2], "period ([%d.]+) s")
+    -- from 788's top back: (top2 - floor2 of the first) / 200 KB a frame, in frames of 1/60 s, plus the fall and the stall's own time
+    check(p2 and p2 > 30 and p2 < 40 and num(gc[2], "stall (%d+) ms") == 113 and num(gc[3], "stall (%d+) ms") == 143, "the period between two tops, in seconds of play (%s), each with its own stall", tostring(p2))
+    check(num(gc[1], "%(([%d.]+) MB freed") and num(gc[1], "freed in ([%d.]+) s") and num(gc[1], "freed in ([%d.]+) s") < 3, "how much it freed and in what time: %s", gc[1] or "-")
+    -- a top must not be read from the last reading before a pause
+    got = {}
+    G = fresh()
+    clock, heap = 2000, 400 * 1024
+    cycle(800, 400, 0.120)
+    for _ = 1, 400 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    local beforePause = heap
+    for _ = 1, 200 do feed(1 / 60, false) end
+    heap = 410 * 1024
+    feed(1 / 60)
+    for _ = 1, 60 do
+        heap = heap - 1000
+        feed(1 / 60)
+    end
+    for _ = 1, 200 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    gc = lines("gc")
+    local false1 = false
+    for _, l in ipairs(gc) do if num(l, "top ([%d.]+) MB") and math.abs(num(l, "top ([%d.]+) MB") - beforePause / 1024) < 1 then false1 = true end end
+    check(#gc == 1 and not false1 and G.lost == 1, "the heap fell across a pause: no line, the last reading before the pause is no top (%d lines, %d lost)", #gc, G.lost)
+    cycle(790, 400, 0.118)
+    gc = lines("gc")
+    check(#gc == 2 and string.find(gc[2] or "", "period not known", 1, true) ~= nil and num(gc[2], "top ([%d.]+) MB") >= 790, "the next cycle's top is real, its period not known: a cycle was missed between (%s)", gc[2] or "-")
+    -- a short pause in the growth, nothing fell: the top stands, the period is play time and says so
+    cycle(800, 400, 0.120)
+    got = {}
+    while heap < 600 * 1024 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    for _ = 1, 300 do feed(1 / 60, false) end
+    cycle(800, 400, 0.121)
+    gc = lines("gc")
+    local p3 = num(gc[1], "period ([%d.]+) s")
+    check(#gc == 1 and p3 and p3 > 30 and p3 < 40 and string.find(gc[1], "with a pause", 1, true) ~= nil and num(gc[1], "stall (%d+) ms") == 121, "a pause in the growth: the top stands, the period is the seconds of play, \"with a pause\" (%s)", gc[1] or "-")
+    -- a pause in the fall: the top and the stall stand, the floor says so
+    got = {}
+    while heap < 800 * 1024 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    heap = heap + 160
+    feed(0.122)
+    for i = 1, 30 do
+        heap = heap - 3000
+        feed(1 / 60)
+    end
+    for _ = 1, 60 do feed(1 / 60, false) end
+    -- (the rest of the fall after the pause is read as this cycle's, not as one of its own)
+    for i = 1, 60 do
+        heap = heap - 5000
+        feed(1 / 60)
+    end
+    for _ = 1, 400 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    gc = lines("gc")
+    check(#gc == 1 and string.find(gc[1], "or lower", 1, true) ~= nil and num(gc[1], "stall (%d+) ms") == 122 and num(gc[1], "top ([%d.]+) MB") >= 800 and num(gc[1], "floor ([%d.]+) MB") < 420,
+        "a pause in the fall: one line, the top and the stall stand, the floor read to its end and marked (%s)", gc[1] or "-")
+    -- a pause right before the fall: the stall may have been in it, the line says so
+    got = {}
+    while heap < 800 * 1024 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    for _ = 1, 30 do feed(1 / 60, false) end
+    for _ = 1, 20 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    for i = 1, 90 do
+        heap = heap - 4000
+        feed(1 / 60)
+    end
+    for _ = 1, 400 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    gc = lines("gc")
+    check(#gc == 1 and string.find(gc[1], "stall not seen", 1, true) ~= nil, "a pause just before the fall: the stall is \"not seen\", no 17 ms frame in its place (%s)", gc[1] or "-")
+    -- 099c's verifier, fail 6: a top must not be read from the last reading before a pause, however small the first step down after it
+    do
+        local function to(mb)
+            while heap < mb * 1024 do
+                heap = heap + 200
+                feed(1 / 60)
+            end
+        end
+        -- the fall itself, from the heap now, then the growth that closes the floor
+        local function falls(mb)
+            local start = heap
+            for i = 1, 120 do
+                heap = start + (mb * 1024 - start) * i / 120
+                feed(1 / 60)
+            end
+            for _ = 1, 200 do
+                heap = heap + 200
+                feed(1 / 60)
+            end
+        end
+        local function pause(n) for _ = 1, n do feed(1 / 60, false) end end
+        local function tops()
+            local t = {}
+            for _, l in ipairs(lines("gc")) do t[#t + 1] = string.format("%.1f", num(l, "top ([%d.]+) MB") or -1) end
+            return table.concat(t, " ")
+        end
+        -- the true top inside the pause; the first reading after it 5 MB under the last before it, then the fall: no fall across the pause by the 8 MB rule on that first reading
+        got = {}
+        G = fresh()
+        clock, heap = 7000, 400 * 1024
+        to(700)
+        pause(3600)
+        heap = heap - 5 * 1024
+        feed(1 / 60)
+        heap = heap - 3 * 1024
+        feed(1 / 60)
+        heap = heap - 4 * 1024
+        feed(1 / 60)
+        falls(390)
+        check(#lines("gc") == 0 and G.lost == 1, "the top in a pause, the first reading 5 MB under the last before it: no line, it counts as lost (%d lines: %s; %d lost)", #lines("gc"), tops(), G.lost)
+        -- the next cycle is real, and has no period
+        got = {}
+        cycle(800, 400, 0.12)
+        gc = lines("gc")
+        check(#gc == 1 and (num(gc[1], "top ([%d.]+) MB") or 0) >= 800 and string.find(gc[1], "period not known", 1, true) ~= nil, "after it a real top, its period not known (%s)", gc[1] or "-")
+        -- slow readings under the last one before the pause, for seconds, then the fall: the same
+        got = {}
+        G = fresh()
+        clock, heap = 8000, 400 * 1024
+        to(700)
+        pause(600)
+        heap = heap - 1024
+        for _ = 1, 300 do feed(1 / 60) end
+        falls(380)
+        check(#lines("gc") == 0 and G.lost == 1, "the heap stays under the last reading before a pause for 5 s, then falls: no line (%d lines: %s; %d lost)", #lines("gc"), tops(), G.lost)
+        -- the very same reading after the pause is no sign of life either
+        got = {}
+        G = fresh()
+        clock, heap = 8500, 400 * 1024
+        to(700)
+        pause(600)
+        for _ = 1, 180 do feed(1 / 60) end
+        falls(380)
+        check(#lines("gc") == 0 and G.lost == 1, "the same reading after a pause for 3 s, then the fall: no line (%d lines: %s; %d lost)", #lines("gc"), tops(), G.lost)
+        -- the first reading after the pause over the last before it, and the heap already falling from a top inside the pause: that first reading is no top either
+        got = {}
+        G = fresh()
+        clock, heap = 8700, 400 * 1024
+        to(700)
+        pause(600)
+        heap = 755 * 1024
+        feed(1 / 60)
+        heap = heap - 2048
+        feed(1 / 60)
+        falls(380)
+        check(#lines("gc") == 0 and G.lost == 1, "the first reading after a pause over the last before it, then the fall: no line (%d lines: %s; %d lost)", #lines("gc"), tops(), G.lost)
+        -- back over the last reading before the pause: a top read in play, with the pause said
+        got = {}
+        G = fresh()
+        clock, heap = 9000, 400 * 1024
+        cycle(800, 400, 0.12)
+        got = {}
+        to(700)
+        pause(600)
+        heap = heap - 1024
+        feed(1 / 60)
+        to(760)
+        heap = heap + 160
+        feed(0.125)
+        for _ = 1, 30 do
+            heap = heap + 200
+            feed(1 / 60)
+        end
+        falls(380)
+        gc = lines("gc")
+        check(#gc == 1 and (num(gc[1], "top ([%d.]+) MB") or 0) >= 760 and num(gc[1], "stall (%d+) ms") == 125 and string.find(gc[1], "with a pause", 1, true) ~= nil and G.lost == 0,
+            "the heap passes the last reading before a pause: that top is real, the pause said (%s)", gc[1] or "-")
+        -- a pause that is over: its mark does not outlive the cycle
+        got = {}
+        cycle(800, 400, 0.12)
+        gc = lines("gc")
+        check(#gc == 1 and G.lost == 0 and string.find(gc[1], "with a pause", 1, true) == nil, "the next cycle has no pause in it (%s)", gc[1] or "-")
+        -- gsa1_log 0 over a cycle, and on again: those frames are not read, so they count as a pause
+        got = {}
+        G = fresh()
+        clock, heap = 10000, 400 * 1024
+        cycle(800, 400, 0.12)
+        got = {}
+        to(700)
+        GSA1.cv.log:SetString("0")
+        to(800)
+        falls(400)
+        GSA1.cv.log:SetString("1")
+        to(460)
+        for _ = 1, 30 do feed(1 / 60) end
+        to(800)
+        heap = heap + 160
+        feed(0.125)
+        for _ = 1, 30 do
+            heap = heap + 200
+            feed(1 / 60)
+        end
+        falls(380)
+        gc = lines("gc")
+        check(#gc == 1 and (num(gc[1], "top ([%d.]+) MB") or 0) >= 800 and string.find(gc[1], "period not known", 1, true) ~= nil and G.lost == 1,
+            "gsa1_log 0 then 1 across a cycle: no line from a top before it, the next cycle's is real, its period not known (%d lines: %s; %d lost)", #gc, tops(), G.lost)
+        -- gsa1_log 0 then 1 in the growth: the same as a pause
+        got = {}
+        G = fresh()
+        clock, heap = 11000, 400 * 1024
+        to(600)
+        GSA1.cv.log:SetString("0")
+        for _ = 1, 60 do feed(1 / 60) end
+        GSA1.cv.log:SetString("1")
+        heap = heap - 2048
+        for _ = 1, 60 do feed(1 / 60) end
+        falls(300)
+        check(#lines("gc") == 0 and G.lost == 1, "gsa1_log 0 then 1 just before the fall: the last reading before it is no top (%d lines: %s; %d lost)", #lines("gc"), tops(), G.lost)
+    end
+    -- 099c's second verifier: a session's first reading can already be on the way down (cl_hitch.lua never counts a session's first frame, the collector may be sweeping after the load): no top from it
+    do
+        local function grow(from, to_, seconds)
+            local n = math.floor(seconds * 60)
+            for i = 1, n do
+                heap = (from + (to_ - from) * i / n) * 1024
+                feed(1 / 60)
+            end
+        end
+        got = {}
+        G = fresh()
+        clock, heap = 12000, 900 * 1024
+        for _ = 1, 30 do feed(1 / 60, false) end
+        grow(620, 400, 2)
+        grow(400, 460, 10)
+        check(#lines("gc") == 0 and G.lost == 1, "the session's first readings falling, after its first uncounted frames: no line, it counts as lost (%d lines: %s; %d lost)", #lines("gc"), lines("gc")[1] or "-", G.lost)
+        got = {}
+        G = fresh()
+        grow(620, 400, 2)
+        grow(400, 460, 10)
+        check(#lines("gc") == 0 and G.lost == 1, "the same with no uncounted frame before it (%d lines, %d lost)", #lines("gc"), G.lost)
+        got = {}
+        G = fresh()
+        GSA1.cv.log:SetString("0")
+        heap = 500 * 1024
+        for _ = 1, 30 do feed(1 / 60) end
+        GSA1.cv.log:SetString("1")
+        grow(480, 300, 2)
+        grow(300, 360, 10)
+        check(#lines("gc") == 0 and G.lost == 1, "gsa1_log coming on in a fall, off since the session began: no line (%d lines: %s; %d lost)", #lines("gc"), lines("gc")[1] or "-", G.lost)
+        -- a first reading that the next one passes: the top is real, as ever
+        got = {}
+        G = fresh()
+        grow(400, 800, 30)
+        grow(800, 400, 2)
+        grow(400, 460, 10)
+        check(#lines("gc") == 1 and G.lost == 0 and (num(lines("gc")[1], "top ([%d.]+) MB") or 0) >= 799, "a session that starts growing: its first top stands (%s)", lines("gc")[1] or "-")
+        -- a cycle closed with a mark left on it does not hand the mark on: a fall right after that close, with no rise in between, is a cycle read
+        got = {}
+        G = fresh()
+        heap = 400 * 1024
+        grow(400, 700, 30)
+        for _ = 1, 60 do feed(1 / 60, false) end
+        grow(700, 300, 2)
+        grow(300, 300, 9)
+        local lost1 = G.lost
+        grow(300, 200, 2)
+        grow(200, 240, 10)
+        check(lost1 == 1 and #lines("gc") == 1 and (num(lines("gc")[1], "top ([%d.]+) MB") or 0) >= 299, "the mark ends with its cycle (%d lost; %s)", lost1, lines("gc")[1] or "no line")
+        -- the fall that stays flat: its line comes after GC_SETTLE_S, not at the next rise
+        got = {}
+        G = fresh()
+        heap = 400 * 1024
+        grow(400, 800, 30)
+        grow(800, 400, 2)
+        grow(400, 400, 9)
+        check(#lines("gc") == 1, "a floor that stays flat closes after 8 s (%d lines)", #lines("gc"))
+        -- the top is the last reading at the highest value: a plateau counts to its end
+        got = {}
+        G = fresh()
+        heap = 400 * 1024
+        grow(400, 800, 30)
+        grow(800, 400, 2)
+        grow(400, 800, 30)
+        grow(800, 800, 10)
+        grow(800, 400, 2)
+        grow(400, 460, 10)
+        local p4 = num(lines("gc")[2] or "", "period ([%d.]+) s")
+        check(p4 and p4 > 41 and p4 < 43, "a plateau at the top: the period runs to its end (%s)", tostring(p4))
+        -- a dip of less than GC_FALL_SHARE of a large heap is no fall: the top stays
+        got = {}
+        G = fresh()
+        heap = 400 * 1024
+        grow(400, 2000, 60)
+        grow(2000, 1990, 0.5)
+        grow(1990, 1990, 9)
+        grow(1990, 1000, 2)
+        grow(1000, 1060, 10)
+        check(#lines("gc") == 1 and (num(lines("gc")[1], "top ([%d.]+) MB") or 0) >= 1999, "a dip under 1 %% of a heap of 2 GB is no fall: the top is the true one (%s)", lines("gc")[1] or "no line")
+        -- a free of more than GC_CYCLE_KB and less than GC_CYCLE_SHARE of the heap is no cycle
+        got = {}
+        G = fresh()
+        heap = 400 * 1024
+        grow(400, 1000, 30)
+        grow(1000, 950, 2)
+        grow(950, 1000, 10)
+        check(#lines("gc") == 0 and G.n == 0, "a free of 50 MB out of 1000 is no cycle (%d lines)", #lines("gc"))
+    end
+    -- small frees are no cycle
+    got = {}
+    G = fresh()
+    clock, heap = 3000, 500 * 1024
+    for _ = 1, 100 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    heap = heap - 9000
+    feed(1 / 60)
+    for _ = 1, 300 do
+        heap = heap + 200
+        feed(1 / 60)
+    end
+    check(#lines("gc") == 0 and G.lost == 0, "a free of 9 MB is no cycle (%d lines)", #lines("gc"))
+    -- the line cap: at most 10 % of the session's 4000, the rest counted
+    got = {}
+    G = fresh()
+    clock, heap = 4000, 400 * 1024
+    local lines0 = GSA1.LogState.lines
+    GSA1.LogState.lines = 0
+    for _ = 1, GSA1.LOG_GC_LINES_MAX + 25 do cycle(420, 360, 0.05) end
+    check(#lines("gc") == GSA1.LOG_GC_LINES_MAX and G.n == GSA1.LOG_GC_LINES_MAX + 25 and GSA1.LOG_GC_LINES_MAX <= GSA1.LOG_MAX_LINES / 10, "at most %d gc lines in a session (%d cycles counted, %d lines), 10 %% of the line cap", GSA1.LOG_GC_LINES_MAX, G.n, #lines("gc"))
+    GSA1.LogState.lines = lines0
+    -- nothing per frame: no table, no string, between two lines
+    G = fresh()
+    clock, heap = 5000, 100 * 1024
+    feed(1 / 60)
+    GSA1.Log = real_log
+    local jitWas = jit and jit.status and jit.status()
+    if jit and jit.off then jit.off() jit.flush() end
+    collectgarbage("collect")
+    collectgarbage("stop")
+    local h0 = heap
+    local k0 = collectgarbage("count")
+    for _ = 1, 3000 do
+        h0 = h0 + 1
+        clock = clock + 1 / 60
+        GSA1.LogGc(clock, 1 / 60, h0, true)
+    end
+    local kb = collectgarbage("count") - k0
+    collectgarbage("restart")
+    if jit and jit.on and jitWas then jit.on() end
+    check(kb * 1024 / 3000 < 1, "no garbage per frame: %.2f bytes in a frame with no line", kb * 1024 / 3000)
+    GSA1.Log = function(kind, fmt, ...)
+        local okf, text = pcall(string.format, fmt, ...)
+        got[#got + 1] = { kind = kind, text = okf and text or tostring(fmt) }
+        return real_log(kind, fmt, ...)
+    end
+    -- off with the log
+    GSA1.cv.log:SetString("0")
+    got = {}
+    G = fresh()
+    clock, heap = 6000, 400 * 1024
+    cycle(600, 300, 0.1)
+    check(#lines("gc") == 0 and G.n == 0, "gsa1_log 0: no line, nothing counted")
+    GSA1.cv.log:SetString("1")
+    -- through the hitch logger's own frame: the heap it reads, its idea of a pause
+    got = {}
+    G = fresh()
+    local saved = collectgarbage
+    local hh = 500 * 1024
+    collectgarbage = function(what) if what == "count" then return hh end return saved(what) end
+    think(1 / 60)
+    think(1 / 60)
+    for _ = 1, 60 do
+        hh = hh + 200
+        think(1 / 60)
+    end
+    for i = 1, 60 do
+        hh = hh - 4000
+        think(1 / 60)
+    end
+    for _ = 1, 200 do
+        hh = hh + 200
+        think(1 / 60)
+    end
+    collectgarbage = saved
+    gc = lines("gc")
+    check(#gc == 1 and num(gc[1], "top ([%d.]+) MB") >= 500 and num(gc[1], "floor ([%d.]+) MB") < 300, "cl_hitch.lua hands every frame's heap over (%s)", gc[1] or "-")
+    -- and its idea of a pause: a frame with the menu or without the focus is not counted, nor is the one after it
+    do
+        local realGc, seen = GSA1.LogGc, {}
+        GSA1.LogGc = function(now, dt, h, counted)
+            seen[#seen + 1] = counted
+            return realGc(now, dt, h, counted)
+        end
+        think(1 / 60)
+        think(1 / 60)
+        local before = seen[#seen]
+        M.ui = true
+        think(1 / 60)
+        local inMenu = seen[#seen]
+        M.ui = false
+        think(1 / 60)
+        local afterMenu = seen[#seen]
+        think(1 / 60)
+        local later = seen[#seen]
+        M.focus = false
+        think(1 / 60)
+        local noFocus = seen[#seen]
+        M.focus = true
+        think(1 / 60)
+        think(1 / 60)
+        GSA1.LogGc = realGc
+        check(before == true and inMenu == false and afterMenu == false and later == true and noFocus == false, "cl_hitch.lua's counted: a playing frame yes, in the menu no, the frame after it no, then yes, without the focus no (%s %s %s %s %s)",
+            tostring(before), tostring(inMenu), tostring(afterMenu), tostring(later), tostring(noFocus))
+    end
+    -- the summary
+    G.lost = 2
+    GSA1.LogState.summary = false
+    GSA1.LogSummary("0.9.9c test")
+    local sum = lines("summary")
+    local lc
+    for _, l in ipairs(sum) do if string.find(l, "Lua collector:", 1, true) then lc = l end end
+    if not lc then
+        GSA1.LogFlush()
+        for l in string.gmatch(M.files[LOG] or "", "[^\n]*") do if string.find(l, "Lua collector:", 1, true) then lc = l end end
+    end
+    check(lc and string.find(lc, "1 cycles read from the frames", 1, true) ~= nil and string.find(lc, "2 fell across a pause", 1, true) ~= nil, "the summary counts them (%s)", lc or "no line")
+    GSA1.Log = real_log
+end
+
 print(string.format("\n%d checks, %d failed", M.checks, M.fails))
 if arg[3] == "dump" then
     host_write("---- the log ----\n" .. (M.files[OLD] or "") .. (M.files[LOG] or "") .. "---- end ----\n")

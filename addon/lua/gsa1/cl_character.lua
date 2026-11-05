@@ -674,6 +674,8 @@ end
 -- seams (0.9.2; sadc docs/research/gsa1_090_plan.md 6.10 task 8, decision 7: later features hook in here instead of
 -- editing this file). Each default changes nothing. A feature replaces the function, keeps the one it replaced, and calls
 -- it when it has nothing to say itself:
+--   GSA1.ClimbEye(C, angles, dist) -> Vector | nil  (0.9.9c, feat/cl_climbcam.lua) CalcView, after the view-entity check: the eye from Knuckles' grab
+--                                                   until that camera has handed back, nil on every other frame, and then nothing of CalcView is changed
 --   GSA1.ViewOverride(view, C, ply) -> view | nil   CalcView ("gsa1_view"), after the view-entity check and G-SA1's own
 --                                                   view: a table with an origin is this frame's view (the fishing
 --                                                   camera, 0.9.6)
@@ -1029,7 +1031,11 @@ hook.Add("CalcView", "gsa1_view", GSA1.Guard("CalcView", function(ply, origin, a
     if IsValid(ve) and ve ~= ply then return end
     local dist = GSA1.cv.cam_dist:GetFloat()
     local view
-    if dist <= 0 then
+    -- seam (0.9.9c, feat/cl_climbcam.lua): from Knuckles' grab until it has handed back, the climbing camera gives the eye; nil on every other frame
+    local climb_eye = GSA1.ClimbEye and GSA1.ClimbEye(C, angles, dist)
+    if climb_eye then
+        view = { origin = Vector(climb_eye), angles = angles, fov = fov, drawviewer = false }
+    elseif dist <= 0 then
         cam_centre:Set(C.drawPos)
         cam_centre.z = cam_centre.z + (C.info.eyes or 28)
         view = { origin = Vector(cam_centre), angles = angles, fov = fov, drawviewer = false }

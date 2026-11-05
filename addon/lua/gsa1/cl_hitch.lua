@@ -110,6 +110,8 @@ function GSA1.HitchFrame(now)
     if GSA1.LogStages then GSA1.LogStages(now, last, cur, counted, sample) end
     if paused and dt >= 1 and GSA1.LogPause then GSA1.LogPause(dt, drawn, ui, unfocused or not focused or not was) end
     if GSA1.LogFrame then GSA1.LogFrame(dt, cur, counted, gc) end
+    -- 0.9.9c: the collector's cycles, one "gc" line each (cl_log.lua GSA1.LogGc)
+    if GSA1.LogGc then GSA1.LogGc(now, dt, heap, counted) end
     -- 0.9.5 (sadc docs/research/board095_perf.md P2): the garbage meter's frame (cl_gcmeter.lua)
     if GSA1.GcMeter and GSA1.GcMeter.Frame then GSA1.GcMeter.Frame(now, gc, counted) end
     if not counted then return end

@@ -1,6 +1,6 @@
 -- G-SA1 feature "liveshadow" (the characters' sun shadow), shared part: its settings. Round 0.9.5 (sadc docs/research/
 -- gsa1_095_plan.md 4.17 and 5.8; the owner's binding answer 14.1ad 5: "the characters need to feel like they're in the
--- world", no CSM addon, so G-SA1 draws the sun shadow itself, like Garry's Mod shadows the props on his maps; and,
+-- world", no CSM addon, so G-SA1 draws the sun shadow itself, like Garry's Mod shadows the props on the owner's maps; and,
 -- explicitly: "The G-SA1 drawn sun shadow should be toggleable"). The drawing is feat/cl_liveshadow.lua; the game's own
 -- round shadow (gsa1_shadow) is not touched. Client settings (GSA1.ConVar: nil on the server), each with its control on
 -- Q menu > Options > G-SA1 > Rendering (cl_menu.lua rendering_panel):
@@ -10,6 +10,8 @@
 --   gsa1_sunshadow_rate  0  its picture's rate a second; 0 = every frame, so it moves as smoothly as the character (0.9.5b)
 --   gsa1_sunshadow_followers 3  how many followers have one too: the nearest in full detail, not held; 0 = none, 8 at most (0.9.9a; the
 --                               owner's note: "Followers don't have sun shadows")
+--   gsa1_sunshadow_sunlit 1  only on ground the sun reaches (0.9.9c; the owner's note: "Sun Shadows appear in Shadowed areas when they should
+--                            only be in bright spots"); 0 = everywhere, as 0.9.9b drew it
 GSA1 = GSA1 or {}
 GSA1.SunShadow = GSA1.SunShadow or {}
 local S = GSA1.SunShadow
@@ -26,3 +28,5 @@ S.cv.rate = GSA1.ConVar("gsa1_sunshadow_rate", 0, "How many times a second the s
     .. "frame, so it moves as smoothly as the character; 10-60 = fewer, a little cheaper", 0, 60)
 S.cv.followers = GSA1.ConVar("gsa1_sunshadow_followers", 3, "How many followers have a sun shadow too: the nearest ones drawn in full "
     .. "detail; 0 = none. Each one costs a picture and traces of the ground every frame, so the others have none", 0, 8)
+S.cv.sunlit = GSA1.ConVar("gsa1_sunshadow_sunlit", 1, "The sun shadow only on ground the map's sun reaches: it fades out over the shade of "
+    .. "roofs, walls and the map's own shaded places. 0 = everywhere, as Garry's Mod draws a prop's shadow", 0, 1)

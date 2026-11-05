@@ -31,6 +31,7 @@
 -- summary at once), so the log never costs a frame: one file.Append per 2 s.
 -- Privacy: data/ is readable by any server's clientside Lua, so the log holds no paths, player names or Steam ids
 -- (the module already writes <disc> / <config> instead of those directories in everything it hands to Lua).
+-- 0.9.9c: a "gc" line per cycle of the Lua collector (GSA1.LogGc), and a perf line is cut at 2000 characters, not 800, so the garbage meter's field at its end survives.
 -- gsa1_log 0 turns it off (Q -> Options -> G-SA1 -> Disc and status -> Diagnostics); gsa1_log_where prints the file's
 -- place; gsa1_log_mark <text> writes a marker line (bind a key: bind f9 "gsa1_log_mark lag").
 GSA1 = GSA1 or {}
@@ -84,10 +85,13 @@ local function stamp()
     return string.format("%s +%.3f", os.date("%H:%M:%S"), SysTime() - L.t0)
 end
 
--- one line: no control characters, at most 800 characters
-local function clean(text)
+-- one line: no control characters, at most 800 characters; 0.9.9c: a perf line 2000, because the garbage meter's field comes last and at 800 the sun shadow's
+-- field cut G-SA1's number off it (the 099b verifier: 363 of 412 windows with that field lost it, 0 of 160 without; 800 cuts nothing else that long)
+local LINE_MAX, PERF_LINE_MAX = 800, 2000
+local function clean(text, max)
     text = string.gsub(tostring(text), "%c", " ")
-    if #text > 800 then text = string.sub(text, 1, 800) .. " ..." end
+    max = max or LINE_MAX
+    if #text > max then text = string.sub(text, 1, max) .. " ..." end
     return text
 end
 
@@ -132,7 +136,7 @@ function GSA1.Log(kind, fmt, ...)
     if not enabled() then return end
     local ok, text = pcall(string.format, fmt, ...)
     if not ok then text = tostring(fmt) end
-    text = clean(text)
+    text = clean(text, kind == "perf" and PERF_LINE_MAX or nil)
     if not L.header then GSA1.LogHeader() end
     local now = SysTime()
     local key = kind .. "|" .. text
@@ -201,6 +205,8 @@ function GSA1.LogHeader()
             .. "darkness %s), garbage meter %s, Faces close-up %s at %s pictures a second", cvstr("gsa1_cam_real"),
             cvstr("gsa1_sunshadow"), cvstr("gsa1_sunshadow_fp"), cvstr("gsa1_sunshadow_dark"), cvstr("gsa1_log_garbage"),
             cvstr("gsa1_mouth_closeup"), cvstr("gsa1_mouth_closeup_fps")))
+        push(string.format("settings 0.9.9c: sun shadow only where the sun reaches %s, followers with one %s, pictures a second %s",
+            cvstr("gsa1_sunshadow_sunlit"), cvstr("gsa1_sunshadow_followers"), cvstr("gsa1_sunshadow_rate")))
     end
     -- the module: loaded already in the usual case (a session's first line is its "loaded" message); its vector mode
     -- (how EmitBatch hands Vectors to the mesh library) is decided when it opens (review R.3 G4 of gsa1_lsd_lag.md)
@@ -274,6 +280,93 @@ local function median_ms(now)
     if n < 8 then return nil end
     table.sort(sc)
     return sc[math.floor((n + 1) / 2)] * 1000
+end
+
+-- 0.9.9c: one "gc" line per cycle of the Lua collector (the stutter study: SADC/build/research/r099b/stutter/notes.txt; L1 of gsa1_091b_lag.md, never built until now). The heap of every
+-- counted frame goes through a few comparisons, no table, no string, so nothing per frame; one line per cycle, at most GC_LINES_MAX in a session (10 % of the cap; about 90 an hour at the
+-- owner's 40 s), then only counted for the summary. MEASURED, the study: the stall comes first, in a frame whose heap still grows, then the heap falls over about 2 s to about half.
+--   * THE TOP: the highest reading of counted frames before the heap has fallen GC_FALL_KB (or GC_FALL_SHARE of it) below that reading. The last reading before a pause is no top (the verifier's B3: two
+--     false tops on 2026-11-04 made a false period; 099c's verifier: the same with a first step down under GC_FALL_KB): after a pause, or frames unread with gsa1_log 0, and from the very first reading of a session
+--     or of the log (099c's second verifier: the first counted reading can be on the way down already), a top stands only when a reading after the first one has passed it (the heap may be falling from a top
+--     no one read); a fall before that is not a cycle seen, no line is written, the summary counts it.
+--   * THE STALL: the longest counted frame of the 1 to 2 s before the fall starts: the study's frame-by-frame gap between the stall and the first fall is up to 0.63 s. "Not seen" when a pause came
+--     in those seconds. It can also be a frame of something else that long in those seconds (the study's 5-second beat reaches 121 ms): the study found both within a second of each other 3 % of the time.
+--   * THE FLOOR: the lowest reading after it, closed when the heap has grown GC_RISE_KB over it or GC_SETTLE_S passed. A fall of under GC_CYCLE_KB (or GC_CYCLE_SHARE) is no cycle: no line.
+--   * THE PERIOD: the seconds of counted frames from the last top to this one; not known after a cycle no top was read from, or for the first; "with a pause" when one lay between.
+local GC_FALL_KB, GC_FALL_SHARE, GC_RISE_KB, GC_SETTLE_S, GC_CYCLE_KB, GC_CYCLE_SHARE, GC_LINES_MAX = 8192, 0.01, 16384, 8, 16384, 0.1, 400
+GSA1.LOG_GC_LINES_MAX = GC_LINES_MAX
+L.gcs = L.gcs or { state = 0, top = 0, topPlay = 0, floor = 0, floorAt = 0, fallAt = 0, stall = 0, m0 = 0, m1 = 0, mAt = 0, play = 0, prevTop = -1, paused = false, pauseSince = false, pauseAt = -1000, suspect = false,
+                   cut = false, lostOne = false, n = 0, lines = 0, lost = 0, stallMin = 0, stallMax = 0, periodMin = 0, periodMax = 0, periodN = 0, topMax = 0 }
+
+local function gc_close(G, heap, now)
+    local freed = G.top - G.floor
+    local real = freed >= GC_CYCLE_KB and freed >= G.top * GC_CYCLE_SHARE
+    if G.lostOne then
+        G.prevTop = -1
+    elseif real then
+        local period, pauseText = -1, ""
+        if G.prevTop >= 0 then
+            period = G.topPlay - G.prevTop
+            if G.pauseSince then pauseText = ", with a pause" end
+        end
+        G.n = G.n + 1
+        if G.top > G.topMax then G.topMax = G.top end
+        if G.stall >= 0 then
+            if G.stallMin == 0 or G.stall < G.stallMin then G.stallMin = G.stall end
+            if G.stall > G.stallMax then G.stallMax = G.stall end
+        end
+        if period >= 0 then
+            if G.periodN == 0 or period < G.periodMin then G.periodMin = period end
+            if period > G.periodMax then G.periodMax = period end
+            G.periodN = G.periodN + 1
+        end
+        if G.lines < GC_LINES_MAX then
+            G.lines = G.lines + 1
+            GSA1.Log("gc", "top %.1f MB, floor %.1f MB%s (%.1f MB freed in %.1f s), stall %s, period %s%s", G.top / 1024, G.floor / 1024, G.cut and " or lower (a pause came in the fall)" or "",
+                freed / 1024, G.floorAt - G.fallAt, G.stall >= 0 and string.format("%.0f ms", G.stall * 1000) or "not seen (a pause just before the fall)",
+                period >= 0 and string.format("%.1f s", period) or "not known", pauseText)
+        end
+        G.prevTop = G.topPlay
+        G.pauseSince = false
+    end
+    G.state, G.top, G.topPlay, G.cut, G.lostOne, G.suspect = 1, heap, G.play, false, false, false
+end
+
+-- every frame from cl_hitch.lua: heap = Lua's heap now (KB), dt = the frame that ended (s), counted = no pause, no menu, the focus
+function GSA1.LogGc(now, dt, heap, counted)
+    local G = L.gcs
+    if not counted or not enabled() then
+        G.paused, G.pauseSince, G.pauseAt = true, true, now
+        if G.state == 1 then G.suspect = true end
+        return
+    end
+    G.play = G.play + dt
+    if now - G.mAt >= 1 then G.m0, G.m1, G.mAt = G.m1, 0, now end
+    if dt > G.m1 then G.m1 = dt end
+    local st = G.state
+    local across = G.paused
+    G.paused = false
+    if st == 0 then
+        G.state, G.top, G.topPlay, G.suspect = 1, heap, G.play, true
+    elseif st == 1 then
+        if heap >= G.top then
+            if heap > G.top and not across then G.suspect = false end
+            G.top, G.topPlay = heap, G.play
+        elseif G.top - heap >= GC_FALL_KB and G.top - heap >= G.top * GC_FALL_SHARE then
+            G.state, G.floor, G.floorAt, G.fallAt = 2, heap, now, now
+            G.stall = G.m0 > G.m1 and G.m0 or G.m1
+            if now - G.pauseAt < 2 then G.stall = -1 end        -- (a pause came just before the fall: the stall may have been in it)
+            if G.suspect then
+                G.lostOne = true
+                G.lost = G.lost + 1
+            end
+        end
+    else
+        -- (a pause in the fall: it goes on being read to its end, or the rest of the sweep would look like a cycle of its own; the floor may have been lower in the pause)
+        if across then G.cut = true end
+        if heap < G.floor then G.floor, G.floorAt = heap, now end
+        if heap - G.floor >= GC_RISE_KB or now - G.floorAt >= GC_SETTLE_S then gc_close(G, heap, now) end
+    end
 end
 
 -- called by cl_hitch.lua at the start of every frame: dt = the frame that just ended (s), sections = its G-SA1 times
@@ -394,6 +487,7 @@ function GSA1.LogFrame(dt, sections, counted, gc)
         w = { t0 = now, frames = 0, sum = 0, max = 0, g = 0, gmax = 0, s1 = now, f1 = 0, sum1 = 0, max1 = 0,
               modes = {}, verts = 0, blended = 0, sect = {}, cover = 0, gcFreed = 0, multi = 0, kmax = 0 }
         L.win = w
+        L.sunTraces0 = GSA1.SunShadowTraces and GSA1.SunShadowTraces() or nil     -- (0.9.9c: the perf line's traces per frame count from here)
     end
     -- ticks that ran 2 or more game pairs (a frame of 33 ms or more): 0.6.0's lurch came after each of them, until
     -- libsa1 captured the last two pairs of such a tick (gsa1_060_pops.md P1 / F1)
@@ -467,7 +561,12 @@ function GSA1.LogFrame(dt, sections, counted, gc)
         -- 0.9.5: the sun shadow's time (feat/cl_liveshadow.lua, hitch section "SunShadow") and the garbage meter's field
         -- (cl_gcmeter.lua, board095_perf.md P2)
         local sun = w.sect.SunShadow
-        if sun and sun > 0 then views = views .. string.format("; sun shadow %.2f ms per frame", sun * 1000 / w.frames) end
+        if sun and sun > 0 then
+            views = views .. string.format("; sun shadow %.2f ms per frame", sun * 1000 / w.frames)
+            -- (0.9.9c: and its traces a frame: each result is engine objects the harness cannot weigh; with this and the garbage field the next stutter question reads from the log)
+            local tr, tr0 = GSA1.SunShadowTraces and GSA1.SunShadowTraces(), L.sunTraces0
+            if tr and tr0 then views = views .. string.format(", %.1f traces per frame", (tr - tr0) / w.frames) end
+        end
         local gm = GSA1.GcMeter and GSA1.GcMeter.TakeField and GSA1.GcMeter.TakeField(now)
         if gm then views = views .. "; " .. gm end
         GSA1.Log("perf", "%d frames, %.1f fps, frame %.1f ms mean / %.0f ms worst; G-SA1 %.2f ms per frame (worst "
@@ -752,6 +851,13 @@ function GSA1.LogSummary(reason)
     -- 0.9.5 (board095_perf.md P2): the garbage meter's session figure
     local gmLine = GSA1.GcMeter and GSA1.GcMeter.SummaryLine and GSA1.GcMeter.SummaryLine()
     if gmLine then lines[#lines + 1] = gmLine end
+    -- 0.9.9c: the collector's cycles (GSA1.LogGc)
+    local gcs = L.gcs
+    if gcs and (gcs.n > 0 or gcs.lost > 0) then
+        lines[#lines + 1] = string.format("Lua collector: %d cycles read from the frames (%d \"gc\" lines), %d fell across a pause (no top read from them); the highest top %.1f MB; stalls %.0f-%.0f ms; "
+            .. "periods %s", gcs.n, gcs.lines, gcs.lost, gcs.topMax / 1024, gcs.stallMin * 1000, gcs.stallMax * 1000, gcs.periodN > 0 and
+            string.format("%.1f-%.1f s", gcs.periodMin, gcs.periodMax) or "not known")
+    end
     local game = {}
     for _, grp in ipairs({ "deaths", "restarts", "respawns", "jingles", "faults", "player deaths", "teleports" }) do
         local g = L.counts[grp]

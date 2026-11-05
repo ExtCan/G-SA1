@@ -67,7 +67,7 @@ static_assert(offsetof(lua_State, luabase) == (sizeof(void *) == 8 ? 120 : 72),
 using GarrysMod::Lua::ILuaBase;
 namespace LT = GarrysMod::Lua::Type;
 
-#define GSA1_MODULE_VERSION "0.9.9b"
+#define GSA1_MODULE_VERSION "0.9.9c"
 #define GSA1_API_VERSION 6
 
 namespace {
@@ -1528,6 +1528,15 @@ GSA1_FN(gsa1_lua_GetState)
     raw_num(LUA, t, "vy", s.velocity[1]);
     raw_num(LUA, t, "vz", s.velocity[2]);
     raw_num(LUA, t, "yaw", rad2deg(s.yaw));
+    // 0.9.9c (feat/cl_climbcam.lua): the character's up vector, a unit vector in Garry's Mod's axes, read from the game's angles after the last
+    // tick: (0, 0, 1) standing, the wall's normal on a wall. The game's code computes the same one where it draws the body (func_8C0C46AC:
+    // twp->pos + up * height / 2): up = (-cos x sin z, cos x cos z, sin x) in SA1 axes, and source_coords takes SA1 (x, y, z) to Source (x, -z, y)
+    {
+        const double ax = (s.angle[0] & 0xFFFF) * (2.0 * kPi / 65536.0), az = (s.angle[2] & 0xFFFF) * (2.0 * kPi / 65536.0);
+        raw_num(LUA, t, "upx", -std::cos(ax) * std::sin(az));
+        raw_num(LUA, t, "upy", -std::sin(ax));
+        raw_num(LUA, t, "upz", std::cos(ax) * std::cos(az));
+    }
     raw_num(LUA, t, "action", s.action);
     raw_num(LUA, t, "frame", s.frame);
     raw_num(LUA, t, "flags", s.flags);

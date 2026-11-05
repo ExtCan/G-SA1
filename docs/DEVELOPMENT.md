@@ -40,6 +40,50 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.9c changes: the sun shadow only where the sun reaches, a camera that stays out of the wall
+
+From the owner's test of 0.9.9b. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod, against the map files themselves, and against the Dreamcast's own code. Independent checks found real faults in the earlier tries, which were fixed; the last check found no reason to hold this back from a test, and its remaining points are below.
+
+* **The sun shadow now appears only where the sun reaches.** Until now it never asked. It follows the map's own baked sun, which on `gm_construct_remaster_csm` is not the direction the shadow falls. On the stock `gm_construct` garage (the hall under the roof with the slanted slots), measured from the map file: no shadow under the roof, and a shadow in the patches below the holes. Against the map's own lighting that agrees 98.7 % of the floor there, where always drawing agreed 19.4 %. It fades at the shade line, so it shouldn't flash. A map with no usable sun draws it everywhere, as before, and the Rendering page says why. Your character and followers both follow this.
+* **The camera stays out of the wall while Knuckles climbs.** You told me it went into the wall. It now pivots on his body instead of a point on or in the wall, blends in and out, and notices when a check starts inside something. On your real wall, modelled from the map's own brushes: inside a brush in 67 and 100 of 120 views before, 0 now. First person too. Every other camera moves exactly as before.
+* **The log:** one `gc` line per Lua clean-up (top, floor, stall, period), and G-SA1's own garbage number is no longer cut off. That's for the stutter study.
+
+**What I found about the stutters, from your logs.** The hitch about every 40 seconds is Garry's Mod cleaning up Lua memory for the whole game. G-SA1 makes about 13-18 % of the garbage, far more than I planned, but its own work in those frames is tiny. The stutter about every 5 seconds is separate and still unexplained: it runs on the game's clock, makes no Lua garbage, and is in every log back to the first version.
+
+**Known limits:**
+
+* The spot where you typed your sun shadow note reads as full sun on the map, so nothing changes there.
+* Where a shade line crosses stairs or curbs, the shadow can still flicker. It's rare, and the same as before the last repair.
+* Right beside a low step on its shady side, the shadow can lie on the step's narrow shade strip, as in 0.9.9b. A wall up to about a character's height mostly still gets it too.
+* Trees with no collision and physics props overhead probably don't count as shade.
+* At high speed the shadow can lose pieces: on flat ground above about 5000 HU/s at 60 fps, on slopes and stairs followers' shadows from about 3000 HU/s at 60 fps and 1500 at 30 fps. Your highest logged speed is about 3600.
+* The sun check adds no Lua garbage of its own, but each question it asks the engine returns engine objects: about 5 a frame for your shadow at a run, up to about 15 up stairs, 35 to 46 with 8 followers. Their size isn't known. Untick the box to be rid of them.
+* Looking straight away from a wall at close range, the camera sits right against Knuckles' back. If something comes between it and him, it snaps in rather than glides, because it mustn't pass through the wall.
+* The sinking and the darkness on that wall aren't fixed. The sinking comes from how G-SA1 simplifies thin walls for collision, and the obvious fix makes other walls worse at your "Thin walls" setting of 32. The darkness is probably the building's shade, not the climb.
+* Switching character while on a wall can drop the new character through it and out of the map. That was already so.
+
+### The owner checklist
+
+1. `gm_construct`'s garage: walk through it. No shadow under the roof, a shadow in the patches of sun, no flash at the edges.
+2. Rendering: the status line says what it asks (on `gm_construct_remaster_csm`: "asked towards the map's baked sun, light_environment pitch -50, yaw 34"). Untick "Sun shadow only where the sun reaches": the shadow is back everywhere at once. Tick it: gone in shade at once, no flash.
+3. Full sun, curbs and stairs: the shadow stays whole, with no small notches blinking.
+4. A big slope or wall facing away from the sun: no shadow. A sunny slope: a shadow. Stand still 10 s on a roof near the edge on the side away from the sun: full strength.
+5. Under roofs and beside tall walls, in shade: no shadow, including right behind a wall taller than your character.
+6. With Real CSM on: does the fade line meet the visible shade line? How far off?
+7. Followers: spawn them or teleport into shade, no shadows flash. Run through shade with 3: no flash.
+8. An indoor map, and one with no sun of its own: the status line says why, and the shadow behaves as it says.
+9. **The garbage, one session, one map, same followers:** stand still one minute with "Sun shadow" ticked and one minute unticked, then the same running. The log says whether the shadow costs anything.
+10. Knuckles on a wall: look at the wall, along it and away from it, tilt up and down, climb up, down and across, over the top, jump off. The view never goes inside the wall, and nothing jumps. Same in first person. Untick the box on the Camera page: the old camera comes back.
+11. **The far followers' 99 test from 0.9.9b is still to do**, now that nothing of mine is running. Steps under "What 0.9.9b changes".
+12. Send the log: `gc` lines, "traces per frame" on the perf lines, and up to 12 "sun check sample" lines a map.
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_sunshadow_sunlit` | 1 | Rendering: "Sun shadow only where the sun reaches" |
+| `gsa1_cam_climb` | 1 | Camera: "Keep the camera out of the wall while Knuckles climbs" |
+
 ## What 0.9.9b changes: far followers through the faster drawing
 
 The owner said yes to extending the faster drawing to far followers. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod, and the engine's numbers were read from the game's DLLs as bytes. Two independent checks ran: the first found 4 fails, all fixed, and the second found them fixed.
