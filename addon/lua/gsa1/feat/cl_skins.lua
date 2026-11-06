@@ -58,11 +58,20 @@ hook.Add("GSA1CharacterCreated", "gsa1_skins", function(C, how)
         (cv.fly:GetBool() and cv.walk_fly:GetBool()) and "flies" or "as Sonic", K.Voiceless(C.skin) and "voiceless" or "with Sonic's voice", cv.glow:GetBool() and "glows when charged" or "no glow")
 end)
 
+-- 0.9.9h: your character and every follower that wears a skin (feat/cl_follower.lua F.skin), at once
+function K.Worn()
+    local out = {}
+    if GSA1.Char and GSA1.Char.skin then out[#out + 1] = GSA1.Char end
+    for _, F in ipairs(GSA1.Followers and GSA1.Followers.list or {}) do
+        if F.skin and not F.removed then out[#out + 1] = F end
+    end
+    return out
+end
 local function anim_changed()
-    if GSA1.Char and GSA1.Char.skin then K.ApplyAnim(GSA1.Char) end
+    for _, C in ipairs(K.Worn()) do K.ApplyAnim(C) end
 end
 local function voice_changed()
-    if GSA1.Char and GSA1.Char.skin then K.ApplyVoice(GSA1.Char) end
+    for _, C in ipairs(K.Worn()) do K.ApplyVoice(C) end
 end
 if cvars and cvars.AddChangeCallback then
     cvars.AddChangeCallback("gsa1_metal_fly", anim_changed, "gsa1_skins")
@@ -82,5 +91,6 @@ function K.BuildOptions(panel)
     panel:ControlHelp("Off: voiceless. Sound effects stay either way. At once.")
     panel:CheckBox("Metal Sonic: glow when charged", "gsa1_metal_glow")
     panel:ControlHelp("His own model again, slightly larger, in purple, where Sonic's Light Speed glow would draw. At once.")
+    panel:ControlHelp("These four are his as a follower too (Q menu > Options > G-SA1 > Followers: Character to spawn, Metal Sonic).")
 end
 if GSA1.AddCharacterOption then GSA1.AddCharacterOption(178, "skins", K.BuildOptions) end

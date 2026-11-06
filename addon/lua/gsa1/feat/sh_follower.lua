@@ -47,6 +47,31 @@ function Fo.KindTitle(kind)
     return k and k.title or tostring(kind)
 end
 
+-- 0.9.9h (the owner: "can you add a Metal Sonic follower?"; earlier: "Skins (such as Metal Sonic) should be automatically added as spawnable followers"). Every entry of
+-- GSA1.CHARACTERS with form "skin" whose base kind can follow is a follower too, from its data alone (feat/sh_skins.lua): a spawner icon, the console's name, the page's list. Its world is
+-- a follower of its base kind, byte for byte (libsa1 SA1_FOLLOW_SKIN); only what is drawn is the skin. A secret entry stays out until it is unlocked
+function Fo.SkinDef(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    local c = GSA1.CharacterByName and GSA1.CharacterByName(name)
+    if c and c.form == "skin" and Fo.KINDS[c.kind] and not (GSA1.Skins and GSA1.Skins.Of and not GSA1.Skins.Of(c)) then return c end
+    return nil
+end
+function Fo.SkinDefs()
+    local out = {}
+    for _, c in ipairs(GSA1.CHARACTERS or {}) do
+        if c.form == "skin" and Fo.SkinDef(c.name) == c then out[#out + 1] = c end
+    end
+    return out
+end
+function Fo.SkinSpawnerClass(def)
+    return def and ("gsa1_follower_" .. def.name) or nil
+end
+-- a follower's title: the skin's, else its kind's
+function Fo.FollowerTitle(kind, skin)
+    local d = Fo.SkinDef(skin)
+    return d and d.title or Fo.KindTitle(kind)
+end
+
 -- the settings (gsa1_098_plan.md 5.9) -----------------------------------------------------------------------------------------
 Fo.cv = Fo.cv or {}
 local cv = Fo.cv
@@ -77,6 +102,8 @@ cv.speed = GSA1.ConVar("gsa1_follower_speed", 1, "Followers behind you may run u
 cv.spacing = GSA1.ConVar("gsa1_follower_spacing", 64, "Room between followers in units: with two or more, each has its own spot around the one it follows (0 = the game's own place: "
     .. "they can stand inside each other)", 0, Fo.SPACING_MAX)
 cv.emotes = GSA1.ConVar("gsa1_follower_emotes", 1, "Your followers play the same slot of their own wheel when you play one from the emote wheel", 0, 1)
+-- 0.9.9h: the Spawn button's skin (the page's Character list sets both): worn while gsa1_follower_kind is its base kind
+cv.skin = GSA1.ConVar("gsa1_follower_skin", "", "The skin the Spawn button's follower wears over its world, while gsa1_follower_kind is its base (metalsonic = Metal Sonic over Sonic; empty = none)")
 
 -- the spot of the i-th of n followers, x, y in HU (pure: the tests call it): a sunflower in world axes. One follower: the game's own place
 function Fo.SpotOf(i, n, s)

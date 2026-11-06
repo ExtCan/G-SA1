@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+struct sa1_skin_desc;                  // libsa1.h (SA1_API_SKIN 2): only a pointer here
+
 namespace gsa1 {
 
 struct UpgradeDef;
@@ -32,6 +34,11 @@ struct FollowerOpts {
     uint32_t seed = 0;                 // SA1_FOLLOW_SEED: srand of the world
     bool fix_view = true;              // false: SA1_FOLLOW_GAME_VIEW
     bool fix_respawn = true;           // false: SA1_FOLLOW_GAME_HISTORY
+    // 0.9.9h (the owner: "can you add a Metal Sonic follower?"): a worn skin over a Sonic follower (SA1_FOLLOW_SKIN; feat/sh_skins.lua's entry, src/module/skin_args.hpp).
+    // Read during Session::create_follower only: FollowerSet keeps nullptr and skin_worn
+    const sa1_skin_desc *skin = nullptr;
+    bool skin_worn = false;
+    bool voiceless = false;            // with a skin: its voices stay out of the mixer, its sounds do not (Session::admit_sound, voice_class)
 };
 
 // the draw levels (gsa1.FollowerDraw, gsa1.FOLLOWER.DRAW_*; decision 096 4.10)

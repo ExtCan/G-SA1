@@ -483,6 +483,18 @@ local function create_world(kind, target, opts, C)
     if opts.upgrades ~= false and cv.upgrades:GetBool() then
         o.upgrades = (type(opts.upgrades) == "table") and opts.upgrades or GSA1.UpgradeNames(kind)
     end
+    -- 0.9.9h: a skin (opts.skin, its entry's name): the module gets its flat table, read during the create only; voiceless by its entry and gsa1_metal_voice (feat/cl_skins.lua)
+    local K = GSA1.Skins
+    local sd = Fo.SkinDef(opts.skin)
+    local skin = sd and K and K.Of(sd)
+    if opts.skin ~= nil and opts.skin ~= "" then
+        if not skin then return nil, tostring(opts.skin) .. " is no skin a follower can wear", "bad_argument" end
+        if not (gsa1.FOLLOWER and gsa1.FOLLOWER.SKIN) then
+            return nil, (sd.title or "?") .. " cannot follow with this G-SA1 module: it has no skins for followers (gsa1.FOLLOWER.SKIN); never a plain " .. Fo.KindTitle(kind), "unsupported"
+        end
+        o.skin = K.DescOf(skin)
+        o.voiceless = K.Voiceless and K.Voiceless(skin) or false
+    end
     local id, err, code = gsa1.FollowerCreate(kind, pos, yaw, L and L.id or nil, o)
     return id, err, code, pos, yaw, o
 end
@@ -500,7 +512,7 @@ function Fo.HostObjMask(egg)
 end
 
 function Fo.MakeEntry(id, kind, opts, target, pos, yaw, C)
-    local def = GSA1.CharacterByKind(kind)
+    local def = Fo.SkinDef(opts.skin) or GSA1.CharacterByKind(kind)        -- 0.9.9h: a skin's follower is named by its entry (its wheel, its title)
     if GSA1.Tex and GSA1.Tex.Prepare and not (Fo.prepared and Fo.prepared[kind]) then
         Fo.prepared = Fo.prepared or {}
         Fo.prepared[kind] = true
@@ -520,13 +532,19 @@ function Fo.MakeEntry(id, kind, opts, target, pos, yaw, C)
         nextInfo = SysTime() + (uid % 16) / 64,        -- (the 4 Hz reading, spread over the frames)
     }
     if kind == 0 or kind == 2 then F.slot = Fo.FreeSlot() end
+    -- 0.9.9h: F.skin: feat/sh_skins.lua's entry (cl_render draws it as any follower: the module's batches are the skin's parts)
+    if def and def.form == "skin" and GSA1.Skins then F.skin = GSA1.Skins.Of(def) end
     ent.char = F
     gsa1.GetState(id, F.state)
     if F.state.x then F.drawPos:SetUnpacked(F.state.x, F.state.y, F.state.z) end
     ent:SetPos(F.drawPos)
     Fo.list[#Fo.list + 1] = F
     Fo.byId[id] = F
-    -- 0.9.9: before its first tick
+    -- 0.9.9: before its first tick; 0.9.9h: a skin's two options of the render step and its voice, as the playable skin's
+    if F.skin and GSA1.Skins then
+        if GSA1.Skins.ApplyAnim then GSA1.Skins.ApplyAnim(F) end
+        if GSA1.Skins.ApplyVoice then GSA1.Skins.ApplyVoice(F) end
+    end
     Fo.ApplyStand(F)
     Fo.ApplySpeed(F)
     Fo.ApplySpots()
@@ -543,8 +561,27 @@ local function spawn_follower(kind, opts)
     local k, def = tonumber(kind), nil
     if not k and type(kind) == "string" then k, def = GSA1.KindByName(kind) end
     if not k then return false, "unknown character " .. tostring(kind) end
-    if (def and def.form) or not Fo.KINDS[k] then
+    -- 0.9.9h: a skin's entry (by its name, or opts.skin with its base kind) is a follower of that kind wearing it (Fo.SkinDef)
+    local sd
+    if def and def.form == "skin" then
+        sd = Fo.SkinDef(def.name)
+    elseif (not def or not def.form) and opts.skin ~= nil and opts.skin ~= "" then
+        sd = Fo.SkinDef(opts.skin)
+        if not sd or sd.kind ~= k then return false, tostring(opts.skin) .. " is no skin a " .. Fo.KindTitle(k) .. " follower can wear" end
+    end
+    if (def and def.form and not sd) or not Fo.KINDS[k] then
         return false, (def and def.title or tostring(kind)) .. " is not a character that can follow"
+    end
+    if sd then
+        local o2 = {}
+        for key, v in pairs(opts) do o2[key] = v end
+        o2.skin = sd.name
+        opts = o2
+    elseif opts.skin ~= nil then
+        local o2 = {}
+        for key, v in pairs(opts) do o2[key] = v end
+        o2.skin = nil
+        opts = o2
     end
     local why = Fo.WhyNot(k)
     if why then return false, why end
@@ -1564,7 +1601,8 @@ local function send_made(token, made)
 end
 net.Receive(Fo.NET.REQ, function()
     local token, kind = net.ReadUInt(16), net.ReadUInt(4)
-    local ok, res = GSA1.SpawnFollower(kind, { why = "spawntab" })
+    local skin = net.ReadString()       -- 0.9.9h: a skin's spawner (empty: none)
+    local ok, res = GSA1.SpawnFollower(kind, { why = "spawntab", skin = skin ~= "" and skin or nil })
     if ok then
         res.token = token
         Fo.byToken[token] = res
@@ -1595,6 +1633,12 @@ function Fo.SpawnerClasses()
     for _, k in ipairs(Fo.KIND_ORDER) do
         if allowed[k] == true then out[#out + 1] = Fo.SpawnerClass(k) end
     end
+    -- 0.9.9h: then each skin whose base can follow (Metal Sonic), with a module that dresses followers
+    if gsa1 and gsa1.FOLLOWER and gsa1.FOLLOWER.SKIN then
+        for _, d in ipairs(Fo.SkinDefs()) do
+            if allowed[d.kind] == true then out[#out + 1] = Fo.SkinSpawnerClass(d) end
+        end
+    end
     return out
 end
 
@@ -1602,12 +1646,18 @@ end
 local function say(fmt, ...)
     if GSA1.Msg then GSA1.Msg(fmt, ...) end
 end
+-- 0.9.9h: what the Spawn button makes: gsa1_follower_skin's entry while gsa1_follower_kind is its base, else the kind
+function Fo.ButtonChoice()
+    local sd = Fo.SkinDef(cv.skin and cv.skin:GetString() or "")
+    if sd and sd.kind == cv.kind:GetInt() then return sd.name end
+    return cv.kind:GetInt()
+end
 concommand.Add("gsa1_follower_spawn", function(ply, cmd, args)
-    local ok, res = GSA1.SpawnFollower(args[1] and args[1] ~= "" and args[1] or cv.kind:GetInt(),
+    local ok, res = GSA1.SpawnFollower(args[1] and args[1] ~= "" and args[1] or Fo.ButtonChoice(),
         { target = args[2], why = "console" })
     if not ok then GSA1.Chat("no follower: %s", tostring(res)) end
 end, nil, "G-SA1: gsa1_follower_spawn [character] [me | player | follower | aim | stay]: a follower (Q menu > Options > G-SA1 > "
-    .. "Followers)")
+    .. "Followers); a skin by its name too: gsa1_follower_spawn metal")
 concommand.Add("gsa1_follower_remove", function(ply, cmd, args)
     if args[1] == "all" then
         Fo.RemoveAll("removed")
@@ -1703,7 +1753,53 @@ function Fo.KindChoices()
             out[#out + 1] = { k, title .. " (can't follow: " .. tostring(a or "unknown") .. ")" }
         end
     end
+    -- 0.9.9h: each skin after the kinds (data "skin:<name>": the combo sets gsa1_follower_kind to its base and gsa1_follower_skin to it), with a module that dresses followers
+    -- (gsa1.FOLLOWER.SKIN; without one they are not offered, as on the spawn tab)
+    if gsa1 and gsa1.FOLLOWER and gsa1.FOLLOWER.SKIN then
+        for _, d in ipairs(Fo.SkinDefs()) do
+            local a = allowed[d.kind]
+            if a == true then
+                out[#out + 1] = { "skin:" .. d.name, d.title }
+            else
+                out[#out + 1] = { "skin:" .. d.name, d.title .. " (can't follow: " .. tostring(a or "unknown") .. ")" }
+            end
+        end
+    end
     return out
+end
+
+-- 0.9.9h: the Character list: the kinds, then each skin (Fo.KindChoices). A skin sets gsa1_follower_kind to its base and gsa1_follower_skin to its name; a kind clears the skin.
+-- One control for both ConVars (combo.gsa1ConVars)
+function Fo.KindCombo(panel)
+    local combo = choice_combo(panel, "Character to spawn", "gsa1_follower_kind", Fo.KindChoices())
+    combo.gsa1ConVars = { "gsa1_follower_kind", "gsa1_follower_skin" }
+    combo.OnSelect = function(_, _, _, data)
+        data = tostring(data)
+        local sd = Fo.SkinDef(string.match(data, "^skin:(.+)$"))
+        if sd then
+            RunConsoleCommand("gsa1_follower_kind", tostring(sd.kind))
+            RunConsoleCommand("gsa1_follower_skin", sd.name)
+        elseif not string.find(data, "^skin:") then
+            RunConsoleCommand("gsa1_follower_kind", data)
+            RunConsoleCommand("gsa1_follower_skin", "")
+        end
+    end
+    local inner = combo.Think
+    combo.Think = function(self)
+        if inner then inner(self) end
+        local choice = Fo.ButtonChoice()
+        local want = type(choice) == "string" and choice or nil
+        if want ~= self.gsa1Skin then
+            self.gsa1Skin = want
+            if want then
+                local sd = Fo.SkinDef(want)
+                self:SetText(sd and sd.title or want)
+            else
+                self.gsa1Value = nil        -- (the kind's title again on the next frame)
+            end
+        end
+    end
+    return combo
 end
 
 -- one row's words: who, whom it follows, what it does, how far, how often it dropped in
@@ -1812,7 +1908,7 @@ function Fo.BuildPage(panel)
         .. "(Tails) or glide (Knuckles), and when they fall too far behind or stay off the screen they drop in from above the "
         .. "camera.")
     panel:CheckBox("Followers", "gsa1_follower")
-    choice_combo(panel, "Character to spawn", "gsa1_follower_kind", Fo.KindChoices())
+    Fo.KindCombo(panel)
     panel:ControlHelp(Fo.PLAYABLE_NOTE)
     live_label(panel, Fo.StatusLines)
     panel:Button("Spawn a follower", "gsa1_follower_spawn")

@@ -12,7 +12,8 @@
 //   gsa1.FollowerCreate(kind, pos, yawDeg, leaderId | nil, opts) -> id | nil, msg, code
 //       opts (optional) = { upgrades = { "name", ... }, objects = 0 | 1, sounds = bool, seed = n, fix_view = bool (default true =
 //       not SA1_FOLLOW_GAME_VIEW), fix_respawn = bool (default true = not SA1_FOLLOW_GAME_HISTORY) }. leaderId: a character id
-//       of this session (exact, per step); nil = host-fed (first snapshot: pos / yawDeg standing). "limit" at kMaxFollowers 112 or
+//       of this session (exact, per step); nil = host-fed (first snapshot: pos / yawDeg standing). 0.9.9h (gsa1.FOLLOWER.SKIN): opts.skin = GSA1.Skins.DescOf(entry), kind 0:
+//       a Sonic follower wearing it (libsa1 SA1_FOLLOW_SKIN: its world is a Sonic follower's, byte for byte), opts.voiceless = bool. "limit" at kMaxFollowers 112 or
 //       kMaxCharacters 128, and "limit" with "not enough free memory" below 2,073 MB of available physical memory
 //   gsa1.FollowerLeader(id, leaderId | nil) -> true | nil, msg, code      "bad_argument" for itself / its own followers
 //   gsa1.FollowerFeed(id, pos, vel, yawDeg, ground [, kind]) -> true | nil, msg, code   for the next FollowersTick
@@ -65,6 +66,7 @@
 #include "../core/util.hpp"
 #include "gsa1_feature.hpp"
 #include "gsa1_module_internal.hpp"
+#include "skin_args.hpp"            // 0.9.9h: opts.skin
 
 #if defined(SA1_API_FOLLOWER)
 
@@ -218,7 +220,7 @@ GSA1_FN(gsa1_follower_FollowerKinds)
 GSA1_FN(gsa1_follower_FollowerCreate)
 {
     static const char *usage = "FollowerCreate(kind, Vector pos, yawDegrees, leaderId | nil [, {upgrades = {names}, objects = 0 | 1, "
-                               "sounds = bool, seed = n, fix_view = bool, fix_respawn = bool}])";
+                               "sounds = bool, seed = n, fix_view = bool, fix_respawn = bool, skin = GSA1.Skins.DescOf(entry), voiceless = bool}])";
     int32_t kind = 0, leader = 0;
     float pos[3];
     double yaw = 0.0;
@@ -229,6 +231,9 @@ GSA1_FN(gsa1_follower_FollowerCreate)
     }
     gsa1::FollowerOpts o;
     std::string err;
+#if defined(SA1_API_SKIN)
+    gsa1::skinargs::SkinArgs skin_args;     // 0.9.9h: lives through the create (libsa1 reads it then only)
+#endif
     if (LUA->IsType(5, LT::Table)) {
         int t = absidx(LUA, 5);
         if (!opt_upgrades(LUA, t, kind, o.upgrades, err)) {
@@ -260,8 +265,29 @@ GSA1_FN(gsa1_follower_FollowerCreate)
         opt_bool(LUA, t, "sounds", o.sounds, ok);
         opt_bool(LUA, t, "fix_view", o.fix_view, ok);
         opt_bool(LUA, t, "fix_respawn", o.fix_respawn, ok);
+        opt_bool(LUA, t, "voiceless", o.voiceless, ok);
         if (!ok) {
             return push_nil_msg(LUA, usage, "bad_argument");
+        }
+        // 0.9.9h: opts.skin, a flat table (feat/sh_skins.lua GSA1.Skins.DescOf): the follower wears it over a Sonic follower's world
+        LUA->PushString("skin");
+        LUA->RawGet(t);
+        int tsk = LUA->GetType(-1);
+        if (tsk != LT::Nil && tsk != LT::None) {
+#if defined(SA1_API_SKIN)
+            std::string serr;
+            bool sok = tsk == LT::Table && skin_args.read(LUA, LUA->Top(), serr);
+            LUA->Pop();
+            if (!sok) {
+                return push_nil_msg(LUA, tsk == LT::Table ? serr : std::string("opts.skin: a skin's table (GSA1.Skins.DescOf)"), "bad_argument");
+            }
+            o.skin = &skin_args.d;
+#else
+            LUA->Pop();
+            return push_nil_msg(LUA, "this libsa1 has no skins (SA1_API_SKIN)", "unsupported");
+#endif
+        } else {
+            LUA->Pop();
         }
     }
     int ret = 0;
@@ -626,6 +652,9 @@ void follower_open(ILuaBase *L, int t)
     raw_bool(L, c, "LIB_PARALLEL", gsa1::kPoolLibParallel);
 #if SA1_API_FOLLOWER >= 2
     raw_num(L, c, "SPEED_MAX", SA1_FOLLOWER_SPEED_MAX);
+#endif
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 2
+    raw_bool(L, c, "SKIN", true);      // 0.9.9h: FollowerCreate's opts.skin, opts.voiceless (libsa1's SA1_FOLLOW_SKIN); asked for by name, the feature's version stays 2
 #endif
     L->PushString("MODE");
     L->CreateTable();

@@ -3,7 +3,8 @@
 -- SpawnFunction (entities/gsa1_follower_spawner.lua) makes no entity and calls GSA1.FollowerRequest: the spawning client gets
 -- gsa1_fol_req (a token, the kind); it answers gsa1_fol_made (the token, made); made -> an Undo entry whose function sends
 -- gsa1_fol_undo, and the client removes that follower. A token lives Fo.TOKEN_LIFE s and is used once (review R.6: one token
--- can never make two Undo entries). Hook for other addons: GSA1FollowerRequest(ply, kind) (false: nothing happens).
+-- can never make two Undo entries). Hook for other addons: GSA1FollowerRequest(ply, kind, skin) (false: nothing happens).
+-- 0.9.9h: a skin's spawner (Metal Sonic) sends its entry's name after the kind (an empty string: none)
 GSA1 = GSA1 or {}
 local Fo = GSA1.Followers
 if not Fo then return end
@@ -26,11 +27,16 @@ local function rate_ok(ply)
     return true
 end
 
--- a spawner was used; true when the client was asked
-function GSA1.FollowerRequest(ply, kind)
+-- a spawner was used; true when the client was asked. skin: a skin entry's name (Fo.SkinDef) or nil
+function GSA1.FollowerRequest(ply, kind, skin)
     if not IsValid(ply) or not Fo.KINDS[kind] then return false end
+    local sd = nil
+    if skin ~= nil and skin ~= "" then
+        sd = Fo.SkinDef and Fo.SkinDef(skin)
+        if not sd or sd.kind ~= kind then return false end
+    end
     if cv.sv_icons and not cv.sv_icons:GetBool() then return false end
-    if hook and hook.Run and hook.Run("GSA1FollowerRequest", ply, kind) == false then return false end
+    if hook and hook.Run and hook.Run("GSA1FollowerRequest", ply, kind, sd and sd.name or nil) == false then return false end
     if not rate_ok(ply) then return false end
     local tokens = ply.GSA1FolTokens or {}
     ply.GSA1FolTokens = tokens
@@ -41,10 +47,11 @@ function GSA1.FollowerRequest(ply, kind)
     end
     local token = (tonumber(ply.GSA1FolNext) or 0) % 65535 + 1
     ply.GSA1FolNext = token
-    tokens[token] = { kind = kind, at = tn }
+    tokens[token] = { kind = kind, skin = sd and sd.name or nil, at = tn }
     net.Start(NET.REQ)
     net.WriteUInt(token, 16)
     net.WriteUInt(kind, 4)
+    net.WriteString(sd and sd.name or "")
     net.Send(ply)
     return true
 end
@@ -58,7 +65,7 @@ function Fo.Made(ply, token, made)
     if now() - rec.at > Fo.TOKEN_LIFE then return false, "the token is too old" end
     if not made then return false, "not made" end
     if not (undo and undo.Create) then return true end
-    local title = "G-SA1 " .. Fo.KindTitle(rec.kind) .. " follower"
+    local title = "G-SA1 " .. (Fo.FollowerTitle and Fo.FollowerTitle(rec.kind, rec.skin) or Fo.KindTitle(rec.kind)) .. " follower"
     undo.Create(title)
     undo.AddFunction(function()
         net.Start(NET.UNDO)

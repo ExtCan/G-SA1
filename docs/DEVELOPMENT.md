@@ -40,6 +40,21 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 0.9.9g changes: Metal Sonic as a follower
+
+From the owner's request. **Not seen in the real game yet**; an independent check found no fails.
+
+* **Metal Sonic can follow you.** Use his spawner in the follower group of the spawn menu, `gsa1_follower_spawn metal` in the console, or the Followers page. Underneath he runs a Sonic follower's own game code, byte for byte the same, with his model drawn over it. He has his flying run and no voice, and the purple glow shows when charged. The four Metal Sonic options on the Character page reach his followers too.
+* **Every skin becomes a follower automatically** from its entry, so Mecha Sonic will get this with no new follower code. One limit remains: the game library loads one skin per disc load, which has to be lifted before two different skins can run in one session.
+
+**Known limits:** the 99 from the secret are still Knuckles. Followers from the menus stop at 8, as before. 99 Metal Sonic followers weren't tested.
+
+### The owner checklist
+
+1. Spawn Metal Sonic as a follower each way: the spawner, the console, the Followers page. He follows, flies when running, makes no voice, and glows purple when charged.
+2. Play Sonic with a Metal Sonic follower, then play Metal Sonic with Metal Sonic followers.
+3. Untick the Metal Sonic options on the Character page: his followers follow along at once.
+
 ## What 0.9.9f changes: Metal Sonic's transitions and glow, text saved as pictures
 
 From the owner's test of 0.9.9e. **None of this has been seen in the real game yet**: it runs here against a stand-in for Garry's Mod and against the Dreamcast's own code. An independent check found no reason to hold it back from a test.

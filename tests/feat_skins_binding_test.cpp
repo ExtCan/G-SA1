@@ -278,6 +278,87 @@ int main(int argc, char **argv)
     }
     L.call("Destroy", {Val::number(id)});
 
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 2
+    // ---- 0.9.9h: a Metal Sonic follower (the owner: "can you add a Metal Sonic follower?"): gsa1.FollowerCreate(0, ..., {skin = the flat entry, voiceless = true}) ----------------------------
+    {
+        Val F = g.tab->field("FOLLOWER");
+        CHECK(F.type == Type::Table && F.tab->field("SKIN").type == Type::Bool && F.tab->field("SKIN").b, "gsa1.FOLLOWER.SKIN: this module dresses followers");
+        std::vector<Val> lr = L.call("Create", {Val::number(0), Val::vector(0, 0, 8), Val::number(0)});
+        double lead = num_of(lr, 0);
+        CHECK(lead > 0.0, "a plain Sonic to follow (%s)", str_of(lr, 1).c_str());
+        auto fopts = [&](bool voiceless) {
+            Val o = Val::table();
+            o.tab->set(Val::string("skin"), skin_desc());
+            o.tab->set(Val::string("voiceless"), Val::boolean(voiceless));
+            return o;
+        };
+        std::vector<Val> bad = L.call("FollowerCreate", {Val::number(2), Val::vector(0, -40, 8), Val::number(0), Val::number(lead), fopts(true)});
+        CHECK(num_of(bad, 0) <= 0.0 && str_of(bad, 2) == "bad_argument" && str_of(bad, 1).find("kind 0") != std::string::npos, "a skin on a Tails follower: refused by name (%s)", str_of(bad, 1).c_str());
+        Val junk = Val::table();
+        junk.tab->set(Val::string("skin"), Val::number(3));
+        std::vector<Val> bad2 = L.call("FollowerCreate", {Val::number(0), Val::vector(0, -40, 8), Val::number(0), Val::number(lead), junk});
+        CHECK(num_of(bad2, 0) <= 0.0 && str_of(bad2, 2) == "bad_argument", "opts.skin that is no table: bad_argument (%s)", str_of(bad2, 1).c_str());
+        std::vector<Val> fr = L.call("FollowerCreate", {Val::number(0), Val::vector(0, -40, 8), Val::number(0), Val::number(lead), fopts(true)});
+        double fid = num_of(fr, 0);
+        CHECK(fid > 0.0, "gsa1.FollowerCreate(0, ..., {skin = ..., voiceless = true}) = id %.0f (%s)", fid, str_of(fr, 1).c_str());
+        std::vector<Val> pr = L.call("FollowerCreate", {Val::number(0), Val::vector(0, 40, 8), Val::number(0), Val::number(lead)});
+        double pid = num_of(pr, 0);
+        CHECK(pid > 0.0, "and a plain Sonic follower beside it = id %.0f (%s)", pid, str_of(pr, 1).c_str());
+        if (fid > 0.0 && pid > 0.0) {
+            gsa1::Character *fc = se->get((int32_t)fid);
+            gsa1::Character *pc = se->get((int32_t)pid);
+            CHECK(fc && fc->follower && fc->voiceless && (fc->create_extra & SA1_CREATE_SKIN) && pc && !pc->voiceless && !(pc->create_extra & SA1_CREATE_SKIN),
+                  "the follower's Character: voiceless, its batches may draw archive 61 (create_extra); the plain one neither");
+            const gsa1::FollowerOpts *ko = se->followers().opts_of((int32_t)fid);
+            CHECK(ko && ko->skin == nullptr && ko->skin_worn, "the set keeps no pointer to the create's table (skin_worn only)");
+            std::vector<Val> so2 = L.call("SetCharOption", {Val::number(fid), Val::number((double)SA1_COPT_SKIN_ANIM), Val::number(5)});
+            CHECK(so2.size() == 1 && so2[0].b, "gsa1.SetCharOption(follower, COPT_SKIN_ANIM, 5): true (%s)", str_of(so2, 1).c_str());
+            Val out = Val::table();
+            for (int i = 0; i < 60; i++) {
+                L.call("Tick", {Val::number(lead), Val::number(0), Val::number(0), Val::number(0), Val::number(0), Val::number(1.0 / 30.0)});
+                L.call("FollowersTick", {Val::number(1.0 / 30.0), Val::number(0), Val(), Val(), out});
+            }
+            auto count = [&](double who, int &skin_tris, int &skin_tex, int &untex, int &body) {
+                skin_tris = skin_tex = untex = body = 0;
+                Val b2 = Val::table();
+                L.call("Batches", {Val::number(who), b2});
+                int nb = (int)b2.tab->field("count").num;
+                for (int i = 1; i <= nb; i++) {
+                    Val e = b2.tab->at(i);
+                    if (e.type != Type::Table) continue;
+                    if (e.tab->field("archive").num == SA1_ARCHIVE_SKIN) {
+                        skin_tris += (int)e.tab->field("tris").num;
+                        skin_tex += e.tab->field("tex").num >= 0;
+                    } else if (e.tab->field("archive").num < 0) {
+                        untex++;
+                    } else if (e.tab->field("archive").num == 0) {
+                        body += (int)e.tab->field("tris").num;
+                    }
+                }
+            };
+            int st, tx, un, bd, st2, tx2, un2, bd2;
+            count(fid, st, tx, un, bd);
+            count(pid, st2, tx2, un2, bd2);
+            CHECK(st == 1015 && tx > 0 && un == 0, "the follower's batches: %d triangles on archive 61 (1015) in %d textured batches, %d untextured, %d on archive 0 (the blob)", st, tx, un, bd);
+            CHECK(st2 == 0 && bd2 > 900, "the plain follower beside it: Sonic's body, %d triangles on archive 0, none on archive 61", bd2);
+            sa1_damage dm;
+            std::memset(&dm, 0, sizeof dm);
+            dm.struct_size = sizeof dm;
+            uint64_t m0 = fc ? fc->voices_muted : 0;
+            sa1_character_add_rings(se->ctx(), (sa1_character_id)fid, 5);
+            sa1_character_damage(se->ctx(), (sa1_character_id)fid, &dm);
+            for (int i = 0; i < 60; i++) {
+                L.call("Tick", {Val::number(lead), Val::number(0), Val::number(0), Val::number(0), Val::number(0), Val::number(1.0 / 30.0)});
+                L.call("FollowersTick", {Val::number(1.0 / 30.0), Val::number(0), Val(), Val(), out});
+            }
+            CHECK(fc && fc->voices_muted > m0, "a hit on the follower, voiceless: %llu of its voices stayed out of the mixer", (unsigned long long)(fc ? fc->voices_muted - m0 : 0));
+        }
+        if (fid > 0.0) L.call("Destroy", {Val::number(fid)});
+        if (pid > 0.0) L.call("Destroy", {Val::number(pid)});
+        if (lead > 0.0) L.call("Destroy", {Val::number(lead)});
+    }
+#endif
+
     // ---- T9: the screen's holder (RM.4) ----------------------------------------------------------------------------------------
     std::vector<Val> op = L.call("FrontendOpen", {});
     CHECK(op.size() >= 1 && op[0].type == Type::Bool && op[0].b, "FrontendOpen (%s)", str_of(op, 1).c_str());

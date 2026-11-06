@@ -2195,6 +2195,17 @@ int32_t Session::create_follower(int32_t kind, const float pos[3], float yaw, in
         d.flags |= SA1_FOLLOW_SEED;
         d.seed = o.seed;
     }
+    if (o.skin) {
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 2
+        // 0.9.9h: a Sonic follower made with SA1_CREATE_SKIN: its world is a Sonic follower's, byte for byte; libsa1 refuses another kind by name
+        d.flags |= SA1_FOLLOW_SKIN;
+        d.skin = o.skin;
+#else
+        cd = "unsupported";
+        err = "this libsa1 has no skin for a follower (SA1_API_SKIN 2)";
+        return 0;
+#endif
+    }
     d.host_leader.struct_size = sizeof d.host_leader;
     std::memcpy(d.host_leader.position, pos, sizeof d.host_leader.position);
     d.host_leader.yaw = yaw;
@@ -2251,11 +2262,29 @@ int32_t Session::create_follower(int32_t kind, const float pos[3], float yaw, in
     c->num_archives = texture_archives(kind);
     c->upgrade_flags = flags;
     c->upgrade_bits = bits;
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 2
+    if (o.skin) {
+        // 0.9.9h: its parts draw from SA1_ARCHIVE_SKIN (batches keep their textures: render_copy), its voices as the playable skin's; the archive's texture_black answers now, on the game
+        // thread (review R.1: a job never inserts into the map)
+        c->create_extra = SA1_CREATE_SKIN;
+        c->voiceless = o.voiceless;
+        uint32_t nt = 0;
+        std::string te;
+        if (texture_count(kind, SA1_ARCHIVE_SKIN, nt, te)) {
+            for (uint32_t i = 0; i < nt; i++) {
+                texture_black(kind, (int32_t)SA1_ARCHIVE_SKIN, (int32_t)i);
+            }
+        }
+    }
+#endif
     refresh_state(*c);
     std::memcpy(c->prev_pos, c->st.position, sizeof c->prev_pos);
     Character *raw = c.get();
     chars_.push_back(std::move(c));
-    followers_.add(id, kind, leader, o);
+    FollowerOpts kept = o;
+    kept.skin_worn = o.skin != nullptr;
+    kept.skin = nullptr;               // (read during the create only)
+    followers_.add(id, kind, leader, kept);
     std::string rerr;
     render_copy(*raw, 1.0f, rerr);      // the first pose until its first pair (as Session::create)
     return id;

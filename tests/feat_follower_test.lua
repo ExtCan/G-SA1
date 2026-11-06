@@ -286,7 +286,7 @@ local function fclear() FM.calls = {} end
 local function is_vec(v) return type(v) == "table" and type(v.x) == "number" and type(v.y) == "number" and type(v.z) == "number" end
 local create0 = G.Create
 local KINDS_OK = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true }
-local OPT_TYPES = { upgrades = "table", objects = "number", sounds = "boolean", seed = "number", fix_view = "boolean", fix_respawn = "boolean" }
+local OPT_TYPES = { upgrades = "table", objects = "number", sounds = "boolean", seed = "number", fix_view = "boolean", fix_respawn = "boolean", skin = "table", voiceless = "boolean" }
 function G.FollowerKinds(out)
     out = out or {}
     for k, v in pairs(FM.kinds) do out[k] = v end
@@ -707,7 +707,7 @@ do
         gsa1_follower_draw_dist = { "4800", 500, 12000 }, gsa1_follower_other_views = { "0", 0, 1 }, gsa1_follower_threads = { "0", 0, 16 },
         gsa1_follower_call_key = { "16", 0, 511 }, gsa1_follower_call_pad = { "64", 0, 0x30000 },
         gsa1_follower_speed = { "1", 1, 4 }, gsa1_follower_spacing = { "64", 0, 160 }, gsa1_follower_emotes = { "1", 0, 1 },
-        gsa1_follower_fix_stand = { "1", 0, 1 },
+        gsa1_follower_fix_stand = { "1", 0, 1 }, gsa1_follower_skin = { "" },
     }
     local bad = {}
     for name, w in pairs(WANT) do
@@ -753,6 +753,7 @@ do
         end
         if rawget(Q, "convar") then bound[Q.convar] = "binder" end
         if rawget(Q, "gsa1ConVar") then bound[Q.gsa1ConVar] = "combo" end
+        for _, n in ipairs(rawget(Q, "gsa1ConVars") or {}) do bound[n] = "combo" end      -- 0.9.9h: the Character list sets the kind and the skin
     end
     local missing = {}
     for name in pairs(GSA1.CONVARS) do
@@ -791,7 +792,8 @@ do
     for n in pairs(cs or {}) do names[#names + 1] = n end
     table.sort(names)
     local T = cs and cs.gsa1_follower_tails
-    check(#names == 8 and cs.gsa1_follower_eggman.GSA1FollowerKind == 1 and cs.gsa1_follower_tikal.GSA1FollowerKind == 4 and T and T.GSA1FollowerKind == 2 and T.Spawnable and T.Category == "G-SA1" and T.DisableDuplicator and
+    check(#names == 9 and cs.gsa1_follower_metalsonic and cs.gsa1_follower_metalsonic.GSA1FollowerKind == 0 and cs.gsa1_follower_metalsonic.GSA1FollowerSkin == "metalsonic" and
+        cs.gsa1_follower_eggman.GSA1FollowerKind == 1 and cs.gsa1_follower_tikal.GSA1FollowerKind == 4 and T and T.GSA1FollowerKind == 2 and T.Spawnable and T.Category == "G-SA1" and T.DisableDuplicator and
         T.IconOverride == "entities/gsa1_follower_tails.png" and classes_s and classes_s.gsa1_follower_big.GSA1FollowerKind == 7,
         "one spawner class per kind, on both realms: %s", table.concat(names, " "))
     check(host_read(string.gsub(M.root, "lua$", "") .. "materials/entities/gsa1_follower_tails.png") ~= nil and
@@ -2786,8 +2788,94 @@ do
     reset()
 end
 
--- 17. nothing went wrong -----------------------------------------------------------------------------------------------------------------------
-reset()
+-- 16h. round 0.9.9h (the owner: "can you add a Metal Sonic follower?"; earlier: "Skins (such as Metal Sonic) should be automatically added as spawnable followers") ----------
+-- A skin entry of GSA1.CHARACTERS is a follower of its base kind wearing it, from its data alone: the spawner, the console's name, the page's list, the Spawn button; a module that
+-- cannot dress a follower refuses by name (never a plain Sonic); Recreate keeps it; the four Metal Sonic options reach it at once
+do
+    reset()
+    me("sonic")
+    -- (this test loads a part of the addon: the skins' two files here, as the autorun loads them with the whole module)
+    if not GSA1.Skins then M.load("gsa1/feat/sh_skins.lua") end
+    if not (GSA1.Skins and GSA1.Skins.ApplyAnim) then M.load("gsa1/feat/cl_skins.lua") end
+    local K = GSA1.Skins
+    local keepF, keepSuper, sv0, co0 = G.FOLLOWER, G.SUPER, G.SetVoiceless, G.SetCharOption
+    local voiced, anim = {}, {}
+    G.SetVoiceless = function(id, on) voiced[id] = on return true end
+    G.SetCharOption = function(id, opt, v)
+        if opt == 9 then anim[id] = v end
+        return true
+    end
+    G.SUPER = { COPT_SKIN_ANIM = 9, SKIN_ANIM_FLY = 1, SKIN_ANIM_WALK = 2, SKIN_ANIM_GLOW = 4, CREATE_SKIN = 0x4000 }
+    local noskin = {}
+    for k, v in pairs(keepF or {}) do noskin[k] = v end
+    noskin.SKIN = nil
+    G.FOLLOWER = noskin
+    local md = GSA1.CharacterByName("metalsonic")
+    local defs = Fo.SkinDefs()
+    check(md and #defs == 1 and defs[1] == md and Fo.SkinDef("metal") == md and Fo.SkinDef("sonic") == nil and Fo.SkinSpawnerClass(md) == "gsa1_follower_metalsonic",
+        "the skins that can follow come from the character list's data: %d (Metal Sonic), by name or alias", #defs)
+    local ok0, why0 = GSA1.SpawnFollower("metal", {})
+    check(ok0 == false and #fcalls("FollowerCreate") == 0 and #Fo.list == 0 and string.find(tostring(why0), "never a plain Sonic", 1, true) ~= nil,
+        "a module without gsa1.FOLLOWER.SKIN: refused by name, no world made (%s)", tostring(why0))
+    noskin.SKIN = true
+    fclear()
+    local F = spawn("metal")
+    local c1 = fcalls("FollowerCreate")[1]
+    local o = c1 and c1[6] or {}
+    check(F and F.kind == 0 and F.name == "metalsonic" and F.title == "Metal Sonic" and F.skin == K.SKINS.metalsonic and F.def == md,
+        "gsa1_follower_spawn metal's way: a Sonic follower named Metal Sonic, F.skin the entry")
+    check(c1 and c1[2] == 0 and type(o.skin) == "table" and o.skin.model_root == 0x0CA92E84 and #o.skin.parts == 100 and #o.skin.keep == 9 and o.voiceless == true,
+        "FollowerCreate(0, ..., {skin = the entry's flat table, voiceless = true}): the module gets the data, nothing of the game")
+    check(F and voiced[F.id] == true and anim[F.id] == 5, "before its first tick: voiceless, the render step's options as the playable skin's (fly and glow: %s)", tostring(F and anim[F.id]))
+    set("gsa1_metal_fly", 0)
+    check(F and anim[F.id] == 4, "gsa1_metal_fly reaches the follower at once (%s)", tostring(F and anim[F.id]))
+    set("gsa1_metal_fly", 1)
+    set("gsa1_metal_voice", 1)
+    check(F and voiced[F.id] == false, "gsa1_metal_voice reaches the follower at once")
+    set("gsa1_metal_voice", 0)
+    -- made again (a fault, its leader's collision, come along): still the skin
+    fclear()
+    local NF = F and Fo.Recreate(F, "test")
+    local c2 = fcalls("FollowerCreate")[1]
+    check(NF and NF.skin == K.SKINS.metalsonic and NF.title == "Metal Sonic" and c2 and type(c2[6].skin) == "table", "Fo.Recreate keeps the skin")
+    -- the console, the Spawn button, the page's list
+    Fo.RemoveAll("removed")
+    RunConsoleCommand("gsa1_follower_spawn", "metal")
+    check(#Fo.list == 1 and Fo.list[1].skin ~= nil, "gsa1_follower_spawn metal")
+    set("gsa1_follower_kind", 0)
+    set("gsa1_follower_skin", "metalsonic")
+    check(Fo.ButtonChoice() == "metalsonic", "the Spawn button: gsa1_follower_skin while gsa1_follower_kind is its base")
+    RunConsoleCommand("gsa1_follower_spawn")
+    check(#Fo.list == 2 and Fo.list[2].skin ~= nil, "the Spawn button makes Metal Sonic")
+    set("gsa1_follower_kind", 2)
+    check(Fo.ButtonChoice() == 2, "gsa1_follower_kind Tails: the skin is not worn (Tails)")
+    set("gsa1_follower_kind", 2)
+    set("gsa1_follower_skin", "")
+    local okw = GSA1.SpawnFollower(2, { skin = "metalsonic" })
+    check(okw == false, "a skin on another kind: refused")
+    local seen
+    for _, c in ipairs(Fo.KindChoices()) do
+        if c[1] == "skin:metalsonic" then seen = c[2] end
+    end
+    check(seen == "Metal Sonic", "the page's Character list has Metal Sonic (%s)", tostring(seen))
+    local listed = Fo.SpawnerClasses()
+    check(listed[#listed] == "gsa1_follower_metalsonic", "the spawn tab's Followers group ends with Metal Sonic: %s", table.concat(listed, " "))
+    -- the spawner: its request carries the entry's name; the undo names it
+    Fo.RemoveAll("removed")
+    undos = {}
+    SP.GSA1FolRate, SP.GSA1FolTokens = nil, nil
+    local E = classes_s.gsa1_follower_metalsonic
+    local made = E and E:SpawnFunction(SP, { Hit = true }, "gsa1_follower_metalsonic")
+    local SF = Fo.list[1]
+    check(E and made == nil and SF and SF.skin ~= nil and SF.kind == 0 and #undos == 1 and undos[1].name == "G-SA1 Metal Sonic follower",
+        "the Metal Sonic spawner: gsa1_fol_req with its name -> a Metal Sonic follower, one undo entry \"G-SA1 Metal Sonic follower\"")
+    check(SG.FollowerRequest(SP, 2, "metalsonic") == false and SG.FollowerRequest(SP, 0, "nosuchskin") == false, "the server refuses a skin on another kind, and a name that is no skin")
+    set("gsa1_follower_kind", 2)
+    G.FOLLOWER, G.SUPER, G.SetVoiceless, G.SetCharOption = keepF, keepSuper, sv0, co0
+    reset()
+end
+
+-- 17. nothing went wrong -----------------------------------------------------------------------------------------------------------------------reset()
 check(#FM.bad == 0, "every call into the mock module had the arguments of 5.5%s", #FM.bad > 0 and (": " .. FM.bad[1]) or "")
 local report_ok = true
 for _, r in ipairs(M.reported) do
