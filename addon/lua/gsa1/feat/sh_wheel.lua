@@ -1,7 +1,8 @@
 -- G-SA1 emote wheel, the pure part (round 0.9.4a: sadc docs/research/faces_wheel_plan.md 4.6, 5.5, 7.1, 8.1, 8.3 with its
 -- Review R.9 / R.18 and the owner's answers 10.1; faces_wheel_ui.md 2, 3; super2_plan.md 10.2, the CORRECTED reading;
 -- round 0.9.4b, objects2_plan.md 11.2: the per-slot "Hold the last pose", the fonts per wheel size, the wheel's design;
--- round 0.9.4e, gsa1_rounds_plan.md 14.1aa: the per-slot play rate and the file's speed column).
+-- round 0.9.4e, gsa1_rounds_plan.md 14.1aa: the per-slot play rate and the file's speed column; round 100-EV, G-SA1
+-- 1.0.0-beta1, sadc docs/research/emotes_ev.md 4.2, 5, 7.3: the cutscene animations, keys "e<n>").
 -- GSA1.Wheel = W: the wheel's geometry (the slot of a direction, the 4-degree hysteresis, the centre, the quads the HUD
 -- draws), the file data/gsa1/emote_wheel.txt (parse, serialize, the read-only mirror), the default wheels (names only), how
 -- a slot finds its animation again (by key while the key's entry still has the stored internal name, else by that name -
@@ -320,8 +321,12 @@ W.MOUSE_LEFT, W.MOUSE_RIGHT = 107, 108
 W.COLOURS = {
     sonic = { 35, 110, 255 }, tails = { 250, 150, 30 }, knuckles = { 230, 45, 45 }, amy = { 245, 110, 180 },
     gamma = { 150, 160, 175 }, big = { 150, 90, 220 }, supersonic = { 255, 196, 40 }, supersonic_general = { 255, 196, 40 },
-    metalsonic = { 60, 90, 200 },
 }
+-- (1.0.0, sadc docs/research/gsa1_100_select.md 4.1: a skin's colour is its registry entry's char_color, feat/sh_skins.lua)
+for _, id in ipairs(GSA1.Skins and GSA1.Skins.ORDER or {}) do
+    local r, g, b = GSA1.Skins.ColorOf(GSA1.Skins.SKINS[id])
+    if r then W.COLOURS[id] = { r, g, b } end
+end
 -- (0.9.9: Dr. Eggman, Tikal and "?" have no wheel: nowheel, sh_config.lua)
 function W.Entries()
     local out = {}
@@ -386,7 +391,10 @@ do
         c.face = nil
         own[i] = c
     end
-    W.DEFAULTS.metalsonic = own
+    -- (1.0.0, select 4.1: every skin of the registry plays its base's rows; Sonic's are the only base in 1.0.0)
+    for _, id in ipairs(GSA1.Skins and GSA1.Skins.ORDER or {}) do
+        if GSA1.Skins.SKINS[id].base == "sonic" then W.DEFAULTS[id] = own end
+    end
 end
 
 -- a wheel: { pages = { [1..4] = { [1..8] = slot } }, centre = { face = name | nil } }; slot = { body = "a75" | "x3" | "x" |
@@ -474,7 +482,7 @@ W.HEADER = {
     "# entry  page  slot  body  name  face  options  label  [speed]",
     "#   entry    a GSA1.CHARACTERS name: sonic tails knuckles amy gamma big supersonic supersonic_general",
     "#   page     1-4 and slot 1-8 (1 = up, then clockwise); page 0 slot 0 = the centre (its body is always \"-\")",
-    "#   body     a<row> (an action row) | x<extra> (an extra motion) | stop | - (no body animation)",
+    "#   body     a<row> (an action row) | x<extra> (an extra motion) | e<n> (a cutscene animation, G-SA1 1.0.0) | stop | -",
     "#   name     the body's internal name (\"-\" for stop / -): the key is used while its entry has this name, else the name",
     "#            finds the entry again (a renumbered row; names are not unique, so never the name alone); a name found",
     "#            nowhere is kept in the file and shown as \"missing: <name>\"",
@@ -485,7 +493,8 @@ W.HEADER = {
 }
 
 local function valid_body(b)
-    return b == "-" or b == "stop" or b == "x" or string.match(b, "^a%d+$") ~= nil or string.match(b, "^x%d+$") ~= nil
+    return b == "-" or b == "stop" or b == "x" or string.match(b, "^a%d+$") ~= nil or string.match(b, "^x%d+$") ~= nil or
+        string.match(b, "^e%d+$") ~= nil
 end
 
 -- text -> wheels { [entry] = wheel }, bad lines (count), notes { "line 7: ..." }
@@ -675,4 +684,107 @@ function W.KeyRefusal(code, lookup, keycode, super_key, board_key)
         return "a mouse button (the action key)"
     end
     return nil
+end
+
+-- the cutscene animations (round 100-EV, G-SA1 1.0.0-beta1; sadc docs/research/emotes_ev.md 4.2, 5, 7.3) -------------------
+-- The characters' animations of the game's cutscenes, on the wheel as "e<n>" keys (n: the place among the character's
+-- cutscene animations; the internal name "ev0003_2" = cutscene EV0003, the character's 2nd animation in it). They need the
+-- module's feature "emote" version 4 (gsa1.EmoteEventLoad / EmoteEventReady); with an older module none is listed. Each is
+-- read from the owner's disc the first time it is needed, in the background: a play waits up to W.EV_WAIT s for it (the
+-- waiting rule, W.EvWait), "loading the cutscene animation..." shows after W.EV_SHOW s.
+W.EV_NEEDS = { feature = "emote", version = 4, module = "1.0.0-beta1" }
+W.EV_GROUP = "cutscene"
+W.EV_WAIT, W.EV_SHOW = 1.5, 0.2
+-- the owner's question 9 (gsa1_100_master.md 12) is open: its default, the story names in the Cutscene list, the number
+-- always shown beside them. One switch here
+W.EV_STORY_NAMES = true
+-- the stories by the cutscenes' number ranges (MEASURED from the casts, emotes_ev.md 5.2; the names UNVERIFIED: the owner's
+-- checklist); past them "other"
+W.EV_STORIES = {
+    { 0x0001, 0x002F, "Sonic's story" }, { 0x0030, 0x005F, "Tails' story" }, { 0x0060, 0x007F, "Amy's story" },
+    { 0x0080, 0x00AF, "Knuckles' story" }, { 0x00B0, 0x00CF, "E-102's story" }, { 0x00D0, 0x00EF, "Big's story" },
+    { 0x00F0, 0x00FF, "the last story" },
+}
+W.CAST_TITLES = { sonic = "Sonic", eggman = "Eggman", tails = "Tails", knuckles = "Knuckles", tikal = "Tikal", amy = "Amy",
+                  gamma = "E-102", big = "Big", supersonic = "Super Sonic" }
+-- a cast's name of each kind (SA1_CHAR_*): an entry's own is its kind's (a skin plays its base kind's animations)
+W.CAST_OF_KIND = { [0] = "sonic", [1] = "eggman", [2] = "tails", [3] = "knuckles", [4] = "tikal", [5] = "amy", [6] = "gamma",
+                   [7] = "big", [8] = "supersonic" }
+
+-- "EV0003"
+function W.EvName(event)
+    return string.format("EV%04X", tonumber(event) or 0)
+end
+-- the story of a cutscene number ("Sonic's story"; "other")
+function W.EvStory(event)
+    local n = tonumber(event) or 0
+    for _, s in ipairs(W.EV_STORIES) do
+        if n >= s[1] and n <= s[2] then return s[3] end
+    end
+    return "other"
+end
+-- a catalogue row of a cutscene animation (its source 2, or its "e" key)
+function W.IsEv(e)
+    return e ~= nil and (tonumber(e.source) == 2 or string.match(tostring(e.key or ""), "^e%d+$") ~= nil)
+end
+-- the short text of a cutscene animation: "EV0003 #2"
+function W.EvShort(e)
+    return string.format("%s #%d", W.EvName(e.event), tonumber(e.event_order) or 0)
+end
+-- the Cutscene list's label: "EV0003 - Sonic's story - with Tails (4)": the number, the story (W.EV_STORY_NAMES), the other
+-- characters with animations in it, the count of this character's animations in it
+function W.EvLabel(event, entry, cast, count)
+    local kind = W.KindForm(entry)
+    local own = kind and W.CAST_OF_KIND[kind] or entry
+    local others = {}
+    for _, nm in ipairs(cast or {}) do
+        if nm ~= own then others[#others + 1] = W.CAST_TITLES[nm] or nm end
+    end
+    local parts = { W.EvName(event) }
+    if W.EV_STORY_NAMES then parts[#parts + 1] = W.EvStory(event) end
+    if #others > 0 then parts[#parts + 1] = "with " .. table.concat(others, ", ") end
+    return table.concat(parts, " - ") .. string.format(" (%d)", tonumber(count) or 0)
+end
+-- the cutscenes of a list: { { event, count, cast } } in number order; an animation several cutscenes use counts in each
+function W.EvCutscenes(list)
+    local by, out = {}, {}
+    for i = 1, list and (tonumber(list.n) or #list) or 0 do
+        local e = list[i]
+        if W.IsEv(e) then
+            local evs = (type(e.events) == "table" and #e.events > 0) and e.events or { e.event }
+            for _, ev in ipairs(evs) do
+                ev = tonumber(ev) or 0
+                local c = by[ev]
+                if not c then
+                    c = { event = ev, count = 0, cast = ev == tonumber(e.event) and e.cast or nil }
+                    by[ev] = c
+                    out[#out + 1] = c
+                end
+                c.count = c.count + 1
+                if not c.cast and ev == tonumber(e.event) then c.cast = e.cast end
+            end
+        end
+    end
+    table.sort(out, function(a, b) return a.event < b.event end)
+    return out
+end
+-- does a cutscene animation belong to cutscene `ev` (nil: every cutscene)
+function W.EvIn(e, ev)
+    if ev == nil then return true end
+    ev = tonumber(ev)
+    if tonumber(e.event) == ev then return true end
+    for _, x in ipairs(type(e.events) == "table" and e.events or {}) do
+        if tonumber(x) == ev then return true end
+    end
+    return false
+end
+-- the waiting rule (emotes_ev.md 4.2) as a pure function. w: the waiting play { at = when it was asked }; ready: what
+-- gsa1.EmoteEventReady says now (true, false, or nil with err). Returns "play" | "wait" | "fail" | "late" and, for "wait",
+-- whether "loading the cutscene animation..." shows now (after W.EV_SHOW s; never before)
+function W.EvWait(w, now, ready)
+    if ready == true then return "play", false end
+    if ready == nil then return "fail", false end
+    local t = (tonumber(now) or 0) - (tonumber(w and w.at) or 0)
+    if t >= W.EV_WAIT then return "late", false end
+    return "wait", t >= W.EV_SHOW
 end

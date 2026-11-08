@@ -31,6 +31,10 @@
 //   gsa1.FrontendTextureCount([archive]) -> n | nil, message
 //   gsa1.FrontendTexture(index [, archive]) -> the table of gsa1.Texture | nil, message
 //   gsa1.FrontendTexturePixel(archive, index, x, y) -> r, g, b, a | nil
+//   1.0.0-beta1 (libsa1 SA1_API_SKIN 3; sadc docs/research/gsa1_100_select.md 4.3.3, 4.6): gsa1.FrontendState's out.ring (the game's ADV_SELWK.ring: the selected
+//       name pulses at 0.1845 * (sin(ring) + 1) + 0.615, BAMS), and
+//   gsa1.FrontendUpgradeModels(kind, value) -> true | nil, message, code     the display set of the upgrades in the menu's world for `kind`'s characters:
+//       0 = the game, gsa1.CHAROPT.UPGRADE_MODELS_ON + bits = these upgrades' parts (feat/cl_upgrades.lua); value as a whole number 0..4294967295
 //   gsa1.FrontendStats([out]) -> out {opens, closes, ticks, frames, sounds, voices, last_sound, last_voice, faults, open_ms, tick_ms,
 //       tick_ms_max, last_error, open}
 //   gsa1.FRONTEND = {KIND = 32, PRI_3D = -20, LEFT, RIGHT, UP, DOWN, A, B, START}
@@ -272,8 +276,34 @@ GSA1_FN(gsa1_frontend_FrontendState)
     raw_num(LUA, t, "pose_frames", s.pose_frames);
     raw_num(LUA, t, "kind", s.kind);
     raw_num(LUA, t, "faults", s.faults);
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+    raw_num(LUA, t, "ring", s.ring);         // 1.0.0-beta1: the name's pulse (select 4.6)
+#endif
     return 1;
 }
+
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+// 1.0.0-beta1: gsa1.FrontendUpgradeModels(kind, value) -> true | nil, message, code
+GSA1_FN(gsa1_frontend_FrontendUpgradeModels)
+{
+    int32_t kind = 0;
+    double v = 0.0;
+    if (!arg_int(LUA, 1, kind, 0, 255) || !arg_number(LUA, 2, v) || !(v >= 0.0 && v <= 4294967295.0) || v != std::floor(v)) {
+        return push_nil_msg(LUA, "FrontendUpgradeModels(kind, value 0 or UPGRADE_MODELS_ON + bits)", "bad_argument");
+    }
+    int ret = 0;
+    if (!open_or(LUA, ret)) {
+        return ret;
+    }
+    std::string err;
+    sa1_status st = g_fe.set_upgrade_models(kind, (uint32_t)v, err);
+    if (st != SA1_OK) {
+        return fail(LUA, st, err);
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+#endif
 
 // gsa1.FrontendEvents([out]) -> n, out | nil, message, code
 GSA1_FN(gsa1_frontend_FrontendEvents)
@@ -658,6 +688,9 @@ const gsa1::FeatureFn k_frontend_fns[] = {
     {"FrontendClose", gsa1_frontend_FrontendClose},
 #if defined(SA1_API_SKIN)
     {"FrontendSkin", gsa1_frontend_FrontendSkin},
+#endif
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+    {"FrontendUpgradeModels", gsa1_frontend_FrontendUpgradeModels},
 #endif
     {"FrontendTick", gsa1_frontend_FrontendTick},
     {"FrontendState", gsa1_frontend_FrontendState},

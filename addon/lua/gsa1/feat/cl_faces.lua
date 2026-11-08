@@ -151,7 +151,7 @@ end
 F.Const = const
 
 -- 1. the characters' faces ------------------------------------------------------------------------------------------------
-F.SHORT = { gamma = "E-102", supersonic = "Super Sonic", supersonic_general = "Super Sonic", question = "?", metalsonic = "Metal Sonic" }
+F.SHORT = { gamma = "E-102", supersonic = "Super Sonic", supersonic_general = "Super Sonic", question = "?" }    -- (1.0.0: a skin's is its registry title, feat/sh_skins.lua)
 local function entry_of(name)
     if name == nil or name == "" then return nil end
     local kind, def = GSA1.KindByName(name)

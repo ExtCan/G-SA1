@@ -1,4 +1,5 @@
--- feat_text_test.lua - text in a chosen font (round 0.9.9g; feat/sh_text.lua, feat/cl_text.lua, the two elements in feat/cl_photo.lua and feat/cl_charselect.lua). The whole addon through its autorun, tests/lua_mock.lua, in
+-- feat_text_test.lua - text in a chosen font (round 0.9.9g; feat/sh_text.lua, feat/cl_text.lua, the two elements in feat/cl_photo.lua and feat/cl_charselect.lua). 1.0.0 (sadc docs/research/gsa1_100_select.md
+-- 4.7 with RX.11, 4.8, 7.2 T7): the doubled skin line's cause (two texts in one bucket), T.VERSION 2, the new elements and their Windows families, outlines. The whole addon through its autorun, tests/lua_mock.lua, in
 -- Garry's Mod's own LuaJIT. NO REAL FONT: a font "exists" here because a line in the mock's file table says so and its text measures differently; the pictures are the fake bytes this test's render.Capture gives.
 --   lua_host tests/feat_text_test.lua <tests dir> <addon/lua dir>
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
@@ -267,7 +268,8 @@ check(P ~= nil, "the photo feature is there")
 local photo_src = host_read(root .. "/gsa1/feat/cl_photo.lua")
 local select_src = host_read(root .. "/gsa1/feat/cl_charselect.lua")
 check(string.find(photo_src, "Tx.FontFor(\"photo_hint\"", 1, true) ~= nil and string.find(photo_src, "Tx.Draw(s, \"photo_hint\"", 1, true) ~= nil, "T10 photo mode's reminder asks the module")
-check(select(2, string.gsub(select_src, "skin_line%(hint, W, H, 0%.", "")) == 2, "T10 both of Character Select's screens draw the skin line through the module")
+check(select(2, string.gsub(select_src, "skin_line%(hint, W, H, 0%.", "")) == 1 and string.find(select_src, "local hint = S.SkinLineS and S.SkinLineS(st)", 1, true) ~= nil,
+    "T10 1.0.0: only the simple chooser draws a skin line, through the module (the game's screen: the counter, the name and the nameplate say it)")
 if P then
     local function run_reminder()
         counts.simple = {}
@@ -320,6 +322,73 @@ end
 -- nothing of a font's in the addon: the walk is repos/sync_repos_fonts_test.py's; here, that the code names no path into the addon
 local text_src = host_read(root .. "/gsa1/feat/cl_text.lua") .. host_read(root .. "/gsa1/feat/sh_text.lua")
 check(string.find(text_src, "addons/", 1, true) == nil and string.find(text_src, "materials/", 1, true) == nil, "T14 pictures and fonts are looked for only in resource/fonts and data/gsa1/textcache")
+
+-- ---- T7 (1.0.0, select 4.8): the doubled skin line. A model of a render target as the owner's game showed it: render.Clear leaves the last picture's letters; only a draw that REPLACES colour and
+-- alpha over the whole bucket empties it. Two texts of one bucket in a row: the second picture holds its own text only -----------------------------------------------------------------------------
+do
+    reset_session()
+    local rts, cur_rt, blend = {}, nil, nil
+    local made = {}
+    GetRenderTargetEx = function(name, w, h) rts[name] = rts[name] or { name = name, w = w, h = h, texts = {} } return rts[name] end
+    render.PushRenderTarget = function(rt) cur_rt = rt end
+    render.PopRenderTarget = function() cur_rt = nil end
+    render.Clear = function() end                                   -- (the owner's game: nothing emptied, sadc docs/research/gsa1_100_select.md 2.3)
+    render.OverrideBlend = function(on, src, dst, op, sa, da) blend = on and { src, dst, sa, da } or nil end
+    local full = {}
+    surface.SetDrawColor = function() end
+    surface.DrawRect = function(x, y, w, h)
+        if cur_rt and blend and blend[1] == (BLEND_ONE or 1) and blend[2] == (BLEND_ZERO or 0) and blend[3] == (BLEND_ONE or 1) and blend[4] == (BLEND_ZERO or 0) and x <= 0 and y <= 0 and w >= cur_rt.w and h >= cur_rt.h then
+            cur_rt.texts = {}
+            full[#full + 1] = cur_rt.name
+        end
+    end
+    surface.DrawText = function(s) if cur_rt then cur_rt.texts[#cur_rt.texts + 1] = s end end
+    render.Capture = function() made[#made + 1] = cur_rt and table.concat(cur_rt.texts, "|") or "" return "\137PNG " .. made[#made] end
+    -- (two new texts of 15 and 16 letters: 199 and 212 px, both in the 256 x 64 bucket, as the owner's 151 and 249 px were)
+    T.Draw("Up: Mecha Sonic", "charselect_skin", 20, WHITE, 960, 800, 1, 1)
+    M.run_hook("PostRender")
+    T.Draw("MECHA SONIC (Up)", "charselect_skin", 20, WHITE, 960, 800, 1, 1)
+    M.run_hook("PostRender")
+    check(#full == 2 and full[1] == full[2] and full[1] == "gsa1_text_256x64", "T7 both jobs of one bucket start with the full-bucket replace draw (%d; %s)", #full, tostring(full[1]))
+    check(made[2] == "MECHA SONIC (Up)" and not string.find(made[2] or "", "Up: Mecha Sonic", 1, true), "T7 the second picture holds only its own text (%s)", tostring(made[2]))
+    -- an outline: the text drawn round itself, then itself on top
+    T.Draw("ACTIVE", "charselect_skin", 20, WHITE, 0, 0, 0, 1, 2)
+    M.run_hook("PostRender")
+    local parts = 0
+    for _ in string.gmatch(made[#made] or "", "ACTIVE") do parts = parts + 1 end
+    check(parts > 8, "T7 an outline of 2 px: the text drawn round itself before the text (%d draws of it)", parts)
+end
+check(T.VERSION == 2, "T7 T.VERSION 2")
+do
+    local saved = T.VERSION
+    local a = T.FileName("Up: Metal Sonic", "bauhaus", 20, WHITE, 1920, 1080)
+    T.VERSION = 1
+    local b = T.FileName("Up: Metal Sonic", "bauhaus", 20, WHITE, 1920, 1080)
+    T.VERSION = saved
+    check(a ~= b, "T7 version 2 changes every name: a picture 0.9.9g made over another's leftovers is never loaded again")
+    check(T.FileName("x", "rodin", 20, WHITE, 1920, 1080, 2) ~= T.FileName("x", "rodin", 20, WHITE, 1920, 1080) and
+        T.FileName("x", "rodin", 20, WHITE, 1920, 1080, "2:0,40,150") ~= T.FileName("x", "rodin", 20, WHITE, 1920, 1080, 2), "T7 an outline, and its colour, are in the name")
+end
+-- RX.11: the new elements name one of the owner's three first, then a family Windows has, then today's engine font
+do
+    local need = { skin_name = "arial_black", skin_plate = "arial_black", upgrades_title = "arial_black", upgrades_status = "impact", upgrades_name = "impact", bar_label = "arial_black" }
+    local bad = {}
+    for name, sys in pairs(need) do
+        local e = T.ELEMENTS[name]
+        if not (e and T.FONTS[e.font] and T.FONTS[e.font].file and e.system == sys and T.FONTS[sys].system and e.fallback) then bad[#bad + 1] = name end
+    end
+    check(#bad == 0, "RX.11 the six new elements: one of the owner's fonts first, then Arial Black or Impact, then today's (%s)", table.concat(bad, ", "))
+    -- (Gill Sans is not in this test's resource/fonts: the bar's labels show the second and third choices)
+    reset_session()
+    taken["Arial Black"] = 9
+    check(T.FontFor("bar_label", 24) == "GSA1Text_arial_black_24", "RX.11 the owner's font missing: the Windows family the engine took (%s)", tostring(T.FontFor("bar_label", 24)))
+    taken["Arial Black"] = nil
+    reset_session()
+    check(T.FontFor("bar_label", 24) == "DermaDefaultBold", "RX.11 neither: today's engine font")
+    for _, f in pairs(T.FONTS) do
+        check(f.system or (f.file and not string.find(f.file, "/", 1, true)), "RX.11 %s: a file name only, looked for in garrysmod/resource/fonts (never shipped)", f.title)
+    end
+end
 
 info("no real font file was used; how a real one looks only the game can show")
 return done()

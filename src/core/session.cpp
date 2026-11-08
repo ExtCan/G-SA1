@@ -662,6 +662,15 @@ int32_t Session::create(int32_t kind, const float pos[3], float yaw, std::string
     c->upgrade_bits = bits;
     c->start_rings = start_rings >= 0 ? std::min(start_rings, kStartRingsMax) : -1;
     c->create_extra = ex.flags;
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+    if (ex.flags & SA1_CREATE_SKIN) {
+        // 1.0.0-beta1: the slot of the skin it wears (its trails' texture variant, WRAP_SKIN_TRAIL)
+        uint32_t own = 0;
+        if (sa1_character_skin_archive(ctx_, id, &own) == SA1_OK && own >= SA1_ARCHIVE_SKIN_FIRST && own <= SA1_ARCHIVE_SKIN_LAST) {
+            c->skin_slot = (int32_t)(own - SA1_ARCHIVE_SKIN_FIRST);
+        }
+    }
+#endif
     c->super_given = ex.super_given;
     c->super_flags = ex.super_given ? ex.super_flags : 0u;
 #if defined(SA1_API_SUPER)
@@ -1370,6 +1379,19 @@ sa1_status Session::render_copy(Character &cr, float alpha, std::string &err)
     return SA1_OK;
 }
 
+#if defined(SA1_API_SKIN)
+// a skin's parts' archive: 61 (the first skin, 0.9.9f), or 1.0.0-beta1's SA1_ARCHIVE_SKIN_FIRST .. _LAST (many skins at once, select 4.3.1)
+static bool skin_archive(uint32_t a)
+{
+#if SA1_API_SKIN >= 3
+    if (a >= SA1_ARCHIVE_SKIN_FIRST && a <= SA1_ARCHIVE_SKIN_LAST) {
+        return true;
+    }
+#endif
+    return a == SA1_ARCHIVE_SKIN;
+}
+#endif
+
 static uint32_t draw_wrap(const sa1_draw &d, const Character &c)
 {
     if (d.archive < 0 || d.texture < 0) {
@@ -1555,7 +1577,7 @@ void Session::build_batches(Character &c)
         // untextured with no error (the Character Select screen batches through its holder: core/frontend.cpp sets its create_extra)
         bool textured = d.archive >= 0 && d.texture >= 0 && ((uint32_t)d.archive < std::max(1u, c.num_archives) ||
                         ((c.create_extra & SA1_CREATE_QUESTION) && (uint32_t)d.archive == SA1_ARCHIVE_QUESTION) ||
-                        ((c.create_extra & SA1_CREATE_SKIN) && (uint32_t)d.archive == SA1_ARCHIVE_SKIN));
+                        ((c.create_extra & SA1_CREATE_SKIN) && skin_archive((uint32_t)d.archive)));
 #elif defined(SA1_API_QUESTION)
         // 0.9.9: the question mark's model draws from SA1_ARCHIVE_QUESTION, which num_archives does not count on purpose
         bool textured = d.archive >= 0 && d.texture >= 0 && ((uint32_t)d.archive < std::max(1u, c.num_archives) ||
@@ -1585,13 +1607,21 @@ void Session::build_batches(Character &c)
             wrap |= WRAP_GOLD;
         }
 #endif
+#if defined(SA1_DRAW_SKIN_TRAIL) && defined(SA1_ARCHIVE_SKIN_FIRST)
+        // 1.0.0-beta1 (select 4.3.2): a Light Speed trail of a skin with a trail colour: the texture's variant 16 + the skin's slot (c.skin_slot, from
+        // sa1_character_skin_archive at the create; the front end's holder: its slot 0's)
+        if ((d.flags & SA1_DRAW_SKIN_TRAIL) && textured && c.skin_slot >= 0) {
+            wrap |= WRAP_SKIN_TRAIL | ((uint32_t)(c.skin_slot & 15) << WRAP_SKIN_SLOT_SHIFT);
+        }
+#endif
         // a lit translucent draw's vertex alpha (T1 above): only draws of equal alpha share a batch
         uint8_t alpha = 255;
         if (alpha_keyed(pass, f, wrap)) {
             bool varied = false, rounded = false;
             uint8_t a = draw_alpha(d, c, count, varied);
             uint64_t state = ((uint64_t)(uint8_t)ar << 48) | ((uint64_t)(uint16_t)tx << 32) | ((uint64_t)(f & 0xFFFFu) << 16) |
-                             ((uint64_t)(bs & 15u) << 12) | ((uint64_t)(bd & 15u) << 8) | (uint64_t)(wrap & 0xFFu);
+                             ((uint64_t)(bs & 15u) << 12) | ((uint64_t)(bd & 15u) << 8) | (uint64_t)(wrap & 0xFFu) |
+                             ((uint64_t)((wrap >> 8) & 0xFFu) << 56);
             alpha = keyed_alpha(c, state, a, rounded);
             c.lit_alpha_varied += varied ? 1u : 0u;
             c.lit_alpha_rounded += rounded ? 1u : 0u;
@@ -2268,11 +2298,19 @@ int32_t Session::create_follower(int32_t kind, const float pos[3], float yaw, in
         // thread (review R.1: a job never inserts into the map)
         c->create_extra = SA1_CREATE_SKIN;
         c->voiceless = o.voiceless;
-        uint32_t nt = 0;
+        uint32_t nt = 0, sa = SA1_ARCHIVE_SKIN;
         std::string te;
-        if (texture_count(kind, SA1_ARCHIVE_SKIN, nt, te)) {
+#if SA1_API_SKIN >= 3
+        // 1.0.0-beta1: the follower's own skin archive (64 + its skin's slot: many skins at once, select 4.3.1)
+        uint32_t own = 0;
+        if (sa1_character_skin_archive(ctx_, id, &own) == SA1_OK && skin_archive(own)) {
+            sa = own;
+            c->skin_slot = own >= SA1_ARCHIVE_SKIN_FIRST ? (int32_t)(own - SA1_ARCHIVE_SKIN_FIRST) : 0;
+        }
+#endif
+        if (texture_count(kind, sa, nt, te)) {
             for (uint32_t i = 0; i < nt; i++) {
-                texture_black(kind, (int32_t)SA1_ARCHIVE_SKIN, (int32_t)i);
+                texture_black(kind, (int32_t)sa, (int32_t)i);
             }
         }
     }

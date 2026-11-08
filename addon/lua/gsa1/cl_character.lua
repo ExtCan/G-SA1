@@ -1000,7 +1000,7 @@ hook.Add("Think", "gsa1_tick", GSA1.Guard("Think", function()
         next_log = now + 0.5
         GSA1.DrainLog()
     end
-    if recreate_at and now >= recreate_at then
+    if recreate_at and now >= recreate_at and not (GSA1.CharSelect and GSA1.CharSelect.IsOpen and GSA1.CharSelect.IsOpen()) then     -- (1.0.0: waits while Character Select is open, select 4.6)
         recreate_at = nil
         GSA1.Recreate("upgrades changed")
     end

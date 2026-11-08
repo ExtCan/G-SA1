@@ -40,6 +40,90 @@ a hitch logger names any slow frame. Single player.
 | Addon: spawn commands, settings in the spawn menu's Options tab (now with a Collision page), input, 60 Hz accumulator, render-target textures, chase camera, respawn on death, server-side player follow, the map loader, moving objects, the hitch logger, the session log, the material pre-warm (every census state's exact material), the feature files, pages and settings (G0) | written, syntax-checked offline (`tools/lua_check.py`) and run in Garry's Mod's own LuaJIT against a mock of the game (`log_test`, `warm_test`, `frame_test`, `seam_test`); 0.5.0 runs in game |
 | Multiplayer (owner-authoritative + puppets) | design hook only (`sh_net.lua`, `gsa1.CreatePuppet` / `gsa1.Pose` in the module) |
 
+## What 1.0.0 beta 1 changes: the skin-ready Character Select, Mecha Sonic, cutscene animations in the emote wheel
+
+From the owner's mockup of a skin-ready Character Select and their notes on 0.9.9e and 0.9.9f. **Not seen in the real game yet**: it runs here against a stand-in for Garry's Mod.
+
+* **The new bottom bar on Character Select**, where the mockup has it: on the left a pink "Y Button" tab, "Upgrades" and a ball that is green when the character shows upgrade models, red when it can't (Metal and Mecha Sonic), yellow when it shows some; on the right a red ball with "1/3" and a pink "D-Pad Up/Down" tab with "Skins".
+* **Up and Down step through a character's skins**: Sonic, Metal Sonic, Mecha Sonic and back. Each skin gets its own pulsing name and nameplate, made once into pictures in `garrysmod/data/gsa1/skins/<character>/<skin>/HUD/` with your test fonts if they're there, else Arial Black. A `name.png` or `nameplate.png` you put there yourself is used and never overwritten.
+* **CHOOSE YOUR UPGRADE** (Y on the controller, U on the keyboard, or a click on the left ball): the green-to-yellow band slides in, A steps the upgrade you're on through active and visible, active and invisible, inactive but visible, and off; R turns all on, L all off; B or Y closes it. "Active" is the ability, as the Upgrades boxes always gave it; "visible" only decides which model the game's own code draws. Start, Enter and Space still pick, and Escape still closes, exactly as before.
+* **Mecha Sonic**, a skin for Sonic, the second robot in Metal Sonic's room on your disc: he runs on his feet with Sonic's jog where Sonic would run with his arms behind his back, never flies and has no fly box, with an orange glow and an orange name. His feet are kept on the floor where Sonic's own would be.
+* **Metal Sonic's Light Speed trails turn purple** and Mecha Sonic's orange, each with its own box.
+* **The doubled line under Metal Sonic is fixed at its cause**: two texts made in a row could share one picture's leftovers.
+
+**Your answers, each in one place:** only the character's own upgrades on the list; Ancient Light only Active / Inactive; Mecha Sonic runs on his feet, with Sonic's jog where Sonic runs with his arms behind his back, never flies and has no fly box, his name orange (his entry in `feat/sh_skins.lua`); each upgrade's name in the main colour of its own model, else the character's, with your yellow for the Light Speed Shoes and silver for the Jet Anklet, the Shovel Claw and the Laser Blaster (the table in `feat/sh_upgrades.lua`).
+
+### The owner checklist
+
+1. Open Character Select on Sonic. The new bar sits where your mockup has it: a green ball with the pink "Y Button" tab and "Upgrades", a red ball with "1/3" and the pink "D-Pad Up/Down" tab with "Skins". The two balls are the game's own, a hair lower than the ones you drew, and "1/3" sits on the right one, so it may look a little lower than in your picture: is it close enough?
+2. Press Up: Metal Sonic in the circle, "2/3", the ball turns red, his own name pulses under him in his blue-violet, and the nameplate says METAL SONIC. Up again: Mecha Sonic, "3/3", an orange name. Up again: Sonic, "1/3", green. Down goes the other way. Nothing else on the screen moves.
+3. Mecha Sonic, the robot you confirmed: silver body, dark quills, an orange visor, big fists, wheels at his heels. **Is he the right size next to Sonic?**
+   * **Pick Mecha Sonic and run faster and faster:** he keeps jogging with his arms swinging, never runs with his arms behind his back, his legs keep up with his speed and his feet stay on the ground. He never flies, and there is no fly box for him.
+4. Pick Mecha Sonic and play: he stands on the ground, walks and runs on his feet, turns into a silver ball when he jumps, makes no voice sounds, doesn't turn Super. **Watch his feet right after he appears, while he walks or runs and when he stops: do they stay on the floor?** Measured outside the game his lowest point is now always where Sonic's own lowest point would be at that moment: on the floor when he stands, and when Sonic's own toes dip under it for a moment (starting to walk, starting a run, stopping) his dip just as deep, never deeper (up to about 3 Garry's Mod units). Only when he stops is that dip a hair deeper than Metal Sonic's at the same moment (about a third of a Garry's Mod unit deeper): is that fine, or should he never dip under the floor at all?
+   * **Carry a prop as Mecha Sonic** (stand at a small prop, facing it, and press B or X, or E), and play any emote where Sonic hangs from or holds something: **do his hands meet what he holds?** The step that keeps his feet on the floor lifts his whole body in any pose, not only on the ground, by up to about 9 Garry's Mod units, so a carried prop may sit low in his hands.
+5. Charge a Light Speed Dash as Mecha Sonic: an orange glow, orange sparkles and streaks. As Metal Sonic: purple glow, **purple trails now**. As Sonic: blue, as always.
+6. On Sonic, press Y: the band slides in from the left, "CHOOSE YOUR UPGRADE", the three upgrades fade in one after the other. Does the speed of the slide and the fade feel right?
+   * **The names' colours:** press Y on Sonic, Tails, Knuckles, Amy, E-102 and Big: each upgrade's name is in its colour (the Long Hammer green, the Warrior Feather blue, the Light Speed Shoes yellow, the Jet Anklet, the Shovel Claw and the Laser Blaster silver, Ancient Light in Sonic's blue, yellow on Super Sonic's spot, violet on Metal Sonic, orange on Mecha Sonic). Is every name easy to read on the band?
+7. The upgrade you're on pulses in time with SONIC under the character.
+8. Up and Down move between them; A steps the one you're on: ACTIVE/VISIBLE both white, then VISIBLE grey, then ACTIVE grey, then both grey. R makes all white; L makes all grey. B or Y closes the band and you're still on Character Select.
+9. With the Light Speed Shoes and the Crystal Ring both "active and visible" (what R sets, and how upgrades you have start), Sonic in the circle wears both. Make the Light Speed Shoes "active and invisible": Sonic in the circle wears his plain shoes at once. Pick him: plain shoes, and the Light Speed Dash still charges.
+10. With the shoes active, make the Crystal Ring "inactive but visible": the ring shows on him, and the dash charges at the slow speed (as without the ring).
+11. Knuckles with both upgrades "active and invisible": plain hands, and he still digs and charges Maximum Heat. Amy's Long Hammer hidden: the normal hammer, which still reaches as far as the long one.
+12. Big: his list is longer and the writing smaller. Is it still easy to read? His Life Belt green, his Power Rod yellow-green, the lures pink-magenta, blue, blue-grey and gold.
+13. **Start still picks and Escape still closes, also with the band open. This is the one to watch.** Change your own character's upgrades and press Escape: the screen closes and your character is rebuilt once. On the keyboard, Enter (or Space) with the band open picks too; E or Right steps the upgrade you're on.
+14. Is anything else on Metal or Mecha Sonic still blue that should be in their colour?
+15. Q menu > Options > G-SA1 > Character: the new "Upgrade models" block, and Mecha Sonic's options under Metal Sonic's. Each does what its line says.
+16. Text page: "Make the skins' name pictures again" makes them again. With your three test fonts in `garrysmod/resource/fonts`, the made names and plates use them; without them, Arial Black. Put your own `name.png` in `garrysmod/data/gsa1/skins/sonic/metalsonic/HUD/` and Character Select shows yours.
+17. The line under Metal Sonic that came out doubled is gone; photo mode's reminder still looks right.
+18. Followers: a Mecha Sonic follower can be spawned like Metal Sonic's.
+19. Tails, Knuckles, Amy, E-102 and Big on Character Select show "1/1" and their own green ball; Super Sonic's Y shows Sonic's upgrades.
+
+### The new options (Q menu > Options > G-SA1)
+
+| ConVar | Default | Where |
+|---|---|---|
+| `gsa1_charselect_skins` | 1 | Character: "Up / Down on a character steps through its skins" (renamed) |
+| `gsa1_charselect_bar` | 1 | Character: "Show the skins and upgrades bar" |
+| `gsa1_charselect_upgrades` | 1 | Character: "Y opens Choose Your Upgrade" |
+| `gsa1_charselect_skin_names` | 1 | Character: "Skins show their own name and nameplate" |
+| `gsa1_upgrade_model_<name>` (16) | 0 | Character, "Upgrade models": "<upgrade> model": with the upgrade / always shown / never shown |
+| `gsa1_upgrade_models_reset` (command) | | Character: button "Every model with its upgrade" |
+| `gsa1_metal_trail` | 1 | Character: "Metal Sonic: Light Speed trails in the skin's colour" |
+| `gsa1_mecha_voice`, `_glow`, `_trail` | 0, 1, 1 | Character: Mecha Sonic's three, as Metal Sonic's (no fly box: he runs on his feet with Sonic's jog) |
+| `gsa1_skins_hud_remake` (command) | | Text: button "Make the skins' name pictures again" |
+
+### Cutscene animations in the emote wheel (lane r1-ev)
+
+* **The cutscene animations are on the emote wheel** for Sonic, Tails, Knuckles, Amy, E-102 and Big: 334 of them from 143 cutscenes, read from your disc while you play and never saved. Your example, Sonic lying on his side with his head on his hand, is EV0003 #2.
+* On the Emote wheel page, set Group to "cutscene" and pick a cutscene: its animations are listed with the cutscene's number and the story it belongs to. "Play the previous one" and "Play the next one" step through them, and a double-click puts one on a wheel slot.
+* **Lying and sitting poses rest on the floor**: "Lift cutscene poses onto the floor" (on by default) raises only the drawing, never the character's place in the game.
+* Followers can play them too, and Metal Sonic uses Sonic's.
+* Eggman's and Tikal's own come with their wheels in beta 3; a cutscene's line as a hint comes in beta 2.
+
+**Known limits:** some of Tails' lying poses may dip a little into the floor, because his swinging tails were measured with his body (fixed in beta 2). Knuckles' two "look at" animations of his Fighting Gloves and Shovel Claw are left out of his cutscene list because they are already among his normal animations.
+
+#### The owner checklist (cutscene animations)
+
+1. Q menu > Options > G-SA1 > Emote wheel, character Sonic. Set Group to "cutscene" and Cutscene to "EV0003", pick #2 and press "Play it on your character". Sonic lies on his side with his head on his hand until you move. Is this the one you meant?
+2. Does he lie on the floor, neither floating nor sunk in? As he sways, a tiny gap may open and close. Untick "Lift cutscene poses onto the floor": he sinks into the floor. Tick it again.
+3. Is his sway as slow as in the cutscene (one loop is about 1.4 seconds)? If not, note "too fast" or "too slow"; the play rate box can fix it meanwhile.
+4. Double-click EV0003 #2 to put it on a wheel slot, then hold TAB and pick it: the same. Move: he gets up smoothly.
+5. "Play the next one" on EV0003: he raises his head and looks up.
+6. For Tails, Knuckles, Amy, Big and E-102, step through a few cutscenes with "Play the next one". Note any animation that looks broken (a twisted arm, floating, sinking) with its number, for example `!note EV0062 #3 floats`. Tails' EV0007 #4 and Big's EV00D0 #1, #7 and #8 were raised: do they rest on the floor?
+7. Do the story names in the Cutscene list match the stories?
+8. The first cutscene animation you play: any pause or stutter? A short "loading the cutscene animation..." may show.
+9. Metal Sonic: EV0003 #2 works on him too.
+10. Give a follower a cutscene animation: it plays, and the follower goes on following afterwards.
+11. Photo mode (K) while lying: the pose stays as it is.
+12. Untick "Offer the cutscene animations": they leave the list, and a slot holding one says "cutscene animations are off".
+
+#### The new options (Q menu > Options > G-SA1 > Emote wheel)
+
+| Option | ConVar | Default |
+|---|---|---|
+| Offer the cutscene animations | `gsa1_wheel_ev` | on |
+| Lift cutscene poses onto the floor | `gsa1_wheel_ev_lift` | on |
+
 ## What 0.9.9g changes: Metal Sonic as a follower
 
 From the owner's request. **Not seen in the real game yet**; an independent check found no fails.

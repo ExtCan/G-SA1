@@ -38,6 +38,8 @@ KINDS = [
     ("tikal", "T", (60, 160, 150)),
     # 0.9.9h: a skin's follower (entities/gsa1_follower_spawner.lua: gsa1_follower_<entry name>; without its icon a skin shows its base's)
     ("metalsonic", "M", (55, 70, 120)),
+    # 1.0.0 beta 1: Mecha Sonic (sadc docs/research/gsa1_100_select.md 4.2), an orange disc like his glow
+    ("mechasonic", "M", (230, 120, 30)),
 ]
 
 

@@ -1,7 +1,7 @@
 -- G-SA1 shared configuration: constants, character names, ConVars, network strings.
 GSA1 = GSA1 or {}
 
-GSA1.VERSION = "0.9.9g"
+GSA1.VERSION = "1.0.0-beta1"
 GSA1.REQUIRED_API = 6          -- gsa1.API_VERSION the addon is written for
 GSA1.SCALE = 4.0               -- Hammer units per SA1 unit (libsa1's Source preset)
 GSA1.MODULE = "gsa1"           -- require("gsa1") -> garrysmod/lua/bin/gmcl_gsa1_<platform>.dll
@@ -28,8 +28,8 @@ GSA1.CHARACTERS = {
     { kind = 4, name = "tikal",    title = "Tikal", nowheel = true, airEndsNothing = true },
     { kind = 8, name = "supersonic", title = "Super Sonic (Vs. Perfect Chaos)" },
     { kind = 0, name = "supersonic_general", title = "Super Sonic (General Gameplay)", form = "general" },
-    -- 0.9.9f (the owner, sadc docs/research/gsa1_rounds_plan.md 14.1bd; metal099e.md): Sonic's world wearing another model, feat/sh_skins.lua's entry names it all. Not secret. CharacterByKind(0) stays Sonic
-    { kind = 0, name = "metalsonic", title = "Metal Sonic", form = "skin", skin = "metalsonic" },
+    -- 0.9.9f, 1.0.0 (sadc docs/research/gsa1_100_select.md 4.1; master D13): the skins' rows (form "skin": Sonic's world wearing another model) come only from feat/sh_skins.lua's K.Register, which puts
+    -- each before the "?" so it stays last. CharacterByKind(0) stays Sonic
     { kind = 8, name = "question", title = "?", form = "question", nowheel = true, noUpgrades = true, secret = true },
 }
 
@@ -39,7 +39,7 @@ GSA1.CHARACTER_ALIASES = {
     super = "supersonic", super_sonic = "supersonic", ["super-sonic"] = "supersonic", vspc = "supersonic",
     supergeneral = "supersonic_general", super_general = "supersonic_general", ssg = "supersonic_general",
     ["?"] = "question", qm = "question", question_mark = "question", questionmark = "question",
-    metal = "metalsonic", metal_sonic = "metalsonic",
+    -- (a skin's aliases come from its entry: feat/sh_skins.lua K.Register)
 }
 
 -- 0.9.9e (the owner, rounds plan 14.1bc: "it should be an unlockable"): an entry with secret = true is in no list and no name finds it until it is

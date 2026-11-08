@@ -1,4 +1,5 @@
--- feat_skins_test.lua - Metal Sonic, the addon's side (round 0.9.9f; sadc docs/research/metal099e.md 7, T1, T3, T4, T5, T6, T7, T8 with its review RM.5, RM.15). The whole addon through its autorun, tests/lua_mock.lua
+-- feat_skins_test.lua - Metal Sonic, the addon's side (round 0.9.9f; sadc docs/research/metal099e.md 7, T1, T3, T4, T5, T6, T7, T8 with its review RM.5, RM.15). 1.0.0 (sadc docs/research/gsa1_100_select.md
+-- 7.2 T1 with RX.4, RX.12): the registry K.Register, Mecha Sonic, the skin.ini's keys, no file naming metalsonic by hand. The whole addon through its autorun, tests/lua_mock.lua
 -- in Garry's Mod's own LuaJIT, a mock of the module's "super" and front end.
 --   lua_host tests/feat_skins_test.lua <tests dir> <addon/lua dir>
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
@@ -108,12 +109,72 @@ check(GSA1.CharacterByKind(0).name == "sonic", "T1 CharacterByKind(0) stays Soni
 check(K.Of(d) == K.SKINS.metalsonic and K.SKINS.metalsonic.base == "sonic" and GSA1.CharacterByName(K.SKINS.metalsonic.base).kind == d.kind, "T1 the base resolves to his kind")
 local names = {}
 for i, c in ipairs(GSA1.CHARACTERS) do names[c.name] = i end
-check(#GSA1.CHARACTERS == 12 and names.metalsonic == names.supersonic_general + 1 and names.question == 12, "T1 after supersonic_general, ? still last, 12 rows (RM.15)")
-check(S.ENTRY_SLOT.metalsonic == 0 and S.SLOT_SKINS[0][1] == "metalsonic" and not S.SLOT_SKINS[1], "T1 Sonic's slot, Up cycles through S.SLOT_SKINS")
+check(#GSA1.CHARACTERS == 13 and names.metalsonic == names.supersonic_general + 1 and names.mechasonic == names.metalsonic + 1 and names.question == 13, "T1 K.Register: after supersonic_general, Metal then Mecha, ? still last, 13 rows (RM.15)")
+check(S.SLOT_SKINS == nil and S.ENTRY_SLOT.metalsonic == nil and S.SlotOf("metalsonic") == 0 and S.SlotOf("mechasonic") == 0, "T1 S.SLOT_SKINS is gone; a skin takes its base's slot")
+do
+    local function same(a, b)
+        if #a ~= #b then return false end
+        for i = 1, #a do if a[i] ~= b[i] then return false end end
+        return true
+    end
+    check(same(K.ForCharacter("sonic"), { "sonic", "metalsonic", "mechasonic" }) and same(K.ForCharacter("mechasonic"), { "sonic", "metalsonic", "mechasonic" }), "T1 K.ForCharacter(sonic) = { sonic, metalsonic, mechasonic }")
+    check(same(K.ForCharacter("tails"), { "tails" }) and same(S.SlotNames(1), { "tails" }) and same(S.SlotNames(6), { "supersonic" }), "T1 Tails' is { tails }; the Super Sonic slot has no skins")
+    local m = GSA1.CharacterByName("mechasonic")
+    check(m and m.kind == 0 and m.form == "skin" and m.title == "Mecha Sonic" and GSA1.CharacterByName("mecha") == m and GSA1.CharacterByName("mecha_sonic") == m, "T1 Mecha Sonic: kind 0, form skin, his aliases")
+    -- [14.1bl] the owner's answer 17 ("he runs instead of flies ... he uses the Jog"): Sonic's own rows, the jog (11) where Sonic runs with his arms behind him (12, 13); RX.4: every field
+    -- K.DescOf reads is still written on his entry
+    local me, dm = K.SKINS.mechasonic, K.DescOf(K.SKINS.mechasonic)
+    local nanim = 0
+    for _ in pairs(me.anim or {}) do nanim = nanim + 1 end
+    check(nanim == 2 and me.anim[12] == 11 and me.anim[13] == 11 and type(me.anim_walk) == "table" and next(me.anim_walk) == nil and type(me.anim_fast) == "table" and next(me.anim_fast) == nil
+        and me.fast_on == 0 and me.fast_off == 0 and me.lift == 0 and me.anim_always == true,
+        "T1 [14.1bl] Mecha's entry: anim exactly { [12] = 11, [13] = 11 }, anim_walk and anim_fast empty, fast_on, fast_off and lift 0, anim_always true")
+    check(dm.fast_on == 0 and dm.fast_off == 0 and dm.lift == 0 and #dm.anim == 4 and dm.anim[1] == 12 and dm.anim[2] == 11 and dm.anim[3] == 13 and dm.anim[4] == 11 and #dm.anim_walk == 0 and #dm.anim_fast == 0,
+        "T1 RX.4: and DescOf sends them (anim 12, 11, 13, 11; no walk or fast rows; lift 0)")
+    local function same_keys(a, b)
+        if #a ~= #b then return false end
+        for i = 1, #a do if a[i] ~= b[i] then return false end end
+        return true
+    end
+    check(same_keys(me.option_keys or {}, { "voice", "glow", "trail" }) and same_keys(K.SKINS.metalsonic.option_keys or {}, { "fly", "walk_fly", "voice", "glow", "trail" }),
+        "T1 [14.1bl] [RY.1] option_keys: Mecha voice, glow, trail; Metal all five")
+    check(#dm.parts == 80 and #dm.keep == 22 and dm.turn == 1 and dm.ball_texture == 86 and dm.scale == 0.52 and dm.model_root == 0x0CA88AC4 and dm.model_first == 0x0CA824C0 and dm.model_end == 0x0CA88AF8,
+        "T1 Mecha's numbers: 20 parts by four, 22 textures, -z, ball 86, scale 0.52 (the prep lane's), his root and bytes")
+    check(dm.id == "mechasonic" and dm.base_kind == 0 and dm.trail_r == 1.00 and dm.trail_g == 0.45 and dm.trail_b == 0.05 and dm.glow_r == 1.00 and dm.glow_inflate == 0.35, "T1 DescOf carries id, base_kind 0, the trail's colour (1.0.0's sa1_skin_desc fields)")
+    local dmeta = K.DescOf(K.SKINS.metalsonic)
+    check(dmeta.id == "metalsonic" and dmeta.base_kind == 0 and dmeta.trail_r == 0.55 and dmeta.trail_b == 1.00, "T1 Metal's trail is his glow's purple")
+    -- the owner's skin.ini keys, by their own names (14.1bj), on both
+    local keys = { "skin_for", "char_name", "char_color", "auto_generate_name", "name_tex_location", "char_nameplate", "auto_generate_nameplate", "nameplate_tex_location", "use_life_icon", "upgrade_model_compatibility" }
+    local missing = {}
+    for _, id in ipairs({ "metalsonic", "mechasonic" }) do
+        for _, k in ipairs(keys) do
+            if K.SKINS[id][k] == nil then missing[#missing + 1] = id .. "." .. k end
+        end
+    end
+    check(#missing == 0, "T1 the skin.ini's keys on both entries (%s)", table.concat(missing, ", "))
+    check(K.SKINS.metalsonic.char_color == "3900b5" and K.SKINS.mechasonic.char_color == "ff8a1c" and K.SKINS.metalsonic.upgrade_model_compatibility == "none", "T1 the owner's example values: Metal 3900b5, Mecha ff8a1c, none")
+    check(K.Location(me, me.name_tex_location) == "gsa1/skins/sonic/mechasonic/HUD/name.png" and K.Location(me, "../../x.png") == nil and K.Location(me, "C:/x.png") == nil, "T1 [skin folder] is garrysmod/data/gsa1/skins/<base>/<id>; no way out of it")
+    -- the registry refuses what it cannot wear
+    check(K.Register("Bad Id", { skin_for = "sonic" }) == false and K.Register("x", { skin_for = "nobody" }) == false and K.Register("tailsskin", { skin_for = "Miles" }) == false and K.Register("y", { skin_for = "sonic", char_color = "#123" }) == false,
+        "T1 K.Register refuses a bad id, an unknown base, a base other than Sonic (1.0.0) and a bad colour")
+    check(#GSA1.CHARACTERS == 13 and GSA1.CHARACTERS[13].name == "question", "T1 a refused entry adds no row")
+    check(K.BaseEntry("Miles").name == "tails" and K.BaseEntry("Gamma").name == "gamma" and K.BaseEntry("Amy").name == "amy", "T1 1.1's ini names map to the bases (Amy included)")
+end
+-- RX.12: no file names metalsonic by hand any more: the registry's entry is the only place (the wheel's lines are r1-ev's files, changed last in the round)
+do
+    local found = {}
+    for _, dir in ipairs({ "/gsa1", "/gsa1/feat", "/autorun", "/entities" }) do
+        for _, f in ipairs(host_list(root .. dir, "*.lua")) do
+            local src = host_read(root .. dir .. "/" .. f) or ""
+            if string.find(src, "metalsonic", 1, true) and not (dir == "/gsa1/feat" and f == "sh_skins.lua") then found[#found + 1] = f end
+        end
+    end
+    check(#found == 0, "T1 RX.12: no file names metalsonic by hand but the registry (%s)", table.concat(found, ", "))
+end
 check(W.UNPLAYABLE ~= nil, "T1 the wheel's rows are loaded")
 do
     local src = host_read(root .. "/gsa1/feat/cl_wheel.lua")
-    check(string.find(src, 'entry == "metalsonic" and W.UNPLAYABLE.sonic', 1, true) ~= nil, "T1 his wheel page greys what Sonic's greys (RM.15)")
+    check(string.find(src, "(skin and W.UNPLAYABLE[skin.base])", 1, true) ~= nil, "T1 a skin's wheel page greys what its base's greys (RM.15; 1.0.0: by the registry)")
     local kf, form = W.KindForm("metalsonic")
     check(kf == 0 and form == 0, "T5 his wheel's rows are Sonic's: kind 0, form 0")
 end
@@ -127,6 +188,49 @@ do
     local upgrades = 0
     for _ in string.gmatch(text, "gsa1_upgrade_light_speed_shoes") do upgrades = upgrades + 1 end
     check(upgrades <= 1, "T1 no extra upgrade block (%d)", upgrades)
+end
+-- [14.1bl] [RY.1, RY.13] at run time, in the suite's ConVar mock (the names are built with "..", so a grep proves nothing): Mecha's three options and no fly box; K.AnimValue gives him FLY always,
+-- never WALK, GLOW and TRAIL by his own ConVars; Metal what 0.9.9g gives
+do
+    local made = {}
+    for _, key in ipairs({ "fly", "walk_fly", "voice", "glow", "trail" }) do
+        made[#made + 1] = key .. ":" .. (M.convars["gsa1_metal_" .. key] and "metal" or "-") .. "/" .. (M.convars["gsa1_mecha_" .. key] and "mecha" or "-")
+    end
+    check(M.convars.gsa1_mecha_fly == nil and M.convars.gsa1_mecha_walk_fly == nil and M.convars.gsa1_mecha_voice ~= nil and M.convars.gsa1_mecha_glow ~= nil and M.convars.gsa1_mecha_trail ~= nil
+        and M.convars.gsa1_metal_fly ~= nil and M.convars.gsa1_metal_walk_fly ~= nil and M.convars.gsa1_metal_voice ~= nil and M.convars.gsa1_metal_glow ~= nil and M.convars.gsa1_metal_trail ~= nil,
+        "T1 [14.1bl] the ConVars made: Metal's five, Mecha's voice, glow and trail; gsa1_mecha_fly and gsa1_mecha_walk_fly never created (%s)", table.concat(made, " "))
+    check(M.convars.gsa1_mecha_voice and M.convars.gsa1_mecha_voice:GetInt() == 0 and M.convars.gsa1_mecha_glow:GetInt() == 1 and M.convars.gsa1_mecha_trail:GetInt() == 1,
+        "T1 [14.1bl] Mecha's defaults: voice 0, glow 1, trail 1")
+    local P = character_page()
+    local boxes = {}
+    for _, c in ipairs(P.calls) do
+        if c[1] == "CheckBox" and type(c[3]) == "string" and string.sub(c[3], 1, 11) == "gsa1_mecha_" then boxes[#boxes + 1] = c[3] end
+    end
+    check(#boxes == 3 and boxes[1] == "gsa1_mecha_voice" and boxes[2] == "gsa1_mecha_glow" and boxes[3] == "gsa1_mecha_trail", "T1 [14.1bl] three check boxes under Mecha Sonic, no fly box (%s)", table.concat(boxes, ", "))
+    local sup = G.SUPER
+    local had = sup.SKIN_ANIM_TRAIL
+    sup.SKIN_ANIM_TRAIL = 8
+    local mecha, metal = K.SKINS.mechasonic, K.SKINS.metalsonic
+    local v = {}
+    for _, f in ipairs({ "0", "1" }) do
+        M.convars.gsa1_metal_fly:SetString(f)
+        v[#v + 1] = K.AnimValue(mecha)
+        v[#v + 1] = K.AnimValue(metal)
+    end
+    M.convars.gsa1_metal_walk_fly:SetString("1")
+    local walk_m, walk_t = K.AnimValue(mecha), K.AnimValue(metal)
+    M.convars.gsa1_metal_walk_fly:SetString("0")
+    M.convars.gsa1_mecha_glow:SetString("0")
+    local noglow = K.AnimValue(mecha)
+    M.convars.gsa1_mecha_glow:SetString("1")
+    M.convars.gsa1_mecha_trail:SetString("0")
+    local notrail = K.AnimValue(mecha)
+    M.convars.gsa1_mecha_trail:SetString("1")
+    sup.SKIN_ANIM_TRAIL = had
+    check(v[1] == 13 and v[3] == 13 and walk_m == 13 and noglow == 9 and notrail == 5,
+        "T1 [14.1bl] K.AnimValue: Mecha FLY + GLOW + TRAIL (13) with gsa1_metal_fly 0 and 1 and gsa1_metal_walk_fly 1, never WALK (%s %s %s); without his glow %s, without his trail %s",
+        tostring(v[1]), tostring(v[3]), tostring(walk_m), tostring(noglow), tostring(notrail))
+    check(v[2] == 12 and v[4] == 13 and walk_t == 15, "T1 Metal as 0.9.9g: fly 0 gives GLOW + TRAIL (%s), fly 1 FLY + GLOW + TRAIL (%s), with the walk too (%s)", tostring(v[2]), tostring(v[4]), tostring(walk_t))
 end
 -- the data never carries the game: numbers and names
 do
@@ -200,50 +304,86 @@ do
     GSA1.cv.character:SetString("sonic")
 end
 
--- ---- T8: Character Select -------------------------------------------------------------------------------------------------------------------------------------------------
+-- [14.1bl] Mecha Sonic spawned: his rows on from his creation (FLY + GLOW; the mock's module has no TRAIL bit), and the log line says he jogs
 do
-    local st = { slot = 0, design = "R" }
+    local logged = {}
+    local log0 = GSA1.Log
+    GSA1.Log = function(cat, fmt, ...)
+        if cat == "skin" then logged[#logged + 1] = string.format(fmt, ...) end
+        if log0 then return log0(cat, fmt, ...) end
+    end
+    options = {}
+    GSA1.Spawn("mechasonic")
+    M.frame(1 / 60)
+    GSA1.Log = log0
+    local C = GSA1.Char
+    local anim, jogs = nil, false
+    for _, o in ipairs(options) do if o.opt == 9 then anim = o.v end end
+    for _, l in ipairs(logged) do
+        if string.find(l, "jogs", 1, true) and not string.find(l, "flies", 1, true) then jogs = true end
+    end
+    check(C and C.name == "mechasonic" and anim == 5 and jogs, "T1 [14.1bl] Mecha spawned: SA1_COPT_SKIN_ANIM %s at creation (FLY + GLOW), the log line says he jogs (%s)", tostring(anim), tostring(logged[#logged]))
+    if GSA1.Char then GSA1.Remove(true) end
+    GSA1.cv.character:SetString("sonic")
+end
+
+-- ---- T8: Character Select (1.0.0: Up / Down step the slot's skins, feat/cl_charselect_bar.lua) --------------------------------------------------------------------------------------------------------------
+do
+    local st = { slot = 0, design = "R", state = { phase = 0 }, skins = {} }
     fe.calls, fe.on = 0, nil
-    check(S.ToggleSkin(st) == true and st.skin == true and fe.on ~= nil and fe.quiet == true, "T8 Up on slot 0: the skin on the screen, voiceless by the entry")
     S.st = st
+    check(S.StepSkin(st, 1) == true and st.skins[0] == 2 and fe.on ~= nil and fe.quiet == true and fe.on.id == "metalsonic", "T8 Up on slot 0: Metal Sonic on the screen, voiceless by the entry")
     check(S.EntryName(0) == "metalsonic" and S.SlotTitle(0) == "Metal Sonic", "T8 S.EntryName(0) and the title follow (%s)", tostring(S.EntryName(0)))
     check(S.EntryName(1) == "tails" and S.SlotTitle(1) == "Tails", "T8 another slot does not")
-    check(string.find(S.SkinHint(st), "METAL SONIC", 1, true) ~= nil, "T8 the line: %s", tostring(S.SkinHint(st)))
-    check(S.ToggleSkin(st) == true and st.skin == false and fe.on == nil and S.EntryName(0) == "sonic", "T8 Up again: Sonic")
-    check(string.find(S.SkinHint(st), "Up: Metal Sonic", 1, true) ~= nil, "T8 the line: %s", tostring(S.SkinHint(st)))
+    check(S.StepSkin(st, 1) == true and st.skins[0] == 3 and fe.on and fe.on.id == "mechasonic" and S.EntryName(0) == "mechasonic", "T8 Up again: Mecha Sonic")
+    check(S.StepSkin(st, 1) == true and st.skins[0] == 1 and fe.on == nil and S.EntryName(0) == "sonic", "T8 Up again: Sonic")
+    check(S.StepSkin(st, -1) == true and st.skins[0] == 3 and S.EntryName(0) == "mechasonic", "T8 Down: back to Mecha Sonic")
+    S.SetSkin(st, 0, 1)
     st.slot = 1
-    check(S.ToggleSkin(st) == false and not st.skin, "T8 Up on another slot: nothing")
+    check(S.StepSkin(st, 1) == false and (st.skins[1] or 1) == 1, "T8 Up on another slot: nothing")
     st.slot = 0
     fe.refuse = "SA1_CREATE_SKIN: no disc file"
-    check(S.ToggleSkin(st) == false and st.skin == false and S.EntryName(0) == "sonic", "T8 a refusal leaves st.skin false: the pick names what the screen showed")
+    check(S.StepSkin(st, 1) == false and (st.skins[0] or 1) == 1 and S.EntryName(0) == "sonic", "T8 a refusal leaves the index: the pick names what the screen showed")
     fe.refuse = nil
     S.st = nil
 end
--- the input code, by its source: in phase 0 only, one press, Up forwarded always (RM.5)
+-- the input code, by its source: in phase 0 only, one press, Up and Down forwarded always (RM.5, F2)
 do
     local src = host_read(root .. "/gsa1/feat/cl_charselect.lua")
-    local a = string.find(src, "band(pressed, S.PAD_UP) ~= 0 and S.SLOT_SKINS[st.slot] and cv.skins:GetBool() and tonumber(st.state.phase) == 0 then S.ToggleSkin(st) end", 1, true)
-    local b = string.find(src, "if band(pad, S.PAD_UP) ~= 0 then b = bor(b, F.UP) end", 1, true)
-    check(a ~= nil and b ~= nil and a < b, "T8 RM.5: Up toggles in phase 0 only, by the press; and it reaches gsa1.FrontendTick on every slot in every phase: the forwarding line stands, unconditional")
-    check(string.find(src, "(code == KEY_MOVE_UP or code == KEY_LETTER_W) and cv.skins:GetBool() and tonumber(st.state.phase) == 0", 1, true) ~= nil, "T8 the keyboard: the same phase test")
+    local bar = host_read(root .. "/gsa1/feat/cl_charselect_bar.lua")
+    check(string.find(src, "if band(pad, S.PAD_UP) ~= 0 then b = bor(b, F.UP) end", 1, true) ~= nil and string.find(src, "if band(pad, S.PAD_DOWN) ~= 0 then b = bor(b, F.DOWN) end", 1, true) ~= nil,
+        "T8 RM.5: Up and Down reach gsa1.FrontendTick on every slot in every phase: the forwarding lines stand, unconditional")
+    check(string.find(bar, "if GSA1.CharSelect.cv.skins:GetBool() and idle(st) then", 1, true) ~= nil and string.find(bar, "return tonumber(st.state and st.state.phase) == 0", 1, true) ~= nil, "T8 the skins step only while idle (phase 0, not picked)")
 end
 -- Start and Escape pinned: the functions compared with the frozen release (when it is there)
 do
+    -- (r1-verify-s: without build/release_0.9.9g, a fresh clone or a scratch copy, these shrank to an info line.) Each is compared with the FNV-1a 32 of 0.9.9g's own, stored here, always;
+    -- with the frozen release beside the addon also with its text, and the stored hash is checked against it
+    local PIN_0999G = { ["S.StartAllowed"] = "faabfcad", ["S.OnKey"] = "64a662a4", ["S.Close"] = "ff72216e", ["S.Finish"] = "74a449e1" }
+    local function fnv1a(s)
+        local h = bit.tobit(0x811C9DC5)
+        for i = 1, #s do
+            h = bit.bxor(h, string.byte(s, i))
+            h = bit.tobit(bit.lshift(h, 24) + h * 403)
+        end
+        return bit.tohex(h)
+    end
     local src = host_read(root .. "/gsa1/feat/cl_charselect.lua")
-    local rel = host_read(root .. "/../../build/release_0.9.9d/addon/lua/gsa1/feat/cl_charselect.lua")
-    if not rel then
-        info("T8 no frozen release beside the addon (a scratch copy of the tree): S.StartAllowed, S.Close, S.Finish, S.OnKey not compared")
-    else
-        local function fn(text, name)
-            local a = string.find(text, "function " .. name, 1, true)
-            if not a then return "" end
-            local b = string.find(text, "\nend\n", a, true)
-            return b and string.sub(text, a, b):gsub("\r", "") or ""
-        end
-        for _, name in ipairs({ "S.StartAllowed", "S.OnKey", "S.Close", "S.Finish" }) do
-            local x, y = fn(src, name), fn(rel, name)
-            check(x ~= "" and x == y, "T8 %s: not one line changed against the release", name)
-        end
+    local rel = host_read(root .. "/../../build/release_0.9.9g/addon/lua/gsa1/feat/cl_charselect.lua")
+    if not rel then info("T8 no frozen release beside the addon (a fresh clone or a scratch copy): S.StartAllowed, S.OnKey, S.Close, S.Finish against 0.9.9g's hashes stored here") end
+    local function fn(text, name)
+        -- (r1-verify2: CRs first, then the search for "\n" .. "end" .. "\n": a CRLF checkout, a Windows clone with core.autocrlf, finds the same block as the frozen release)
+        text = string.gsub(text, "\r", "")
+        local a = string.find(text, "function " .. name, 1, true)
+        if not a then return "" end
+        local b = string.find(text, "\nend\n", a, true)
+        return b and string.sub(text, a, b) or ""
+    end
+    check(fnv1a("a") == "e40c292c", "T8 the pins' hash is FNV-1a 32")
+    for _, name in ipairs({ "S.StartAllowed", "S.OnKey", "S.Close", "S.Finish" }) do
+        local x = fn(src or "", name)
+        check(x ~= "" and fnv1a(x) == PIN_0999G[name] and (not rel or (x == fn(rel, name) and fnv1a(fn(rel, name)) == PIN_0999G[name])),
+            "T8 %s: not one line changed against 0.9.9g (%s)", name, rel and "its stored hash and the frozen release" or "its stored hash")
     end
 end
 return done()

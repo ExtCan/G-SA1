@@ -379,6 +379,17 @@ void super_open(ILuaBase *L, int t)
     raw_num(L, c, "SKIN_ANIM_FLY", SA1_SKIN_ANIM_FLY);
     raw_num(L, c, "SKIN_ANIM_WALK", SA1_SKIN_ANIM_WALK);
     raw_num(L, c, "SKIN_ANIM_GLOW", SA1_SKIN_ANIM_GLOW);            // 0.9.9g
+#if SA1_API_SKIN >= 3
+    // 1.0.0-beta1 (sadc docs/research/gsa1_100_select.md 4.3.1, 4.3.2): many skins at once, each with its own archive; the trails in the skin's colour
+    raw_num(L, c, "SKIN_ANIM_TRAIL", SA1_SKIN_ANIM_TRAIL);
+    raw_num(L, c, "DRAW_SKIN_TRAIL", SA1_DRAW_SKIN_TRAIL);
+    raw_num(L, c, "TEXTURE_VARIANT_SKIN_FIRST", SA1_TEXTURE_VARIANT_SKIN_FIRST);
+    raw_num(L, c, "ARCHIVE_SKIN_FIRST", SA1_ARCHIVE_SKIN_FIRST);
+    raw_num(L, c, "ARCHIVE_SKIN_LAST", SA1_ARCHIVE_SKIN_LAST);
+    raw_num(L, c, "SKINS_MAX", SA1_SKINS_MAX);
+    raw_num(L, c, "WRAP_SKIN_TRAIL", gsa1::WRAP_SKIN_TRAIL);        // a batch drawn with the trail's variant: + the skin's slot << WRAP_SKIN_SLOT_SHIFT
+    raw_num(L, c, "WRAP_SKIN_SLOT_SHIFT", gsa1::WRAP_SKIN_SLOT_SHIFT);
+#endif
 #endif
 #endif
     raw_num(L, c, "EQUIPMENT", 0x8000);
@@ -428,6 +439,29 @@ void super_open(ILuaBase *L, int t)
     L->RawSet(t);
 }
 
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+// 1.0.0-beta1: gsa1.SkinArchive(id) -> archive | nil, message, code: the archive a character's (or follower's) skin parts draw from (sa1_character_skin_archive), for
+// the texture pre-warm before the first draw (feat/cl_warm.lua); "unsupported" for one that wears no skin
+GSA1_FN(gsa1_super_SkinArchive)
+{
+    double id = 0.0;
+    gsa1::Session *se = session();
+    if (!se || !se->ready()) {
+        return push_nil_msg(LUA, "G-SA1 is not initialised (the disc is not loaded yet)", "not_ready");
+    }
+    if (!arg_number(LUA, 1, id)) {
+        return push_nil_msg(LUA, "SkinArchive(id)", "bad_argument");
+    }
+    uint32_t a = 0;
+    sa1_status st = sa1_character_skin_archive(se->ctx(), (sa1_character_id)(int32_t)id, &a);
+    if (st != SA1_OK) {
+        return push_nil_msg(LUA, sa1_status_string(st), st == SA1_ERR_UNSUPPORTED ? "unsupported" : st == SA1_ERR_NOT_FOUND ? "not_found" : "error");
+    }
+    LUA->PushNumber(a);
+    return 1;
+}
+#endif
+
 #if defined(SA1_API_SKIN)
 // 0.9.9f: gsa1.SetVoiceless(id, on) -> true | nil, message (metal099e.md 4.5, host deviation D3; feat/cl_skins.lua): his voices stay out of the mixer, every other sound stays. Also: .muted, how many
 GSA1_FN(gsa1_super_SetVoiceless)
@@ -451,6 +485,9 @@ GSA1_FN(gsa1_super_SetVoiceless)
 const gsa1::FeatureFn k_super_fns[] = {
 #if defined(SA1_API_SKIN)
     {"SetVoiceless", gsa1_super_SetVoiceless},
+#endif
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+    {"SkinArchive", gsa1_super_SkinArchive},
 #endif
     {"SuperOrder", gsa1_super_SuperOrder},
     {"SuperState", gsa1_super_SuperState},

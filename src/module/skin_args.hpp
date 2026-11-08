@@ -70,7 +70,7 @@ inline bool get_array(ILuaBase *L, int t, const char *k, double lo, double hi, s
 }
 
 struct SkinArgs {
-    std::string model_file, model_sha1, tex_file, tex_sha1;
+    std::string model_file, model_sha1, tex_file, tex_sha1, id;
     std::vector<uint16_t> keep;
     std::vector<sa1_skin_part> parts;
     std::vector<uint16_t> anim, walk, fast; // pairs
@@ -152,6 +152,29 @@ struct SkinArgs {
         d.glow_rgb[1] = (float)gg;
         d.glow_rgb[2] = (float)gb;
         d.glow_inflate = (float)inflate;
+#if SA1_API_SKIN >= 3
+        // 1.0.0-beta1 (sadc docs/research/gsa1_100_select.md 4.3.1, 4.3.2): the skin's identity (many skins at once), its base and the trails' colour; absent: none
+        double bk = 0.0, tr = 0.0, tg = 0.0, tb = 0.0;
+        id.clear();
+        get_string(L, t, "id", id);
+        get_number(L, t, "base_kind", bk);
+        get_number(L, t, "trail_r", tr);
+        get_number(L, t, "trail_g", tg);
+        get_number(L, t, "trail_b", tb);
+        if (id.size() > 64) {
+            err = "extras.skin: id: at most 64 characters";
+            return false;
+        }
+        if (!(tr >= 0.0 && tr <= 1.0 && tg >= 0.0 && tg <= 1.0 && tb >= 0.0 && tb <= 1.0)) {
+            err = "extras.skin: trail_r, trail_g, trail_b: 0 to 1";
+            return false;
+        }
+        d.id = id.empty() ? nullptr : id.c_str();
+        d.base_kind = (int32_t)bk;
+        d.trail_rgb[0] = (float)tr;
+        d.trail_rgb[1] = (float)tg;
+        d.trail_rgb[2] = (float)tb;
+#endif
         return true;
     }
 };

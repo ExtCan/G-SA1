@@ -28,6 +28,14 @@
 // pair of a3 (s_wait3) at speed 1, 2 and 0.5 over the same window of pairs - speed 2 advances twice as many frames, 0.5
 // half (within 5 %), speed 0 and nil = speed 1 exactly; Emote(a75, HOLD, 2) reaches HOLDING on frame 64 in about half the
 // pairs of speed 1.
+// Round 100-EV (G-SA1 1.0.0-beta1, libsa1's SA1_API_EMOTE_EVENT; sadc docs/research/emotes_ev.md 7.2, 10.2): gsa1.FEATURES.emote
+// = 4, EmoteEventLoad / EmoteEventReady registered, gsa1.EMOTE's cutscene constants; the key "e<n>"; EmoteEventLoad before
+// the disc -> not_ready; EmoteList's lists grow by the cutscene animations (Sonic 80, Tails 65, Knuckles 35, Amy 88, E-102 31,
+// Big 35) with their fields (the owner's example ev0003_2: event 3, #2, cast sonic + tails, pace 0.7, lift 1.682 - the drawn
+// body's since r1-fix-ev, tools/emote_lift.tsv in libsa1 - notes
+// "lifted onto the floor"); EmoteEventReady false, EmoteEventLoad true, then ready within 5 s (the loader thread); with
+// gm_construct, Emote of one not loaded -> nil, "... not loaded yet", "not_loaded" (the load queued), ready, then Emote ->
+// true, PLAYING; the drain: 88 loads queued, gsa1.Shutdown returns with none waiting (dropped + done = queued).
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -50,6 +58,10 @@
 #include "../src/core/util.hpp"
 #include "../src/module/gsa1_module_internal.hpp"
 #include "gmod_paths.hpp"   // where Garry's Mod is (GARRYSMOD_DIR or Steam's library list)
+
+#if defined(SA1_API_EMOTE_EVENT)
+gsa1::EmoteEventPool &gsa1_emote_event_pool();      // src/module/bind_emote.cpp (round 100-EV)
+#endif
 
 namespace {
 
@@ -110,7 +122,12 @@ int main(int argc, char **argv)
     for (const char *f : {"EmoteList", "Emote", "EmoteStop", "EmoteState"}) {
         fns = fns && g.tab->field(f).type == Type::Function;
     }
-#if defined(SA1_API_EMOTE_HOLD)
+#if defined(SA1_API_EMOTE_EVENT) && defined(SA1_API_EMOTE_HOLD)
+    const double want_version = 4.0;      // round 100-EV: the cutscene animations
+    for (const char *f : {"EmoteEventLoad", "EmoteEventReady"}) {
+        fns = fns && g.tab->field(f).type == Type::Function;
+    }
+#elif defined(SA1_API_EMOTE_HOLD)
     const double want_version = 3.0;      // 0.9.4e: the play rate (version 2: HOLD, 0.9.4b)
 #else
     const double want_version = 1.0;
@@ -140,6 +157,11 @@ int main(int argc, char **argv)
         {"HOLD", SA1_EMOTE_HOLD}, {"STATE_HOLDING", SA1_EMOTE_STATE_HOLDING},
         {"SPEED_MIN", 1.0 / 64.0}, {"SPEED_MAX", 16.0},       // 0.9.4e: libsa1's item check (src/sa1_emote.c)
 #endif
+#if defined(SA1_API_EMOTE_EVENT)
+        {"SOURCE_EVENT", SA1_EMOTE_EVENT}, {"EVENT", SA1_EMOTE_EVENT}, {"CLASS_EVENT", SA1_EMOTE_CLASS_EVENT},
+        {"F_EVENT", SA1_EMOTE_F_EVENT}, {"F_ROOT_MOVES", SA1_EMOTE_F_ROOT_MOVES}, {"F_LIFTED", SA1_EMOTE_F_LIFTED},
+        {"F_RESTS_ON", SA1_EMOTE_F_RESTS_ON}, {"COPT_LIFT", SA1_COPT_EMOTE_LIFT},
+#endif
     };
     std::string wrong;
     for (const auto &c : consts) {
@@ -164,7 +186,12 @@ int main(int argc, char **argv)
                 !gsa1::emote_parse_key("b3", src, idx) && !gsa1::emote_parse_key("a", src, idx) &&
                 !gsa1::emote_parse_key("a-1", src, idx) && !gsa1::emote_parse_key("a 3", src, idx) &&
                 gsa1::emote_key(SA1_EMOTE_ROW, 75) == "a75" && gsa1::emote_key(SA1_EMOTE_EXTRA, 3) == "x3";
-    CHECK(keys, "the keys: a<row> / x<extra> parse and print (a0, a75, a999, x3; not a1000, a075, b3, a, a-1, \"a 3\")");
+    // round 100-EV: "e<n>", a cutscene animation
+    keys = keys && gsa1::emote_parse_key("e3", src, idx) && src == gsa1::kEmoteSourceEvent && idx == 3 &&
+           gsa1::emote_key(gsa1::kEmoteSourceEvent, 3) == "e3" && !gsa1::emote_parse_key("e03", src, idx) &&
+           std::string(gsa1::emote_class_name(15)) == "cutscene";
+    CHECK(keys, "the keys: a<row> / x<extra> / e<n> parse and print (a0, a75, a999, x3, e3; not a1000, a075, b3, a, a-1, "
+          "\"a 3\", e03); class 15 \"cutscene\"");
 
     // without the disc / a character
     std::vector<Val> l0 = L.call("EmoteList", {Val::number(0)});
@@ -187,6 +214,14 @@ int main(int argc, char **argv)
           "nil, \"%s\", bad_argument (the key first); Emote of no character -> not_found; a flag 0x8000 -> bad_argument; "
           "EmoteStop of no character -> not_found, how 5 -> bad_argument; EmoteState of no character -> nil",
           str_of(l0, 1).c_str(), str_of(u1, 1).c_str());
+#if defined(SA1_API_EMOTE_EVENT)
+    {
+        std::vector<Val> e0 = L.call("EmoteEventLoad", {Val::number(0), Val::number(0)});
+        std::vector<Val> e1 = L.call("EmoteEventReady", {Val::number(0), Val::number(0)});
+        CHECK(is_nil_msg(e0) && str_of(e0, 2) == "not_ready" && is_nil_msg(e1) && str_of(e1, 2) == "not_ready" && L.st.empty(),
+              "round 100-EV: without the disc EmoteEventLoad / EmoteEventReady -> nil, not_ready");
+    }
+#endif
 
     // round 0.9.4e: the play rate, checked before the character (bad: "bad_argument"; good: on to "not_found")
     {
@@ -225,9 +260,15 @@ int main(int argc, char **argv)
     CHECK(ist == "ready", "the disc: %s", ist.c_str());
 
     // the catalogues of the 8 entries, no world
+    // round 100-EV: the normal lists of the six end with their cutscene animations (+80, +65, +35, +88, +31, +35; Knuckles 35 since r1-fix-ev)
+#if defined(SA1_API_EMOTE_EVENT)
+    const size_t ev[6] = {80, 65, 35, 88, 31, 35};
+#else
+    const size_t ev[6] = {0, 0, 0, 0, 0, 0};
+#endif
     struct Entry { const char *name; int kind; int form; size_t want; } entries[] = {
-        {"sonic", 0, 0, 107}, {"tails", 2, 0, 140}, {"knuckles", 3, 0, 122}, {"amy", 5, 0, 105}, {"gamma", 6, 0, 89},
-        {"big", 7, 0, 96}, {"supersonic", 8, 0, 92}, {"supersonic_general", 0, 1, 119},
+        {"sonic", 0, 0, 107 + ev[0]}, {"tails", 2, 0, 140 + ev[1]}, {"knuckles", 3, 0, 122 + ev[2]}, {"amy", 5, 0, 105 + ev[3]},
+        {"gamma", 6, 0, 89 + ev[4]}, {"big", 7, 0, 96 + ev[5]}, {"supersonic", 8, 0, 92}, {"supersonic_general", 0, 1, 119},
     };
     std::string sizes, problems;
     for (const Entry &e : entries) {
@@ -278,6 +319,53 @@ int main(int argc, char **argv)
           "Knuckles' k_panch0 is row 54 alone (%s): row 39 is his level clear pose, k_kimepose0 (round 0.9.9a); Eggman: an empty "
           "list", pk.c_str());
 
+#if defined(SA1_API_EMOTE_EVENT)
+    // round 100-EV: the cutscene animations' rows, the load on the loader thread
+    double ev_idx = -1, ev_play = -1;
+    {
+        std::vector<Val> sl = L.call("EmoteList", {Val::number(0)});
+        Val row;
+        bool fields = false;
+        if (sl.size() == 1 && sl[0].type == Type::Table) {
+            for (int i = 1; i <= (int)sl[0].tab->field("n").num; i++) {
+                Val r2 = sl[0].tab->at(i);
+                if (r2.tab->field("name").str == "ev0003_2") row = r2;
+                if (ev_play < 0 && r2.tab->field("name").str == "ev0001_1") ev_play = r2.tab->field("index").num;
+            }
+        }
+        if (row.type == Type::Table) {
+            Val cast = row.tab->field("cast"), evs = row.tab->field("events");
+            bool sonic = false, tails = false;
+            for (int i = 1; cast.type == Type::Table && i <= 9; i++) {
+                sonic = sonic || cast.tab->at(i).str == "sonic";
+                tails = tails || cast.tab->at(i).str == "tails";
+            }
+            ev_idx = row.tab->field("index").num;
+            fields = row.tab->field("source").num == SA1_EMOTE_EVENT && row.tab->field("key").str == gsa1::format("e%d", (int)ev_idx) &&
+                     row.tab->field("event").num == 3 && row.tab->field("event_order").num == 2 && sonic && tails &&
+                     std::fabs(row.tab->field("pace").num - 0.7) < 1e-5 && std::fabs(row.tab->field("lift").num - 1.682) < 0.005 &&
+                     evs.type == Type::Table && evs.tab->at(1).num == 3 && row.tab->field("group").str == "cutscene" &&
+                     row.tab->field("notes").str.find("lifted onto the floor") != std::string::npos &&
+                     row.tab->field("play").str == "loop";
+        }
+        std::vector<Val> r0 = L.call("EmoteEventReady", {Val::number(0), Val::number(ev_idx)});
+        std::vector<Val> ld = L.call("EmoteEventLoad", {Val::number(0), Val::number(ev_idx)});
+        bool ready = false;
+        auto t0 = std::chrono::steady_clock::now();
+        while (!ready && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(5)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            std::vector<Val> rr = L.call("EmoteEventReady", {Val::number(0), Val::number(ev_idx)});
+            ready = rr.size() == 1 && rr[0].type == Type::Bool && rr[0].b;
+        }
+        double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::vector<Val> bad = L.call("EmoteEventLoad", {Val::number(1), Val::number(0)});
+        CHECK(fields && r0.size() == 1 && r0[0].type == Type::Bool && !r0[0].b && ld.size() == 1 && ld[0].b && ready &&
+                  is_nil_msg(bad) && str_of(bad, 2) == "bad_argument" && L.st.empty(),
+              "round 100-EV: Sonic's ev0003_2 (e%g): event 3, #2, cast sonic + tails, pace 0.7, lift 1.682, notes \"lifted onto "
+              "the floor\"; EmoteEventReady false, EmoteEventLoad true, ready after %.0f ms on the loader thread; Eggman -> "
+              "bad_argument", ev_idx, ms);
+    }
+#endif
     std::string map;
     if (!gsa1::read_small_file(bsp, 512u << 20, map, err) || map.empty()) {
         std::printf("  info  no gm_construct (%s): the play checks are skipped\n", bsp.c_str());
@@ -448,8 +536,53 @@ int main(int argc, char **argv)
           "round 0.9.4e: Emote(a75, HOLD, speed 2) holds frame %g after %d pairs (speed 1: frame %g after %d; x%.2f)",
           num_of(hv2, 3), hp2, num_of(hv1, 3), hp1, hratio);
 #endif
+#if defined(SA1_API_EMOTE_EVENT)
+    {
+        // round 100-EV: Emote of a cutscene animation not loaded yet -> not_loaded (the module queued it), then it plays
+        L.call("EmoteStop", {Val::number(id), Val::number(SA1_EMOTE_STOP_NOW)});
+        pairs_of(L, id, 20, 0.0);
+        std::string key = gsa1::format("e%d", (int)ev_play);
+        std::vector<Val> n1 = L.call("Emote", {Val::number(id), Val::string(key)});
+        bool ready = false;
+        for (int i = 0; i < 2500 && !ready; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            std::vector<Val> rr = L.call("EmoteEventReady", {Val::number(0), Val::number(ev_play)});
+            ready = rr.size() == 1 && rr[0].type == Type::Bool && rr[0].b;
+        }
+        std::vector<Val> n2 = L.call("Emote", {Val::number(id), Val::string(key)});
+        pairs_of(L, id, 3, 0.0);
+        std::vector<Val> s3 = L.call("EmoteState", {Val::number(id)});
+        CHECK(ev_play >= 0 && is_nil_msg(n1) && str_of(n1, 2) == "not_loaded" &&
+                  str_of(n1, 1).find("not loaded yet") != std::string::npos && ready && n2.size() == 1 && n2[0].b &&
+                  num_of(s3, 0) == SA1_EMOTE_STATE_PLAYING,
+              "round 100-EV: Emote(%s) before the load -> nil, \"%s\", %s; loaded by the module's loader; then true, "
+              "PLAYING (%g)", key.c_str(), str_of(n1, 1).c_str(), str_of(n1, 2).c_str(), num_of(s3, 0));
+        L.call("EmoteStop", {Val::number(id), Val::number(SA1_EMOTE_STOP_NOW)});
+    }
+#endif
     L.call("Destroy", {Val::number(id)});
     CHECK(L.st.empty(), "the mock stack is empty after every call");
+#if defined(SA1_API_EMOTE_EVENT)
+    {
+        // round 100-EV (review RX.6): loads queued, then gsa1.Shutdown: it returns with none waiting or running
+        gsa1::EmoteEventPool &pool = gsa1_emote_event_pool();
+        uint64_t d0 = pool.done(), x0 = pool.dropped(), q0 = pool.queued();
+        int queued = 0;
+        for (int i = 0; i < 88; i++) {
+            std::vector<Val> q = L.call("EmoteEventLoad", {Val::number(5), Val::number(i)});
+            queued += q.size() == 1 && q[0].b;
+        }
+        L.call("Shutdown", {});
+        uint64_t settled = (pool.done() - d0) + (pool.dropped() - x0), put = pool.queued() - q0;
+        // r1-fix-ev (the verifier's finding: "settled >= 1 && <= 88" was looser than the claim): every load the pool took is
+        // done or dropped by the time gsa1.Shutdown returns, none waiting; a call for an entry already loaded (its cutscene
+        // read by an earlier load) answers true without a job, so the pool takes between 1 and 88
+        CHECK(queued == 88 && pool.waiting() == 0 && put >= 1 && put <= 88 && settled == put,
+              "round 100-EV: 88 of Amy's loads asked for, %llu taken by the pool, then gsa1.Shutdown: none waiting afterwards, "
+              "every one settled (%llu done, %llu dropped)", (unsigned long long)put,
+              (unsigned long long)(pool.done() - d0), (unsigned long long)(pool.dropped() - x0));
+    }
+#endif
     gmod13_close(&state);
     std::printf("\n%d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

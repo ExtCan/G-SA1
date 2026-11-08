@@ -83,6 +83,10 @@
 --   and task 3 / review R.18: every W.DEFAULTS slot of the 8 entries resolves by name to an offered entry that played in
 --   feat_emote_test.cpp (its build/<target>/emote_lists.txt; skipped with a note when the file is missing), and the
 --   generated greyed rows (cl_wheel_rows.lua) are exactly the table rows the disc's catalogue leaves out.
+--   round 100-EV (G-SA1 1.0.0-beta1, sadc docs/research/emotes_ev.md 10.2): (26) the cutscene animations - e<n> lines in the
+--        file, a 0.9.9g file golden, the fallback by name, the waiting rule (at once / after 3 frames / never, the toast
+--        after 0.2 s), a bad disc file said once, the prefetch and the lift option, gsa1_wheel_ev 0, the page's group,
+--        Cutscene list, Notes column and previous / next, W.BuildPicker.
 --   lua_host tests/feat_wheel_test.lua <tests dir> <addon/lua dir>
 local tests, root = arg[1] or "tests", arg[2] or "addon/lua"
 local M = host_load(host_read(tests .. "/lua_mock.lua"), "lua_mock.lua")()
@@ -102,7 +106,7 @@ host_list = function(dir, pat)
     if string.find(dir, "/gsa1/feat$") then
         local keep = {}
         for _, n in ipairs(out) do
-            if string.find(n, "_wheel[%w_]*%.lua$") then keep[#keep + 1] = n end
+            if string.find(n, "_wheel[%w_]*%.lua$") or n == "sh_skins.lua" then keep[#keep + 1] = n end      -- (1.0.0: the skins' rows and wheels come from the registry)
         end
         return keep
     end
@@ -318,6 +322,7 @@ local WANT = {
     gsa1_wheel_summary = { "", nil, nil },
     gsa1_wheel_font = { "0", 0, 3 },                -- 0.9.4b
     gsa1_wheel_hidden = { "0", 0, 1 }, gsa1_wheel_hide_key = { "0", 0, 511 }, gsa1_wheel_speed = { "1", 0.25, 4 },  -- 0.9.4e
+    gsa1_wheel_ev = { "1", 0, 1 }, gsa1_wheel_ev_lift = { "1", 0, 1 },                                   -- round 100-EV
 }
 local bad = {}
 for name, w in pairs(WANT) do
@@ -329,10 +334,11 @@ end
 local mine = 0
 for name in pairs(GSA1.CONVARS) do if string.find(name, "^gsa1_wheel") then mine = mine + 1 end end
 table.sort(bad)
-check(#bad == 0 and mine == 19, "(1) 19 client settings with faces_wheel_plan.md 7.1's defaults (TAB, D-pad down, the left "
+check(#bad == 0 and mine == 21, "(1) 21 client settings with faces_wheel_plan.md 7.1's defaults (TAB, D-pad down, the left "
     .. "mouse button and LT, sensitivity 1, dead zone 0.5, keep 0.5 s, size 1, background 0.75, moving on, in the air off, "
     .. "tap off, the toast on, the read-only mirror; 0.9.4b: the font 0 = Roboto; 0.9.4e: hidden 0, no hide key, play rate "
-    .. "1)%s (%d)", #bad > 0 and (": wrong " .. table.concat(bad, " ")) or "", mine)
+    .. "1; round 100-EV: the cutscene animations offered, lifted onto the floor)%s (%d)",
+    #bad > 0 and (": wrong " .. table.concat(bad, " ")) or "", mine)
 
 -- the page: every setting has a control (vgui stand-ins record the calls)
 local made = {}
@@ -1673,7 +1679,8 @@ else
     end
     local unresolved, notplayed, total = {}, {}, 0
     for _, c in ipairs(W.Entries()) do      -- (0.9.9: Dr. Eggman, Tikal and "?" have no wheel)
-        local l = disc[c.name == "metalsonic" and "sonic" or c.name]     -- (0.9.9f: he plays Sonic's list)
+        local sk = GSA1.Skins and GSA1.Skins.SKINS and GSA1.Skins.SKINS[c.name]
+        local l = disc[sk and sk.base or c.name]     -- (0.9.9f: he plays Sonic's list; 1.0.0: every skin its base's)
         local d = W.DEFAULTS[c.name]
         for s = 1, 8 do
             local o = d and d[s]
@@ -1688,7 +1695,8 @@ else
             end
         end
     end
-    check(#unresolved == 0 and #notplayed == 0 and total == 72, "every default slot of the 9 wheels (%d) resolves by name to "
+    local nwheels = 8 + (GSA1.Skins and #GSA1.Skins.ORDER or 1)
+    check(#unresolved == 0 and #notplayed == 0 and total == 8 * nwheels, "every default slot of the " .. nwheels .. " wheels (%d) resolves by name to "
         .. "an offered entry of its (kind, form) list on the disc that played without a fault%s%s", total,
         #unresolved > 0 and (": unresolved " .. table.concat(unresolved, ", ")) or "",
         #notplayed > 0 and ("; did not play: " .. table.concat(notplayed, ", ")) or "")
@@ -1778,6 +1786,258 @@ do
     end
     check(not before and bk and bp and note, "(0.9.5) with the board's settings the page has the board key binder and the "
         .. "board button combo; the board rows' note points to the Board page")
+end
+-- 26. round 100-EV (G-SA1 1.0.0-beta1; sadc docs/research/emotes_ev.md 4.2, 5, 7.3, 9, 10.2): the cutscene animations -----
+--   e<n> lines parse and print back; a 0.9.9g wheel file (written by build/release_0.9.9g's own sh_wheel.lua when it is
+--   there) reads and prints back with its slot lines unchanged, and 0.9.9g's reader counts an e<n> line as a bad line (the
+--   downgrade of the release notes); a key whose entry has another name falls back by name; the waiting rule (ready at once
+--   / after 3 frames / never); the toast after 0.2 s; prefetch and the lift option on a new character; gsa1_wheel_ev 0;
+--   the page's group, Cutscene list, Notes column, previous / next; W.BuildPicker.
+do
+local EVROWS = {
+    { key = "e0", source = 2, index = 0, name = "ev0001_1", frames = 15, play = "once", group = "cutscene", class = 15,
+      flags = 0x100, dup = 0, dup_key = "", event = 1, event_order = 1, cast = { "sonic" }, events = { 1, 3 },
+      pace = 1, lift = 0.29, notes = "lifted onto the floor, in 2 cutscenes", ready = false, label = "" },
+    { key = "e5", source = 2, index = 5, name = "ev0003_1", frames = 15, play = "once", group = "cutscene", class = 15,
+      flags = 0x100, dup = 0, dup_key = "", event = 3, event_order = 1, cast = { "sonic", "tails" }, events = { 3 },
+      pace = 0.25, lift = 0, notes = "", ready = false, label = "" },
+    { key = "e6", source = 2, index = 6, name = "ev0003_2", frames = 30, play = "loop", group = "cutscene", class = 15,
+      flags = 0x500, dup = 0, dup_key = "", event = 3, event_order = 2, cast = { "sonic", "tails" }, events = { 3 },
+      pace = 0.7, lift = 1.87, notes = "lifted onto the floor", ready = false, label = "" },
+}
+local base = LISTS["0:0"]
+local list26 = { n = base.n + #EVROWS }
+for i = 1, base.n do list26[i] = base[i] end
+for i, r in ipairs(EVROWS) do list26[base.n + i] = r end
+LISTS["0:0"] = list26
+local evReady, evLoads, evOpts = {}, {}, {}
+local oldEmote, oldFeat = G.Emote, G.FEATURES.emote
+G.FEATURES.emote = 4
+G.EMOTE.SOURCE_EVENT, G.EMOTE.EVENT, G.EMOTE.CLASS_EVENT, G.EMOTE.COPT_LIFT = 2, 2, 15, 10
+G.EmoteEventLoad = function(kind, index)
+    rec("EmoteEventLoad", kind, index)
+    evLoads[#evLoads + 1] = { kind, index }
+    return true
+end
+G.EmoteEventReady = function(kind, index)
+    rec("EmoteEventReady", kind, index)
+    local r = evReady[index]
+    if r == "bad" then return nil, "your disc's EV0003.PRS does not match the US 1.005 disc", "bad_disc" end
+    return r == true
+end
+G.SetCharOption = function(id, opt, v)
+    evOpts[#evOpts + 1] = { id, opt, v }
+    return true
+end
+G.Emote = function(id, key, flags, speed)
+    if type(key) == "string" and string.match(key, "^e%d+$") then
+        rec("Emote", id, key, flags, speed)
+        local ix = tonumber(string.sub(key, 2))
+        if evReady[ix] ~= true then return nil, "the cutscene animation is not loaded yet", "not_loaded" end
+        R.state[id] = { 1, nil }
+        return true
+    end
+    return oldEmote(id, key, flags, speed)
+end
+W.ResetHave()
+W.lists = {}
+W.data = W.data or {}
+local L26 = W.ListOf("sonic")
+
+-- the file
+local line = "sonic\t1\t4\te6\tev0003_2\t-\tloop\t"
+local p26, b26 = W.Parse(line .. "\n")
+local out26 = W.Serialize(p26)
+local e_by_key = p26.sonic and W.Resolve(L26, p26.sonic.pages[1][4].body, p26.sonic.pages[1][4].name)
+local e_by_name = W.Resolve(L26, "e99", "ev0003_2")
+check(b26 == 0 and p26.sonic and p26.sonic.pages[1][4].body == "e6" and p26.sonic.pages[1][4].loop == true and
+    string.find(out26, line .. "\n", 1, true) ~= nil and e_by_key and e_by_key.key == "e6" and e_by_name and
+    e_by_name.key == "e6" and string.find(out26, "e<n> (a cutscene animation", 1, true) ~= nil,
+    "(26) an e<n> line parses (0 bad), prints back the same, resolves by key; a key whose entry has another name (e99) "
+    .. "falls back by the name ev0003_2; the header documents e<n>")
+-- a 0.9.9g file: written by 0.9.9g's own reader / writer when the frozen release is here, else a copy of its format
+do
+    local oldsrc = host_read(tests .. "/../build/release_0.9.9g/addon/lua/gsa1/feat/sh_wheel.lua")
+    local golden, W2
+    local mine = GSA1
+    if oldsrc then
+        local okOld = pcall(function()
+            GSA1 = { CHARACTERS = mine.CHARACTERS }
+            host_load(oldsrc, "sh_wheel_099g.lua")()
+            W2 = GSA1.Wheel
+        end)
+        GSA1 = mine
+        if okOld and W2 then
+            local wg = W2.DefaultWheel("sonic")
+            wg.pages[2][3] = { body = "a3", name = "s_wait3", loop = true, speed = 2 }
+            wg.pages[2][4] = { body = "x0", name = "m_taiki0", nohold = true }
+            golden = W2.Serialize({ sonic = wg })
+        end
+    else
+        info("build/release_0.9.9g/addon/lua/gsa1/feat/sh_wheel.lua is not here: the golden file is this test's copy")
+        golden = table.concat({ "# G-SA1 emote wheel (0.9.9g)", "version\t1", "sonic\t1\t1\ta75\ts_kimepose0\tHappy\t-\t",
+            "sonic\t2\t3\ta3\ts_wait3\t-\tloop\t\t2", "sonic\t0\t0\t-\t-\tHappy\t-\t" }, "\n") .. "\n"
+    end
+    local pg, bg = W.Parse(golden)
+    local back = W.Serialize(pg)
+    local same, slots = true, 0
+    for l in string.gmatch(golden, "[^\n]+") do
+        if string.sub(l, 1, 6) == "sonic\t" then
+            slots = slots + 1
+            if not string.find(back, l .. "\n", 1, true) then same = false end
+        end
+    end
+    local downgrade = "?"
+    if W2 then
+        local _, bad2 = W2.Parse(golden .. line .. "\n")
+        downgrade = tostring(bad2)
+    end
+    check(bg == 0 and same and slots >= 3 and (W2 == nil or downgrade == "1"),
+        "(26) a 0.9.9g wheel file (%s) reads (0 bad lines) and its %d slot lines print back unchanged; 0.9.9g's reader counts "
+        .. "an e<n> line as %s bad line (dropped on a downgrade: the release notes)", oldsrc and "made by 0.9.9g's own "
+        .. "sh_wheel.lua" or "the test's copy", slots, downgrade)
+end
+-- the waiting rule, pure
+local a1, s1 = W.EvWait({ at = 10 }, 10.1, false)
+local a2, s2 = W.EvWait({ at = 10 }, 10.25, false)
+local a3 = W.EvWait({ at = 10 }, 11.6, false)
+local a4 = W.EvWait({ at = 10 }, 10.0, true)
+local a5 = W.EvWait({ at = 10 }, 10.0, nil)
+check(a1 == "wait" and s1 == false and a2 == "wait" and s2 == true and a3 == "late" and a4 == "play" and a5 == "fail",
+    "(26) W.EvWait: wait (no text) before 0.2 s, wait with \"loading...\" after it, late after 1.5 s, play when ready, fail "
+    .. "on an error")
+-- through the wheel: ready at once / after 3 frames / never
+local slot = { body = "e6", name = "ev0003_2" }
+R.state = {}
+reset_calls()
+evReady[6] = true
+local okNow = W.PlayBody(C, slot, 1, 1, "test")
+local nNow = #emotes()
+R.state = {}
+reset_calls()
+evReady[6] = nil
+W.PlayBody(C, slot, 1, 1, "test")
+local waiting = W.evWait ~= nil
+frames(3)
+local nWait = #emotes()
+evReady[6] = true
+frames(1)
+local nAfter = #emotes()
+local played = W.playing and W.playing.key == "e6"
+R.state = {}
+reset_calls()
+evReady[6] = nil
+W.toastText = nil
+W.PlayBody(C, slot, 1, 1, "test")
+frames(6)                       -- 0.1 s: no text yet
+local early = W.toastText
+frames(12)                      -- 0.3 s
+local loading = W.toastText
+frames(90)                      -- past 1.5 s
+local gaveUp = W.toastText
+check(okNow and nNow == 1 and waiting and nWait == 1 and nAfter == 2 and played and not (early and
+    string.find(early, "loading", 1, true)) and loading == "loading the cutscene animation..." and W.evWait == nil and
+    gaveUp and string.find(gaveUp, "still loading", 1, true) ~= nil,
+    "(26) the waiting rule: loaded -> plays at once; not loaded -> no second Emote while waiting, played the frame "
+    .. "EmoteEventReady says yes; never -> \"%s\" after 0.2 s, \"%s\" after 1.5 s", tostring(loading), tostring(gaveUp))
+-- a load error: the plain words, logged once
+evReady[6] = "bad"
+W.PlayBody(C, slot, 1, 1, "test")
+frames(1)
+local badToast = W.toastText
+W.PlayBody(C, slot, 1, 1, "test")
+frames(1)
+evReady[6] = nil
+GSA1.LogFlush()
+local _, nlog = string.gsub(M.files["gsa1/log.txt"] or "", "not loaded: your disc's EV0003%.PRS", "")
+check(badToast and string.find(badToast, "does not match the US 1.005 disc", 1, true) ~= nil and nlog == 1,
+    "(26) a bad disc file: the toast says \"%s\"; the log keeps it once (%d)", tostring(badToast), nlog)
+-- prefetch and the lift option when a character appears
+do
+    local wf = W.Edit("sonic")
+    wf.pages[1][5] = { body = "e5", name = "ev0003_1" }
+    evLoads, evOpts = {}, {}
+    hook.Run("GSA1CharacterCreated", C, "test")
+    local fetched5, lift = false, nil
+    for _, l in ipairs(evLoads) do if l[1] == 0 and l[2] == 5 then fetched5 = true end end
+    for _, o in ipairs(evOpts) do if o[1] == C.id and o[2] == 10 then lift = o[3] end end
+    RunConsoleCommand("gsa1_wheel_ev_lift", "0")
+    local lift0 = nil
+    W.EvApplyLift(C.id)
+    for _, o in ipairs(evOpts) do if o[1] == C.id and o[2] == 10 then lift0 = o[3] end end
+    RunConsoleCommand("gsa1_wheel_ev_lift", "1")
+    W.ResetEntry("sonic")
+    check(fetched5 and lift == 1 and lift0 == 0, "(26) a new character: its wheel's cutscene animation e5 fetched "
+        .. "(EmoteEventLoad(0, 5)), the lift option 10 set from gsa1_wheel_ev_lift (1, then 0)")
+end
+-- gsa1_wheel_ev 0: hidden, and a slot holding one plays nothing
+RunConsoleCommand("gsa1_wheel_ev", "0")
+reset_calls()
+local rowsOff = W.PageRows("sonic", L26)
+local anyEv = false
+for _, r in ipairs(rowsOff) do if r.ev then anyEv = true end end
+W.toastText = nil
+local offPlayed = W.PlayBody(C, slot, 1, 1, "test")
+local offToast = W.toastText
+local nOff = #emotes()
+RunConsoleCommand("gsa1_wheel_ev", "1")
+check(not anyEv and not offPlayed and nOff == 0 and offToast == "cutscene animations are off",
+    "(26) gsa1_wheel_ev 0: no cutscene row on the page; a slot holding one plays nothing (\"%s\")", tostring(offToast))
+-- the page: the group, the Cutscene list, the Notes column, previous / next
+if entry then
+    build_page()
+    local groupHas, evCombo, notesCol, boxes = false, nil, false, {}
+    for _, P in ipairs(made) do
+        if P.kind == "ComboBox" and P.choices then
+            for _, ch in ipairs(P.choices) do
+                if ch[1] == "cutscene" then groupHas = true end
+                if string.find(tostring(ch[1]), "EV0003 - Sonic's story - with Tails (3)", 1, true) then evCombo = P end
+            end
+        end
+        for _, c in ipairs(P.calls) do
+            if c[1] == "AddColumn" and c[2] == "Notes" then notesCol = true end
+            if c[1] == "CheckBox" and (c[3] == "gsa1_wheel_ev" or c[3] == "gsa1_wheel_ev_lift") then boxes[c[3]] = true end
+        end
+    end
+    E.SetGroup("cutscene")
+    E.SetEv(3)
+    local shown = {}
+    for _, s in ipairs(E.shown or {}) do shown[#shown + 1] = s.row.short end
+    R.state = {}
+    reset_calls()
+    evReady[0], evReady[5], evReady[6] = true, true, true
+    E.PickRow(E.shown[1] and E.shown[1].row)
+    E.PlayStep(1)
+    local stepped = emotes()
+    local k1 = stepped[1] and stepped[1][3]
+    E.PlayStep(1)
+    local k2 = (emotes()[2] or {})[3]
+    E.Select(1)
+    check(groupHas and evCombo ~= nil and notesCol and boxes.gsa1_wheel_ev and boxes.gsa1_wheel_ev_lift and
+        table.concat(shown, ",") == "EV0001 #1,EV0003 #1,EV0003 #2" and k1 == "e5" and k2 == "e6",
+        "(26) the page: the group \"cutscene\", the Cutscene list (\"EV0003 - Sonic's story - with Tails (3)\"), the Notes "
+        .. "column, both check boxes; EV0003 lists %s (EV0001 #1 is used there too); \"Play the next one\" plays %s, "
+        .. "then %s", table.concat(shown, ", "), tostring(k1), tostring(k2))
+    -- W.BuildPicker
+    local picked
+    made = {}
+    local pp = standin("DForm")
+    local P = W.BuildPicker(pp, "sonic", function(r) picked = r.e.key end)
+    P.SetEv(3)
+    local lv = P.list
+    local n3 = lv and #lv.lines or 0
+    if lv and lv.DoDoubleClick and lv.lines[3] then lv.DoDoubleClick(lv, 3, lv.lines[3]) end
+    check(P and P.combo and n3 == 3 and picked == "e6",
+        "(26) W.BuildPicker: a Cutscene list and the chosen cutscene's rows (%d for EV0003); a double-click hands the row "
+        .. "to the caller (%s)", n3, tostring(picked))
+end
+LISTS["0:0"] = base
+G.Emote, G.FEATURES.emote = oldEmote, oldFeat
+G.EmoteEventLoad, G.EmoteEventReady, G.SetCharOption = nil, nil, nil
+W.ResetHave()
+W.lists = {}
+W.evWait = nil
+R.state = {}
 end
 GSA1.LogFlush()
 local errs = {}

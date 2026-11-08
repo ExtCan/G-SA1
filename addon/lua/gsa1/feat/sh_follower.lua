@@ -103,7 +103,7 @@ cv.spacing = GSA1.ConVar("gsa1_follower_spacing", 64, "Room between followers in
     .. "they can stand inside each other)", 0, Fo.SPACING_MAX)
 cv.emotes = GSA1.ConVar("gsa1_follower_emotes", 1, "Your followers play the same slot of their own wheel when you play one from the emote wheel", 0, 1)
 -- 0.9.9h: the Spawn button's skin (the page's Character list sets both): worn while gsa1_follower_kind is its base kind
-cv.skin = GSA1.ConVar("gsa1_follower_skin", "", "The skin the Spawn button's follower wears over its world, while gsa1_follower_kind is its base (metalsonic = Metal Sonic over Sonic; empty = none)")
+cv.skin = GSA1.ConVar("gsa1_follower_skin", "", "The skin the Spawn button's follower wears over its world, while gsa1_follower_kind is its base (a skin's name as gsa1_spawn takes it; empty = none)")
 
 -- the spot of the i-th of n followers, x, y in HU (pure: the tests call it): a sunflower in world axes. One follower: the game's own place
 function Fo.SpotOf(i, n, s)

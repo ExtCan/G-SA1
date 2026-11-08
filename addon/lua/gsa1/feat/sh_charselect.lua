@@ -11,9 +11,8 @@ S.SUPER_SLOT = 6
 -- the game's slot -> G-SA1's list entry (sh_config.lua GSA1.CHARACTERS)
 S.SLOT_ENTRY = { [0] = "sonic", [1] = "tails", [2] = "knuckles", [3] = "amy", [4] = "big", [5] = "gamma", [6] = "supersonic" }
 -- (Dr. Eggman and Tikal are not on the game's ring: S.SlotOf gives them Sonic's slot)
-S.ENTRY_SLOT = { sonic = 0, tails = 1, knuckles = 2, amy = 3, big = 4, gamma = 5, supersonic = 6, supersonic_general = 6, question = 6, metalsonic = 0 }
--- 0.9.9f (the owner, rounds plan 14.1bd: "you hover over Sonic and press UP on the D-pad"): the skins of a slot; a later skin is one more name and Up cycles through them
-S.SLOT_SKINS = { [0] = { "metalsonic" } }
+-- (1.0.0, sadc docs/research/gsa1_100_select.md 4.9: a skin takes its base's slot through the registry, feat/sh_skins.lua; S.SLOT_SKINS is gone: GSA1.Skins.ForCharacter lists a slot's skins)
+S.ENTRY_SLOT = { sonic = 0, tails = 1, knuckles = 2, amy = 3, big = 4, gamma = 5, supersonic = 6, supersonic_general = 6, question = 6 }
 -- 0.9.9e (the owner, rounds plan 14.1bc: "When you use the Adventure character select, Super Sonic (Vs. Perfect Chaos) should always be the choice"): slot 6 always plays him, the "?" locked or not.
 -- gsa1_charselect_super, its one-time move and its combo box are gone; a value saved in them is ignored
 S.SUPER_ENTRY = "supersonic"
@@ -32,9 +31,22 @@ function S.EntryOf(slot)
     return S.SLOT_ENTRY[slot]
 end
 
--- the slot of a list entry (the current character -> the first selection; an unknown name: Sonic's)
+-- the slot of a list entry (the current character -> the first selection; an unknown name: Sonic's). A skin: its base's
 function S.SlotOf(name)
-    return S.ENTRY_SLOT[name] or 0
+    local s = S.ENTRY_SLOT[name]
+    if s then return s end
+    local K = GSA1.Skins
+    local base = K and K.SKINS and K.SKINS[name] and K.SKINS[name].base
+    return base and S.ENTRY_SLOT[base] or 0
+end
+
+-- 1.0.0: the names a slot steps through on Up / Down: { the slot's own entry, its skins in registration order } (GSA1.Skins.ForCharacter). The "?" slot (6) has none
+function S.SlotNames(slot)
+    local own = S.SLOT_ENTRY[slot]
+    if not own then return {} end
+    local K = GSA1.Skins
+    if slot == S.SUPER_SLOT or not (K and K.ForCharacter) then return { own } end
+    return K.ForCharacter(own)
 end
 
 -- from slot `from` to slot `to` on a ring of n: direction (-1 left, +1 right, 0 there already) and the presses. RIGHT is the

@@ -72,6 +72,11 @@ public:
     // 0.9.9f (sa1_frontend_set_skin; nullptr: Sonic): voiceless: slot 0's voices stay out of the mixer while it is on (metal099e.md 4.5)
     sa1_status set_skin(const sa1_skin_desc *skin, bool voiceless, std::string &err);
 #endif
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+    // 1.0.0-beta1 (sa1_frontend_set_upgrade_models; sadc docs/research/gsa1_100_select.md 4.3.3): the display set of the upgrades in the menu's world, for the TUs of
+    // `kind` (SA1_CHAR_*); value 0 = the game, SA1_UPGRADE_MODELS_ON | bits = these upgrades' parts
+    sa1_status set_upgrade_models(int32_t kind, uint32_t value, std::string &err);
+#endif
     // whole frames of 1/60 s for dt (libsa1 keeps the rest; at most 8); buttons: SA1_FRONTEND_B_*
     sa1_status tick(float dt, float sx, float sy, uint32_t buttons, uint32_t &frames, std::string &err);
     sa1_status state(sa1_frontend_state &out, std::string &err);

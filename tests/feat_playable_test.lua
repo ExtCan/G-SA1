@@ -78,8 +78,8 @@ check(ke == 1 and de.title == "Dr. Eggman" and de.nowheel == true and de.airEnds
     "the list: \"Dr. Eggman\" (kind 1) and \"Tikal\" (kind 4), no wheel, the air timer's end kept")
 local order = {}
 for i, c in ipairs(GSA1.CHARACTERS) do order[c.name] = i end
-check(#GSA1.CHARACTERS == 12 and order.eggman == order.big + 1 and order.tikal == order.big + 2 and order.supersonic == order.big + 3 and
-    order.question == 12, "after Big, before the Super Sonics; \"?\" last (%d entries)", #GSA1.CHARACTERS)
+check(#GSA1.CHARACTERS == 13 and order.eggman == order.big + 1 and order.tikal == order.big + 2 and order.supersonic == order.big + 3 and
+    order.question == 13, "after Big, before the Super Sonics; \"?\" last (%d entries)", #GSA1.CHARACTERS)
 check(GSA1.CharacterByKind(1) == de and GSA1.CharacterByKind(4) == dt and GSA1.CharacterByName("1") == de and GSA1.CharacterByName("4") == dt and
     GSA1.CharacterByKind(0).name == "sonic" and GSA1.CharacterByKind(8).name == "supersonic" and GSA1.CharacterByName("8").name == "supersonic" and
     GSA1.CharacterByName("0").name == "sonic", "by kind and by number: 1 and 4 are theirs; 8 stays Super Sonic and 0 Sonic")

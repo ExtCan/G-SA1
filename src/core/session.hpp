@@ -83,6 +83,11 @@ enum : uint32_t {
     // and material, never merged with the game-coloured ones. Untextured gold draws (the charged glow) need nothing: libsa1
     // gives them gold vertex colours
     WRAP_GOLD = 0x10u,
+    // 1.0.0-beta1 (sadc docs/research/gsa1_100_select.md 4.3.2; libsa1's SA1_DRAW_SKIN_TRAIL): a Light Speed trail of a character wearing a skin with a trail
+    // colour draws the texture's variant SA1_TEXTURE_VARIANT_SKIN_FIRST + the skin's slot (gsa1.Texture(kind, index, archive, 16 + slot)): WRAP_SKIN_TRAIL
+    // with the slot in bits 9..12 (WRAP_SKIN_SLOT_SHIFT); its own render target and material, never merged with the game-coloured ones
+    WRAP_SKIN_TRAIL = 0x100u,
+    WRAP_SKIN_SLOT_SHIFT = 9u,
 };
 
 // SA1_DRAW_* bits that select a batch's material (the others are informational). SA1_DRAW_SHADOW (libsa1 of G-SA1 0.8):
@@ -294,6 +299,7 @@ struct Character {
     // 0.9.3 (Super Sonic): the CreateExtra given to create() and the form after the last tick
     uint32_t create_extra = 0;         // CreateExtra::flags
     bool voiceless = false;            // 0.9.9f (a skin, set_voiceless): his voices stay out of the mixer, his sounds do not (voice_class)
+    int32_t skin_slot = -1;            // 1.0.0-beta1: the worn skin's slot in libsa1 (its archive - SA1_ARCHIVE_SKIN_FIRST), -1: none or not known (WRAP_SKIN_TRAIL)
     uint64_t voices_muted = 0;
     bool super_given = false;          // CreateExtra::super_given
     uint32_t super_flags = 0;          // CreateExtra::super_flags (with super_given)

@@ -103,6 +103,10 @@ T.WRAP_MASK = WRAP_MASK
 -- (the wrap is part of its name); the alpha handling stays the base texture's (the variant keeps every alpha)
 local WRAP_GOLD = 0x10
 T.WRAP_GOLD = WRAP_GOLD
+-- 1.0.0-beta1 (sadc docs/research/gsa1_100_select.md 4.3.2; session.hpp WRAP_SKIN_TRAIL): a Light Speed trail of a skin with a trail colour draws the texture's
+-- variant 16 + the skin's slot (the slot in the wrap's bits 9..12), the same way as the gold one; a refused variant draws the game's texture
+local WRAP_SKIN_TRAIL, WRAP_SKIN_SHIFT = 0x100, 9
+T.WRAP_SKIN_TRAIL = WRAP_SKIN_TRAIL
 local DRAW_BLEND, DRAW_ALPHA_TEST, DRAW_DOUBLE_SIDED = 0x1, 0x2, 0x4
 local DRAW_UNLIT, DRAW_PALETTE_LIT, DRAW_ADDITIVE = 0x10, 0x20, 0x200
 -- archives whose textures are not listed for painting at a spawn (T.Prepare): OBJ_REGULAR (96 textures per character
@@ -187,9 +191,17 @@ function T.Get(kind, archive, index, wrap, urgent, why)
     end
     local t0 = SysTime()
     local gold = band(wrap, WRAP_GOLD) ~= 0
+    local skinv = band(wrap, WRAP_SKIN_TRAIL) ~= 0 and (16 + band(bit.rshift(wrap, WRAP_SKIN_SHIFT), 15)) or nil
     local info
     if gold then
         info = info_of(kind, archive, index, 1)
+    elseif skinv then
+        info = info_of(kind, archive, index, skinv)
+        if not info then
+            info = info_of(kind, archive, index)
+            skinv = nil
+        end
+        gold = info ~= nil and skinv ~= nil      -- (e.gold: a variant's render target, never read back as the game's texture)
     else
         info = info_of(kind, archive, index)
     end

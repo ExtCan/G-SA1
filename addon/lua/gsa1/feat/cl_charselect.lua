@@ -43,7 +43,7 @@ local cv = {
     qmark  = GSA1.ConVar("gsa1_charselect_qmark", 1, "The question mark's texture: 1 = the gold "
         .. "in the menu's own archive (sstx_body), 0 = as the Dreamcast draws it (the words Player Select mirrored over it)", 0, 1),
     -- 0.9.9f (the owner, rounds plan 14.1bd; sadc docs/research/metal099e.md 5.2)
-    skins  = GSA1.ConVar("gsa1_charselect_skins", 1, "Character Select: Up on Sonic switches to Metal Sonic (off: Up does what it did)", 0, 1),
+    skins  = GSA1.ConVar("gsa1_charselect_skins", 1, "Character Select: Up / Down on a character steps through its skins (off: Up and Down do what they did)", 0, 1),
 }
 S.cv = cv
 
@@ -114,13 +114,9 @@ end
 -- the title of a slot's button
 function S.SlotTitle(slot)
     if slot == S.SUPER_SLOT then return "Super Sonic" end
-    local sk = S.st and S.st.skin and S.SLOT_SKINS[slot]
-    if sk then
-        local e = GSA1.CharacterByName and GSA1.CharacterByName(sk[1])
-        return e and e.title or sk[1]
-    end
-    local c = GSA1.CharacterByName and GSA1.CharacterByName(S.SLOT_ENTRY[slot])
-    return c and c.title or tostring(S.SLOT_ENTRY[slot])
+    local name = S.EntryName(slot)
+    local c = GSA1.CharacterByName and GSA1.CharacterByName(name)
+    return c and c.title or tostring(name)
 end
 
 -- the current character's slot, else the character setting's
@@ -130,51 +126,14 @@ function S.FirstSlot()
     return S.SlotOf(GSA1.cv and GSA1.cv.character and GSA1.cv.character:GetString() or "sonic")
 end
 
--- the entry a slot plays
+-- the entry a slot plays: 1.0.0 (select 4.5), the slot's shown skin (st.skins[slot], 1 = the slot's own character; S.SetSkin in feat/cl_charselect_bar.lua sets it)
 function S.EntryName(slot)
-    local sk = S.st and S.st.skin and S.SLOT_SKINS[slot]
-    if sk then return sk[1] end
+    local i = S.st and S.st.skins and S.st.skins[slot]
+    if i and i > 1 then
+        local name = S.SlotNames(slot)[i]
+        if name then return name end
+    end
     return S.EntryOf(slot)
-end
-
--- 0.9.9f: Up on a slot with skins: the skin on the spot, again the slot's own character. The game does not know (Up is still forwarded on Design R, where it does nothing while idle, MEASURED, and moves the
--- optional dialog's cursor: metal099e.md RM.5). A module without skins or a disc without the files: st.skin stays false and the log says why, so the pick cannot name a skin the screen did not show
-function S.ToggleSkin(st)
-    local sk = S.SLOT_SKINS[st.slot]
-    if not sk then return false end
-    local name, on = sk[1], not st.skin
-    local K = GSA1.Skins
-    local skin = K and K.SKINS[name]
-    local ok, msg, code = true, nil, nil
-    if not (skin and gsa1 and gsa1.SUPER and gsa1.SUPER.CREATE_SKIN and gsa1.FrontendSkin) then
-        ok, msg = false, "this module has no skins"
-    elseif st.design == "R" then
-        if on then
-            ok, msg, code = gsa1.FrontendSkin(K.DescOf(skin), K.Voiceless(skin))
-        else
-            ok, msg, code = gsa1.FrontendSkin(nil)
-        end
-    end
-    if not ok then
-        st.skin = false
-        log("the skin %s: refused: %s (%s)", name, tostring(msg), tostring(code))
-        return false
-    end
-    st.skin = on
-    log("slot %d: %s", st.slot, on and name or tostring(S.EntryOf(st.slot)))
-    return true
-end
-
--- the line on a slot with skins; nil: none
-function S.SkinHint(st)
-    if not cv.skins:GetBool() then return nil end
-    local sk = S.SLOT_SKINS[st.slot]
-    if not sk then return nil end
-    local e = GSA1.CharacterByName and GSA1.CharacterByName(sk[1])
-    local o = GSA1.CharacterByName and GSA1.CharacterByName(S.EntryOf(st.slot))
-    local title, own = e and e.title or sk[1], o and o.title or tostring(S.EntryOf(st.slot))
-    if st.skin then return string.upper(title) .. "   (Up: " .. own .. ")" end
-    return "Up: " .. title
 end
 
 -- music ----------------------------------------------------------------------------------------------------------------------
@@ -246,8 +205,10 @@ function S.PaintS(st, W, H)
     if st.fallback then
         draw.SimpleText(st.fallback, "GSA1CharSelectHint", W / 2, H * 0.89, COL_HINT, mid, mid)
     end
-    local hint = S.SkinHint(st)
+    -- 1.0.0 (select 4.4, 4.9): the line under the buttons and the Upgrades panel (feat/cl_charselect_bar.lua)
+    local hint = S.SkinLineS and S.SkinLineS(st)
     if hint then skin_line(hint, W, H, 0.79) end
+    if S.Overlay then S.Overlay(st, nil, W, H) end
 end
 
 function S.Move(dir)
@@ -274,25 +235,26 @@ local function step_s(st)
     local raw, sx = pad_read()
     local pressed = band(raw, bnot(st.padWas))
     st.padWas = raw
+    if S.PadFilter then pressed, sx = S.PadFilter(st, pressed, raw, sx) end
     local dir = (sx <= -S.STICK and -1) or (sx >= S.STICK and 1) or 0
     if dir ~= 0 and dir ~= st.stickWas then S.Move(dir) end
     st.stickWas = dir
     if band(pressed, S.PAD_LEFT) ~= 0 then S.Move(-1) end
     if band(pressed, S.PAD_RIGHT) ~= 0 then S.Move(1) end
-    if band(pressed, S.PAD_UP) ~= 0 and cv.skins:GetBool() then S.ToggleSkin(st) end
     if band(pressed, S.PAD_A + S.PAD_START) ~= 0 then return S.Finish(st.slot) end
     if band(pressed, S.PAD_B + S.PAD_BACK) ~= 0 then return S.Close("back") end
 end
 
 local function key_s(st, code)
+    if S.KeyFilter and S.KeyFilter(st, code) then return end
     if code == KEY_MOVE_LEFT or code == KEY_LETTER_A then return S.Move(-1) end
     if code == KEY_MOVE_RIGHT or code == KEY_LETTER_D then return S.Move(1) end
-    if (code == KEY_MOVE_UP or code == KEY_LETTER_W) and cv.skins:GetBool() then return S.ToggleSkin(st) end
     if code == KEY_PICK or code == KEY_PICK_PAD or code == KEY_PICK_SPACE then return S.Finish(st.slot) end
     if code == KEY_GO_BACK then return S.Close("back") end
 end
 
 local function mouse_s(st, code, mx, my, W, H)
+    if S.MouseFilter and S.MouseFilter(st, code, mx, my, W, H) then return end
     if code == M_RIGHT then return S.Close("back") end
     if code == M_LEFT then
         local slot = S.ButtonAt(mx, my, W, H)
@@ -349,11 +311,8 @@ local function start_r(st)
     end
     st.design, st.F = "R", gsa1.FRONTEND
     st.scr, st.batches, st.events, st.state, st.m = {}, {}, {}, {}, {}
-    if st.skin then
-        -- opened while you are him: it opens on him
-        st.skin = false
-        S.ToggleSkin(st)
-    end
+    -- opened while you are a skin: it opens on him (the screen's slot 0 wears him)
+    if S.ApplySkins then S.ApplySkins(st) end
     st.keys, st.pulse, st.mask, st.frame, st.slots = {}, 0, st.padWas, 0, S.SLOTS
     st.names = {}
     -- the characters' textures come in the budgeted way, the selected kind's first (T.Material's urgent T.Get)
@@ -401,12 +360,12 @@ end
 
 local function key_r(st, code)
     local F = st.F
+    if S.KeyFilter and S.KeyFilter(st, code) then return end
     if code == KEY_PICK or code == KEY_PICK_PAD or code == KEY_PICK_SPACE then return pick_input(st, code) end
     if st.picked then return end
     if code == KEY_MOVE_LEFT or code == KEY_LETTER_A then return pulse(st, F.LEFT, code) end
     if code == KEY_MOVE_RIGHT or code == KEY_LETTER_D then return pulse(st, F.RIGHT, code) end
     if code == KEY_GO_BACK then return pulse(st, F.B, code) end
-    if (code == KEY_MOVE_UP or code == KEY_LETTER_W) and cv.skins:GetBool() and tonumber(st.state.phase) == 0 then return S.ToggleSkin(st) end
 end
 
 -- the screen's bounding box of these vertices, on W x H; nil: none
@@ -464,6 +423,7 @@ function S.SphereAt(st, mx, my, m)
 end
 
 local function mouse_r(st, code, mx, my, W, H)
+    if S.MouseFilter and S.MouseFilter(st, code, mx, my, W, H) then return end
     if code == M_RIGHT then
         if not st.picked then pulse(st, st.F.B) end
         return
@@ -515,6 +475,7 @@ local function step_r(st)
     local pad = band(raw, bnot(st.mask))
     local pressed = band(pad, bnot(st.padWas))
     st.padWas = raw
+    if S.PadFilter then pressed = S.PadFilter(st, pressed, pad, sx, sy) end
     local b = 0
     if st.picked then
         if band(pressed, S.PAD_A + S.PAD_START) ~= 0 then
@@ -523,8 +484,7 @@ local function step_r(st)
         end
         sx, sy = 0, 0
     else
-        -- 0.9.9f: on a slot with skins, only while the screen is idle (phase 0); Up is still forwarded, always (RM.5)
-        if band(pressed, S.PAD_UP) ~= 0 and S.SLOT_SKINS[st.slot] and cv.skins:GetBool() and tonumber(st.state.phase) == 0 then S.ToggleSkin(st) end
+        -- (1.0.0: Up and Down step the skins in S.PadFilter, only while the screen is idle; they are still forwarded, always: RM.5, F2)
         if band(pad, S.PAD_LEFT) ~= 0 then b = bor(b, F.LEFT) end
         if band(pad, S.PAD_RIGHT) ~= 0 then b = bor(b, F.RIGHT) end
         if band(pad, S.PAD_UP) ~= 0 then b = bor(b, F.UP) end
@@ -532,6 +492,7 @@ local function step_r(st)
         if band(pad, S.PAD_A) ~= 0 then b = bor(b, F.A) end
         if band(pad, S.PAD_START) ~= 0 then b = bor(b, F.START) end
         if band(pad, S.PAD_B + S.PAD_BACK) ~= 0 then b = bor(b, F.B) end
+        if st.panel_up then b, sx, sy = band(b, F.START), 0, 0 end     -- 1.0.0: the Upgrades panel has the pad but Start (RX.1)
         for code, kb in pairs(st.keys) do
             if key_down(code) then b = bor(b, kb) else st.keys[code] = nil end
         end
@@ -560,7 +521,7 @@ end
 
 -- the 2D part of the paint: the draws behind the 3D or in front of it, in the list's order; the sky is repeated to the edges (the
 -- wide screen rule; gsa1_charselect_wide stretches instead), every other vertex at x <= 0 or >= 640 goes to the screen's edge
-local function emit_draw(V, first, count, m, dx, dy, whole)
+local function emit_draw(V, first, count, m, dx, dy, whole, tint)
     local pos = S.vpos
     mesh.Begin(MATERIAL_TRIANGLES, math.floor(count / 3))
     for v = first, first + count - 1 do
@@ -574,7 +535,7 @@ local function emit_draw(V, first, count, m, dx, dy, whole)
         pos:SetUnpacked(x, y, 0)
         mesh.Position(pos)
         mesh.TexCoord(0, V[o + 3], V[o + 4])
-        mesh.Color(V[o + 5], V[o + 6], V[o + 7], V[o + 8])
+        if tint then mesh.Color(tint[1], tint[2], tint[3], V[o + 8]) else mesh.Color(V[o + 5], V[o + 6], V[o + 7], V[o + 8]) end
         mesh.AdvanceVertex()
     end
     mesh.End()
@@ -591,8 +552,12 @@ local function paint_2d(st, m, front, show_file, H_mat, T)
         local prim, first, count, archive, tex, flags = D[k + 1], D[k + 2], D[k + 3], D[k + 4], D[k + 5], D[k + 6]
         if count >= 3 and prim == 0 and (D[k + 9] > F.PRI_3D) == front then
             local name = name_of(st, archive, tex)
-            if band(flags, D_NO_TEXTURE) == 0 and (show_file or not S.HiddenTexture(name)) then
+            local alt = nil
+            if band(flags, D_NO_TEXTURE) == 0 and S.DrawFilter then alt = S.DrawFilter(st, name, D, k) end
+            if band(flags, D_NO_TEXTURE) == 0 and (show_file or not S.HiddenTexture(name)) and alt ~= false then
                 local mat, mode = H_mat(F.KIND, archive, tex, flags, false)
+                local tint = type(alt) == "table" and alt.tint and alt or nil      -- (a tint is { r, g, b, tint = true }; anything else not nil is a material)
+                if alt ~= nil and tint == nil then mat = alt end
                 if mat then
                     render.SetMaterial(mat)
                     if mode >= 2 then render.OverrideBlend(true, BS[D[k + 7]] or 4, BD[D[k + 8]] or 5, add) end
@@ -604,7 +569,7 @@ local function paint_2d(st, m, front, show_file, H_mat, T)
                             for kx = -nx, nx do emit_draw(V, first, count, m, kx * sw, ky * sh, true) end
                         end
                     else
-                        emit_draw(V, first, count, m, 0, 0, false)
+                        emit_draw(V, first, count, m, 0, 0, false, tint)
                     end
                     if mode >= 2 then render.OverrideBlend(false) end
                     n = n + 1
@@ -692,11 +657,8 @@ local function paint_r(st, W, H)
     st.drawn2d = paint_2d(st, m, false, show, H_mat, T)
     st.drawn3d = paint_3d(st, m, T)
     st.drawn2d = st.drawn2d + paint_2d(st, m, true, show, H_mat, T)
-    local hint = S.SkinHint(st)
-    if hint then
-        fonts(H)
-        skin_line(hint, W, H, 0.80)
-    end
+    -- 1.0.0 (select 4.4, 4.8): the bar's tabs, labels and counter, and the Upgrades panel (feat/cl_charselect_bar.lua). The 0.9.9f skin line is gone: the counter, the name and the nameplate say it
+    if S.Overlay then S.Overlay(st, m, W, H) end
 end
 
 function S.PaintR(st, W, H)
@@ -739,6 +701,7 @@ end
 function S.OnWheel(delta)
     local st = S.st
     if not st then return end
+    if S.WheelFilter and S.WheelFilter(st, delta) then return end
     local dir = (tonumber(delta) or 0) > 0 and -1 or 1
     if st.design == "R" then
         if st.picked then return end
@@ -814,10 +777,11 @@ function S.Open(how)
     local st = { how = how or "?", slot = S.FirstSlot(), padWas = raw, stickWas = 0, design = "S",
                  uiWas = gui.IsGameUIVisible(), t0 = t0 }
     do
-        -- 0.9.9f: opening while you are a skin of this slot shows him (S.ToggleSkin, in start_r for the game's screen)
+        -- opening while you are a skin of this slot shows him (1.0.0: st.skins[slot], the index in S.SlotNames; S.ApplySkins in start_r for the game's screen)
         local me = GSA1.Char and GSA1.Char.name or (GSA1.cv and GSA1.cv.character and GSA1.cv.character:GetString())
-        for _, n in ipairs(S.SLOT_SKINS[st.slot] or {}) do
-            if n == me then st.skin = true end
+        st.skins = {}
+        for i, n in ipairs(S.SlotNames(st.slot)) do
+            if n == me and i > 1 then st.skins[st.slot] = i end
         end
     end
     S.st = st
@@ -1075,8 +1039,14 @@ function S.BuildOptions(panel)
     panel:CheckBox("Show the game's Game / Instruction / Cancel dialog", "gsa1_charselect_dialog")
     combo(panel, "After a pick", "gsa1_charselect_close", {
         { "the game's 5-second pose (A skips it after the voice)", "0" }, { "switch when the voice starts", "1" } })
-    panel:CheckBox("Up on Sonic switches to Metal Sonic", "gsa1_charselect_skins")
-    panel:ControlHelp("Up on the D-pad (or the Up key, or W) while Sonic is selected. Off: Up does what it did.")
+    panel:CheckBox("Up / Down on a character steps through its skins", "gsa1_charselect_skins")
+    panel:ControlHelp("Up and Down on the D-pad (or the Up and Down keys, W and S) while the screen waits for a pick; the counter on the right ball says which, \"1/3\". Off: Up and Down do what they did.")
+    panel:CheckBox("Show the skins and upgrades bar", "gsa1_charselect_bar")
+    panel:ControlHelp("The support ball, the skin counter and the two pink tabs. Off: the bottom bar as the game draws it (File and Clear by the option below).")
+    panel:CheckBox("Y opens Choose Your Upgrade", "gsa1_charselect_upgrades")
+    panel:ControlHelp("Y on the controller, U on the keyboard, or a click on the left ball. A (or E, Right) steps the upgrade you are on, R all on, L all off, B or Y closes it. Start and Enter still pick. Off: Y does nothing, as before.")
+    panel:CheckBox("Skins show their own name and nameplate", "gsa1_charselect_skin_names")
+    panel:ControlHelp("Made once into pictures in garrysmod/data/gsa1/skins/<character>/<skin>/HUD. Off: the game's own name stays under a skin.")
     panel:CheckBox("Play Choose Your Buddy!", "gsa1_charselect_music")
     panel:ControlHelp("Your jukebox pauses where it is and goes on afterwards. Off: no music, the jukebox goes on.")
     panel:CheckBox("Show File and Clear in the bottom bar", "gsa1_charselect_file")

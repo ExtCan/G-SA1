@@ -256,6 +256,8 @@ local ok_s, err_s = pcall(function()
     sinclude("gsa1/feat/sv_board.lua")
     sinclude("gsa1/feat/sh_follower.lua")
     sinclude("gsa1/feat/sv_follower.lua")
+    -- (1.0.0: the skins' rows come from feat/sh_skins.lua's registry, as the server's autorun loads every sh_ file before the entities)
+    sinclude("gsa1/feat/sh_skins.lua")
 end)
 local SG = rawget(S, "GSA1")
 local SB = SG and SG.Board
@@ -631,6 +633,8 @@ local B = GSA1 and GSA1.Board
 local W = GSA1 and GSA1.Wheel
 local classes_c
 local ok_cc
+-- (1.0.0: the skins' rows from feat/sh_skins.lua's registry before the entities, as the whole autorun loads it)
+if GSA1 and not GSA1.Skins then M.load("gsa1/feat/sh_skins.lua") end
 ok_cc, classes_c = pcall(load_spawner, _G)
 check(ok_s and SFo ~= nil and ok_cls and ok_c and #ferr == 0 and Fo ~= nil and Fo.BuildPage ~= nil and GSA1.SpawnFollower ~= nil and ok_cc,
     "the feature's files load: server (sh_follower, sv_follower, the spawners) %s; client through the autorun %s",
@@ -792,7 +796,8 @@ do
     for n in pairs(cs or {}) do names[#names + 1] = n end
     table.sort(names)
     local T = cs and cs.gsa1_follower_tails
-    check(#names == 9 and cs.gsa1_follower_metalsonic and cs.gsa1_follower_metalsonic.GSA1FollowerKind == 0 and cs.gsa1_follower_metalsonic.GSA1FollowerSkin == "metalsonic" and
+    check(#names == 10 and cs.gsa1_follower_metalsonic and cs.gsa1_follower_metalsonic.GSA1FollowerKind == 0 and cs.gsa1_follower_metalsonic.GSA1FollowerSkin == "metalsonic" and
+        cs.gsa1_follower_mechasonic and cs.gsa1_follower_mechasonic.GSA1FollowerSkin == "mechasonic" and
         cs.gsa1_follower_eggman.GSA1FollowerKind == 1 and cs.gsa1_follower_tikal.GSA1FollowerKind == 4 and T and T.GSA1FollowerKind == 2 and T.Spawnable and T.Category == "G-SA1" and T.DisableDuplicator and
         T.IconOverride == "entities/gsa1_follower_tails.png" and classes_s and classes_s.gsa1_follower_big.GSA1FollowerKind == 7,
         "one spawner class per kind, on both realms: %s", table.concat(names, " "))
@@ -2812,8 +2817,8 @@ do
     G.FOLLOWER = noskin
     local md = GSA1.CharacterByName("metalsonic")
     local defs = Fo.SkinDefs()
-    check(md and #defs == 1 and defs[1] == md and Fo.SkinDef("metal") == md and Fo.SkinDef("sonic") == nil and Fo.SkinSpawnerClass(md) == "gsa1_follower_metalsonic",
-        "the skins that can follow come from the character list's data: %d (Metal Sonic), by name or alias", #defs)
+    check(md and #defs == 2 and defs[1] == md and defs[2] == GSA1.CharacterByName("mechasonic") and Fo.SkinDef("metal") == md and Fo.SkinDef("sonic") == nil and Fo.SkinSpawnerClass(md) == "gsa1_follower_metalsonic",
+        "the skins that can follow come from the character list's data: %d (Metal Sonic, Mecha Sonic), by name or alias", #defs)
     local ok0, why0 = GSA1.SpawnFollower("metal", {})
     check(ok0 == false and #fcalls("FollowerCreate") == 0 and #Fo.list == 0 and string.find(tostring(why0), "never a plain Sonic", 1, true) ~= nil,
         "a module without gsa1.FOLLOWER.SKIN: refused by name, no world made (%s)", tostring(why0))
@@ -2859,7 +2864,7 @@ do
     end
     check(seen == "Metal Sonic", "the page's Character list has Metal Sonic (%s)", tostring(seen))
     local listed = Fo.SpawnerClasses()
-    check(listed[#listed] == "gsa1_follower_metalsonic", "the spawn tab's Followers group ends with Metal Sonic: %s", table.concat(listed, " "))
+    check(listed[#listed - 1] == "gsa1_follower_metalsonic" and listed[#listed] == "gsa1_follower_mechasonic", "the spawn tab's Followers group ends with Metal Sonic, Mecha Sonic: %s", table.concat(listed, " "))
     -- the spawner: its request carries the entry's name; the undo names it
     Fo.RemoveAll("removed")
     undos = {}

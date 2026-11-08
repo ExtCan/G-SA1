@@ -44,6 +44,15 @@
 --     for the toggle's note is at W.ToggleHidden); the play rate: per slot (W.SPEEDS, saved in the file's speed column)
 --     times gsa1_wheel_speed, sent as gsa1.Emote's 4th argument (libsa1's sa1_emote_item.speed; feature "emote" 3). A
 --     slot's face animation keeps its own timing.
+--   * Round 100-EV (G-SA1 1.0.0-beta1; sadc docs/research/emotes_ev.md 4, 5, 9; the owner: "the cutscene animations are
+--     missing in the emote wheel, for example, Sonic laying with his head on his hand"): the characters' cutscene animations
+--     (keys "e<n>", group "cutscene"; feature "emote" 4). The page: the group "cutscene", a Cutscene list ("EV0003 - Sonic's
+--     story - with Tails (4)"), a Notes column, "Play the previous one" / "Play the next one"; W.BuildPicker makes the same
+--     picker on another panel (photo mode's Animation Player). Each animation is read from the disc the first time it is
+--     needed, on the module's loader thread: the wheel's slots are fetched when a character or a follower appears, a play
+--     of one not loaded yet waits up to 1.5 s (W.EvWait; "loading the cutscene animation..." after 0.2 s), never on the game
+--     thread. gsa1_wheel_ev (offer them), gsa1_wheel_ev_lift (lying poses lifted onto the floor: libsa1's character option
+--     10 through gsa1.SetCharOption, render only).
 GSA1 = GSA1 or {}
 local W = GSA1.Wheel
 if not W then error("gsa1/feat/sh_wheel.lua did not load: the emote wheel needs it") end
@@ -87,6 +96,11 @@ local cv = {
         .. "slot's own play rate (1 = the game's rate, 2 = twice as fast)", 0.25, 4),
     summary = GSA1.ConVar("gsa1_wheel_summary", "", "Read-only: a copy of your emote wheels' state for the session log (the "
         .. "wheels themselves are in garrysmod/data/gsa1/emote_wheel.txt)"),
+    -- round 100-EV (emotes_ev.md 9)
+    ev = GSA1.ConVar("gsa1_wheel_ev", 1, "Offer the characters' cutscene animations on the emote wheel and its page (0: the "
+        .. "list hides them, a slot holding one plays nothing and no cutscene file is read)", 0, 1),
+    ev_lift = GSA1.ConVar("gsa1_wheel_ev_lift", 1, "Lift cutscene poses onto the floor: lying and kneeling poses are drawn "
+        .. "on the floor, not up to about 2 units in it (drawing only; 0 = where the game puts them)", 0, 1),
 }
 W.cv = cv
 
@@ -95,7 +109,7 @@ local function log(fmt, ...)
 end
 
 -- the module ------------------------------------------------------------------------------------------------------------------
-local have_cache, have_at, speed_cache = false, -1e9, false
+local have_cache, have_at, speed_cache, ev_cache = false, -1e9, false, false
 local function have()
     local now = SysTime()
     if now - have_at > 2 then
@@ -103,8 +117,18 @@ local function have()
         have_cache = (GSA1.HasFeature and GSA1.HasFeature(W.NEEDS.feature, W.NEEDS.version)) and true or false
         -- 0.9.4e: does the module take the play rate (feature "emote" 3)
         speed_cache = (GSA1.HasFeature and GSA1.HasFeature(W.SPEED_NEEDS.feature, W.SPEED_NEEDS.version)) and true or false
+        -- round 100-EV: the cutscene animations (feature "emote" 4)
+        ev_cache = (GSA1.HasFeature and GSA1.HasFeature(W.EV_NEEDS.feature, W.EV_NEEDS.version)) and true or false
     end
     return have_cache
+end
+-- round 100-EV: the module lists and loads the cutscene animations, and gsa1_wheel_ev offers them
+function W.EvSupported()
+    have()
+    return ev_cache and gsa1 ~= nil and gsa1.EmoteEventLoad ~= nil
+end
+function W.EvOffered()
+    return cv.ev:GetBool() and W.EvSupported()
 end
 W.Have = have
 function W.ResetHave() have_at = -1e9 end
@@ -349,6 +373,16 @@ function W.PlayBody(C, slot, page, s, how, face, entry)
         W.stats.refused = W.stats.refused + 1
         return false
     end
+    -- round 100-EV: a cutscene animation needs gsa1_wheel_ev and the module's feature "emote" 4
+    if W.IsEv(e) and not W.EvOffered() then
+        local off = not cv.ev:GetBool()
+        local text = off and "cutscene animations are off" or string.format("cutscene animations need G-SA1 module %s",
+            W.EV_NEEDS.module)
+        toast("%s", text)
+        log("refused %s (page %d slot %d): %s", e.name, page or 0, s or 0, text)
+        W.stats.refused = W.stats.refused + 1
+        return false
+    end
     -- the one G-SA1 started last, still playing or holding its pose: back to standing (review R.18: EmoteState's row
     -- follows the chain; 0.9.4b: a held pose blends into the stand)
     local pl = W.playing
@@ -409,12 +443,119 @@ function W.PlayBody(C, slot, page, s, how, face, entry)
             (slot.loop or e.play == "loop") and " (move to stop)" or (hold ~= 0 and " (holds the pose: move to stop)" or ""))
         return true
     end
+    if code == "not_loaded" and W.IsEv(e) then
+        -- round 100-EV: not read from the disc yet (the module queued it): the waiting rule plays it when it is there
+        return W.EvWaitBegin(C, slot, page, s, how, face, entry, e)
+    end
     W.stats.refused = W.stats.refused + 1
     reason = tostring(reason or "refused")
     log("%s refused (%s): %s", e.name ~= "" and e.name or e.key, tostring(code), reason)
     -- review R.16: on the ground but not standing - with the wheel open the stick usually still moves him
     toast("%s can't do that now: %s%s", title, reason, reason == "moving" and " - let go of the stick to pose" or "")
     return false
+end
+
+-- round 100-EV (emotes_ev.md 4.2): the waiting rule. One play waits at a time (a newer one replaces it); W.EvThink looks at
+-- it every frame (gsa1.EmoteEventReady: no disc access on this thread) and plays it the frame it is loaded; after W.EV_SHOW s
+-- the toast says "loading the cutscene animation..."; after W.EV_WAIT s it gives up and says so. A load error: the plain
+-- words in the toast, the status in the log, once per cutscene (review RX.6: libsa1's loader never logs on its thread).
+W.evErrors = W.evErrors or {}
+function W.EvWaitBegin(C, slot, page, s, how, face, entry, e)
+    local kind = W.KindForm(entry)
+    W.evWait = { C = C, id = C.id, slot = slot, page = page, s = s, how = how, face = face, entry = entry, e = e,
+                 kind = kind or C.kind, at = SysTime(), shown = false }
+    log("waiting for %s (%s) to load from the disc", e.name, W.EvShort(e))
+    return false
+end
+function W.EvFailed(e, err)
+    local ev = tonumber(e and e.event) or 0
+    local text = tostring(err or "the cutscene animation could not be read")
+    toast("%s", text)
+    if not W.evErrors[ev] then
+        W.evErrors[ev] = text
+        log("cutscene animation %s not loaded: %s", tostring(e and e.name), text)
+    end
+end
+function W.EvThink(now)
+    local w = W.evWait
+    if w then
+        local C = GSA1.Char
+        if not C or C.id ~= w.id or not (gsa1 and gsa1.EmoteEventReady) then
+            W.evWait = nil
+        else
+            local ok, r, msg = pcall(gsa1.EmoteEventReady, w.kind, w.e.index)
+            local ready, err = r, msg
+            if not ok then ready, err = nil, tostring(r) end
+            local act, show = W.EvWait(w, now, ready)
+            if act == "play" then
+                W.evWait = nil
+                W.PlayBody(w.C, w.slot, w.page, w.s, tostring(w.how) .. ", after loading", nil, w.entry)
+            elseif act == "fail" then
+                W.evWait = nil
+                W.EvFailed(w.e, err)
+            elseif act == "late" then
+                W.evWait = nil
+                toast("%s is still loading: try again in a moment", w.e.name)
+                log("%s still loading after %.1f s: not played", w.e.name, W.EV_WAIT)
+            elseif show and not w.shown then
+                w.shown = true
+                toast("loading the cutscene animation...")
+            end
+        end
+    end
+    if now >= (W.evNextFollowers or 0) then
+        W.evNextFollowers = now + 0.5
+        W.EvFollowers()
+    end
+end
+-- the cutscene animations on an entry's wheel, fetched on the module's loader thread (kind: the entry's); how many asked
+function W.EvPrefetch(entry, kind)
+    if not W.EvOffered() then return 0 end
+    kind = kind or W.KindForm(entry)
+    local list = kind and W.ListOf(entry)
+    if not list then return 0 end
+    local w, n, asked = W.WheelOf(entry), 0, {}
+    for p = 1, W.PAGES do
+        for s = 1, W.SLOTS do
+            local o = w.pages[p][s]
+            local e = o and o.body and W.Resolve(list, o.body, o.name)
+            if e and W.IsEv(e) and not asked[e.index] then
+                asked[e.index] = true
+                if pcall(gsa1.EmoteEventLoad, kind, e.index) then n = n + 1 end
+            end
+        end
+    end
+    if n > 0 then log("%s's wheel: %d cutscene animation%s fetched from the disc", W.Title(entry), n, n == 1 and "" or "s") end
+    return n
+end
+-- "Lift cutscene poses onto the floor" on a character (libsa1's SA1_COPT_EMOTE_LIFT, gsa1.EMOTE.COPT_LIFT)
+function W.EvApplyLift(id)
+    local opt = emote_const("COPT_LIFT", nil)
+    if not (id and opt and gsa1 and gsa1.SetCharOption and W.EvSupported()) then return false end
+    local ok, r = pcall(gsa1.SetCharOption, id, opt, cv.ev_lift:GetBool() and 1 or 0)
+    return ok and r ~= nil and r ~= false
+end
+-- followers seen for the first time: their wheel's cutscene animations fetched, the lift set
+W.evSeen = W.evSeen or {}
+function W.EvFollowers()
+    local Fo = GSA1.Followers
+    if not (Fo and Fo.list) then return end
+    for _, F in ipairs(Fo.list) do
+        if F.id and not W.evSeen[F.id] and not F.removed then
+            W.evSeen[F.id] = true
+            W.EvApplyLift(F.id)
+            if F.name and W.EntryOf(F.name) then W.EvPrefetch(F.name) end
+        end
+    end
+end
+if cvars and cvars.AddChangeCallback then
+    cvars.AddChangeCallback("gsa1_wheel_ev_lift", function()
+        if GSA1.Char then W.EvApplyLift(GSA1.Char.id) end
+        local Fo = GSA1.Followers
+        for _, F in ipairs(Fo and Fo.list or {}) do
+            if F.id then W.EvApplyLift(F.id) end
+        end
+    end, "gsa1_wheel_ev")
 end
 
 -- a face animation from the wheel (feat/cl_faces.lua's GSA1.Faces; guarded: faces_wheel_plan.md 5.5)
@@ -696,7 +837,10 @@ local function guard(name, fn)
 end
 -- the wheel's input: before every tick of the character (GSA1PreTick runs in cl_character.lua's Think right after the
 -- controller was read); without a character the wheel is closed by GSA1CharacterRemoved
-hook.Add("GSA1PreTick", "gsa1_wheel", guard("wheel", function(C) W.Think() end))
+hook.Add("GSA1PreTick", "gsa1_wheel", guard("wheel", function(C)
+    W.Think()
+    W.EvThink(SysTime())        -- round 100-EV: the waiting rule and the followers' fetch
+end))
 hook.Add("InputMouseApply", "gsa1_wheel", guard("wheel mouse", function(cmd, x, y, ang)
     return W.MouseApply(cmd, x, y)
 end))
@@ -714,10 +858,14 @@ hook.Add("PlayerBindPress", "gsa1_wheel", function(ply, bind, pressed, code)
 end)
 hook.Add("GSA1CharacterCreated", "gsa1_wheel", function(C, how)
     W.playing = nil
+    W.evWait = nil
     local entry = C and C.name
     if entry and W.EntryOf(entry) and have() then
         local w = W.WheelOf(entry)
         log("%s's wheel: %d of 33 slots (%s)", W.Title(entry), W.UsedCount(w), W.data[entry] and "your file" or "the defaults")
+        -- round 100-EV: the lift option and the wheel's cutscene animations, fetched in the background
+        if C.id then W.EvApplyLift(C.id) end
+        W.EvPrefetch(entry)
     end
 end)
 local function stats_line(who)
@@ -1258,7 +1406,7 @@ end, nil, "G-SA1: stop the animation your character plays")
 -- the page: Q menu > Options > G-SA1 > Emote wheel ----------------------------------------------------------------------------
 -- the groups of the list's filter: All, the classes (gsa1.EMOTE.CLASS_*'s words), then the rows that cannot play yet
 W.GROUPS = { "All", "stand", "idle", "pose", "move", "air", "brake", "ball", "attack", "carry", "setpiece", "hurt", "fish",
-             "swim", "board", "super", "not usable yet" }
+             "swim", "board", "super", "cutscene", "not usable yet" }
 W.NOT_USABLE = "not usable yet"
 
 -- the rows the page lists for an entry: every catalogue entry, the game's variants of one motion folded into the first
@@ -1271,11 +1419,20 @@ function W.PageRows(entry, list)
     list = W.Index(list)
     if list then
         local reps = {}
+        local evs = W.EvOffered()
         for i = 1, tonumber(list.n) or #list do
             local e = list[i]
             local d = tonumber(e.dup) or 0
             if e.source == 0 then offered[e.index] = true end
-            if d > 0 and reps[d] then
+            if W.IsEv(e) then
+                -- round 100-EV: a cutscene animation ("EV0003 #2"), after the rows and extras; hidden with gsa1_wheel_ev 0
+                if evs then
+                    rows[#rows + 1] = { e = e, key = e.key, num = e.index, ev = true, short = W.EvShort(e),
+                        sortKey = 200000 + (tonumber(e.event) or 0) * 256 + (tonumber(e.event_order) or 0),
+                        name = e.name ~= "" and e.name or e.key, frames = tonumber(e.frames) or 0,
+                        plays = tostring(e.play or ""), group = W.EV_GROUP, notes = tostring(e.notes or ""), variants = {} }
+                end
+            elseif d > 0 and reps[d] then
                 local v = reps[d].variants
                 v[#v + 1] = e
             else
@@ -1287,14 +1444,15 @@ function W.PageRows(entry, list)
             end
         end
     end
-    for _, u in ipairs(W.UNPLAYABLE and (W.UNPLAYABLE[entry] or (entry == "metalsonic" and W.UNPLAYABLE.sonic)) or {}) do
+    local skin = GSA1.Skins and GSA1.Skins.SKINS and GSA1.Skins.SKINS[entry]          -- (1.0.0: a skin greys what its base greys, select 4.1)
+    for _, u in ipairs(W.UNPLAYABLE and (W.UNPLAYABLE[entry] or (skin and W.UNPLAYABLE[skin.base])) or {}) do
         if not offered[u[1]] then
             rows[#rows + 1] = { key = "a" .. u[1], num = u[1], name = u[2] ~= "" and u[2] or ("(empty) a" .. u[1]),
                                 frames = "", plays = "", group = W.NOT_USABLE, greyed = u[3], variants = {} }
         end
     end
     table.sort(rows, function(a, b)
-        local ka, kb = (a.extra and 100000 or 0) + a.num, (b.extra and 100000 or 0) + b.num
+        local ka, kb = a.sortKey or ((a.extra and 100000 or 0) + a.num), b.sortKey or ((b.extra and 100000 or 0) + b.num)
         return ka < kb
     end)
     return rows
@@ -1303,6 +1461,13 @@ end
 -- a row's tooltip: the SA Tools label and the folded variants; a greyed row's reason
 function W.RowTip(r)
     if r.greyed then return r.name .. ": " .. r.greyed end
+    if r.ev and r.e then
+        -- round 100-EV: the cutscene's cast and the frames (no SA Tools label: review RX.10)
+        local cast = {}
+        for _, nm in ipairs(type(r.e.cast) == "table" and r.e.cast or {}) do cast[#cast + 1] = W.CAST_TITLES[nm] or nm end
+        return string.format("%s: %s (%s), in %s; %d frames%s", r.short, r.name, W.EvStory(r.e.event),
+            #cast > 0 and table.concat(cast, ", ") or "the cutscene", r.frames, r.notes ~= "" and ("; " .. r.notes) or "")
+    end
     local t = r.e and r.e.label ~= "" and r.e.label or r.name
     if #r.variants > 0 then
         local v = {}
@@ -1333,8 +1498,10 @@ function W.OnWheel(entry, list)
 end
 
 -- does a row match the find box (a part of its name, its number or key) and the group filter
-function W.RowMatches(r, find, group)
+function W.RowMatches(r, find, group, ev)
     if group and group ~= "" and group ~= "All" and r.group ~= group then return false end
+    -- round 100-EV: the Cutscene list's choice (group "cutscene"; nil = every cutscene)
+    if ev ~= nil and group == W.EV_GROUP and not (r.ev and W.EvIn(r.e, ev)) then return false end
     find = string.lower(string.Trim(tostring(find or "")))
     if find == "" then return true end
     if string.find(string.lower(r.name), find, 1, true) then return true end
@@ -1439,9 +1606,32 @@ function W.StatusLines(E)
     if W.keyNote then out[#out + 1] = W.keyNote end
     if E and E.note then out[#out + 1] = E.note end
     if W.playing then out[#out + 1] = "last played: " .. tostring(W.playing.name ~= "" and W.playing.name or W.playing.key) end
+    -- round 100-EV: the cutscene animations
+    out[#out + 1] = W.EvStatusLine(list, entry)
     local m = cv.summary:GetString()
     out[#out + 1] = "your changed wheels: " .. (m ~= "" and m or "none")
     return out
+end
+
+-- round 100-EV: "Cutscene animations: 12 of 80 loaded" (the page's status)
+function W.EvStatusLine(list, entry)
+    if not W.EvSupported() then
+        return string.format("cutscene animations: need G-SA1 module %s (feature \"emote\" %d)", W.EV_NEEDS.module,
+            W.EV_NEEDS.version)
+    end
+    if not cv.ev:GetBool() then return "cutscene animations: off (Offer the cutscene animations)" end
+    local n, loaded = 0, 0
+    local kind = W.KindForm(entry or current_entry()) or 0
+    for i = 1, list and (tonumber(list.n) or #list) or 0 do
+        local e = list[i]
+        if W.IsEv(e) then
+            n = n + 1
+            local ok, r = pcall(gsa1.EmoteEventReady, kind, e.index)
+            if ok and r == true then loaded = loaded + 1 end
+        end
+    end
+    return string.format("cutscene animations: %d of %d loaded from your disc%s", loaded, n,
+        cv.ev_lift:GetBool() and "; lying poses lifted onto the floor" or "")
 end
 
 -- the little wheel of the page (its own coordinates; the selected slot filled)
@@ -1516,9 +1706,9 @@ function W.NewEditor(entry)
         if type(find) ~= "string" then find = "" end
         E.shown = {}
         for _, r in ipairs(rows) do
-            if W.RowMatches(r, find, E.groupValue) then
-                local line = l:AddLine(r.extra and ("x" .. r.num) or tostring(r.num), r.name, tostring(r.frames), r.plays,
-                    r.group, on[r.key] or "")
+            if W.RowMatches(r, find, E.groupValue, E.evValue) then
+                local line = l:AddLine(r.ev and r.short or (r.extra and ("x" .. r.num) or tostring(r.num)), r.name,
+                    tostring(r.frames), r.plays, r.group, on[r.key] or "", r.notes or "")
                 if line then
                     line.gsa1Row = r
                     if line.SetTooltip then line:SetTooltip(W.RowTip(r)) end
@@ -1630,8 +1820,65 @@ function W.NewEditor(entry)
     function E.SetEntry(name)
         if not W.EntryOf(name) then return false end
         E.entry, E.page, E.sel, E.note = name, 1, 1, nil
+        E.evValue, E.pickedRow = nil, nil       -- round 100-EV
+        E.FillEv()
         E.Refresh()
         return true
+    end
+    -- round 100-EV: the Cutscene list of the entry ("All cutscenes", then each cutscene with its animations)
+    function E.FillEv()
+        local cb = E.evCombo
+        if not cb then return end
+        if cb.Clear then cb:Clear() end
+        cb:AddChoice("All cutscenes", "all", E.evValue == nil)
+        for _, cs in ipairs(W.EvCutscenes(W.ListOf(E.entry))) do
+            cb:AddChoice(W.EvLabel(cs.event, E.entry, cs.cast, cs.count), tostring(cs.event), E.evValue == cs.event)
+        end
+        if cb.SetVisible then cb:SetVisible(E.groupValue == W.EV_GROUP) end
+    end
+    function E.SetEv(ev)
+        ev = tonumber(ev)
+        E.evValue = ev
+        E.pickedRow = nil
+        E.Fill()
+    end
+    function E.SetGroup(g)
+        E.groupValue = g or "All"
+        if E.groupValue ~= W.EV_GROUP then E.evValue = nil else E.FillEv() end
+        if E.evCombo and E.evCombo.SetVisible then E.evCombo:SetVisible(E.groupValue == W.EV_GROUP) end
+        E.Fill()
+    end
+    -- round 100-EV: the row picked in the list (Play it on your character then plays it; a slot click forgets it)
+    function E.PickRow(r)
+        E.pickedRow = r
+        if r and r.greyed then E.note = r.name .. " cannot play in G-SA1 yet: " .. r.greyed end
+    end
+    -- "Play the previous one" / "Play the next one": the filtered list from the picked row, each played as it is reached
+    function E.PlayStep(dir)
+        local shown = E.shown or {}
+        if #shown == 0 then
+            E.note = "the list is empty"
+            E.Refresh()
+            return false
+        end
+        local at = 0
+        for i, s in ipairs(shown) do
+            if s.row == E.pickedRow then at = i end
+        end
+        local i = at
+        for _ = 1, #shown do
+            i = i + (dir < 0 and -1 or 1)
+            if i < 1 then i = #shown end
+            if i > #shown then i = 1 end
+            if not shown[i].row.greyed then break end
+        end
+        local s = shown[i]
+        E.pickedRow = s.row
+        if E.list and s.line and IsValid(E.list) then
+            if E.list.ClearSelection then E.list:ClearSelection() end
+            if E.list.SelectItem then E.list:SelectItem(s.line) end
+        end
+        return E.PlayRow(s.row)
     end
     function E.SetPage(p)
         E.page = math.Clamp(math.floor(tonumber(p) or 1), 1, W.PAGES)
@@ -1640,6 +1887,7 @@ function W.NewEditor(entry)
     function E.Select(s)
         E.sel = math.Clamp(math.floor(tonumber(s) or 0), 0, W.SLOTS)
         E.note = nil
+        E.pickedRow = nil       -- round 100-EV: the Play button plays the slot again
         E.Refresh()
     end
     -- a row into slot s of the shown page (default: the selected slot, and then the next slot is selected)
@@ -1788,6 +2036,8 @@ function W.NewEditor(entry)
     end
     -- the selected slot on the current character as the face trigger plays it (its animation and its face animation)
     function E.Play()
+        -- round 100-EV (emotes_ev.md 5.1): a row picked in the list plays that row; else the selected slot, as before
+        if E.pickedRow then return E.PlayRow(E.pickedRow) end
         local C = GSA1.Char
         if not C then
             E.note = "spawn a character to try it"
@@ -1909,6 +2159,14 @@ function W.BuildPage(panel)
     panel:NumSlider("Play rate of every animation (x)", "gsa1_wheel_speed", 0.25, 4, 2)
     panel:ControlHelp("Multiplies each slot's own play rate (below): 2 = twice as fast, 0.5 = half as fast. Only the body "
         .. "animations: the face animations keep their own timing.")
+    -- round 100-EV (emotes_ev.md 9): the cutscene animations
+    panel:CheckBox("Offer the cutscene animations", "gsa1_wheel_ev")
+    panel:ControlHelp("The characters' animations from the game's cutscenes (Sonic lying with his head on his hand, and "
+        .. "339 more), in the group \"cutscene\" below. Each is read from your disc the first time it is needed. Off: the "
+        .. "list hides them and a slot holding one plays nothing.")
+    panel:CheckBox("Lift cutscene poses onto the floor", "gsa1_wheel_ev_lift")
+    panel:ControlHelp("Lying and kneeling poses were made for the cutscenes' own floor: lifted, the character lies on the "
+        .. "floor and not up to about 2 units in it. Only the drawing moves; off: where the game puts them.")
 
     -- the wheels
     panel:Help("The wheels")
@@ -2002,10 +2260,17 @@ function W.BuildPage(panel)
     if E.group then
         for _, g in ipairs(W.GROUPS) do E.group:AddChoice(g, g, g == "All") end
         E.group.OnSelect = function(_, _, _, data)
-            E.groupValue = data
-            E.Fill()
+            E.SetGroup(data)
         end
     end
+    -- round 100-EV: the Cutscene list, shown with the group "cutscene"
+    E.evCombo = panel:ComboBox("Cutscene")
+    if E.evCombo then
+        E.evCombo.OnSelect = function(_, _, _, data)
+            E.SetEv(data ~= "all" and data or nil)
+        end
+    end
+    E.FillEv()
     local list = vgui.Create("DListView", panel)
     if list.SetMultiSelect then list:SetMultiSelect(false) end
     list:AddColumn("#")
@@ -2014,6 +2279,7 @@ function W.BuildPage(panel)
     list:AddColumn("Plays")
     list:AddColumn("Group")
     list:AddColumn("On wheel")
+    list:AddColumn("Notes")                 -- round 100-EV: the cutscene animations' plain words
     if list.SetTall then list:SetTall(380) end
     panel:AddItem(list)
     E.list = list
@@ -2021,9 +2287,15 @@ function W.BuildPage(panel)
         if line and line.gsa1Row then E.Assign(line.gsa1Row) end
     end
     list.OnRowSelected = function(_, _, line)
-        local r = line and line.gsa1Row
-        if r and r.greyed then E.note = r.name .. " cannot play in G-SA1 yet: " .. r.greyed end
+        E.PickRow(line and line.gsa1Row)
     end
+    -- round 100-EV (emotes_ev.md 5.1): step through the list (a cutscene's animations), each played on your character
+    local prevB = panel:Button("Play the previous one")
+    if prevB then prevB.DoClick = function() E.PlayStep(-1) end end
+    E.prevButton = prevB
+    local nextB = panel:Button("Play the next one")
+    if nextB then nextB.DoClick = function() E.PlayStep(1) end end
+    E.nextButton = nextB
     list.OnRowRightClick = function(_, _, line)
         if line and line.gsa1Row then E.Menu(line.gsa1Row) end
     end
@@ -2038,6 +2310,75 @@ function W.BuildPage(panel)
     panel:Help("Status")
     live_label(panel, function() return W.StatusLines(E) end)
     E.Refresh()
+end
+
+-- round 100-EV (emotes_ev.md 6): the cutscene animations' picker on any panel (photo mode's Animation Player uses it): a
+-- Cutscene list and the rows of the chosen cutscene (#, internal name, frames, plays, notes); a double-click (or "Use this
+-- one") calls onPick(row) with row.e the catalogue entry (key "e<n>", event, event_order, pace, ...). Returns the picker:
+-- { entry, ev, combo, list, rows (the shown ones), SetEntry(entry), SetEv(ev), Fill() }.
+function W.BuildPicker(panel, entry, onPick)
+    local P = { entry = entry or current_entry(), ev = nil, rows = {} }
+    P.combo = panel:ComboBox("Cutscene")
+    local list = vgui.Create("DListView", panel)
+    if list.SetMultiSelect then list:SetMultiSelect(false) end
+    for _, col in ipairs({ "#", "Internal name", "Frames", "Plays", "Notes" }) do list:AddColumn(col) end
+    if list.SetTall then list:SetTall(260) end
+    panel:AddItem(list)
+    P.list = list
+    function P.Fill()
+        if P.list.Clear then P.list:Clear() end
+        P.rows = {}
+        if not W.EvOffered() then return P end
+        for _, r in ipairs(W.PageRows(P.entry, W.ListOf(P.entry))) do
+            if r.ev and W.EvIn(r.e, P.ev) then
+                local line = P.list:AddLine(r.short, r.name, tostring(r.frames), r.plays, r.notes or "")
+                if line then
+                    line.gsa1Row = r
+                    if line.SetTooltip then line:SetTooltip(W.RowTip(r)) end
+                end
+                P.rows[#P.rows + 1] = r
+            end
+        end
+        return P
+    end
+    function P.FillCombo()
+        local cb = P.combo
+        if not cb then return end
+        if cb.Clear then cb:Clear() end
+        cb:AddChoice("All cutscenes", "all", P.ev == nil)
+        for _, cs in ipairs(W.EvCutscenes(W.ListOf(P.entry))) do
+            cb:AddChoice(W.EvLabel(cs.event, P.entry, cs.cast, cs.count), tostring(cs.event), P.ev == cs.event)
+        end
+    end
+    function P.SetEntry(e)
+        if not W.EntryOf(e) then return false end
+        P.entry, P.ev = e, nil
+        P.FillCombo()
+        P.Fill()
+        return true
+    end
+    function P.SetEv(ev)
+        P.ev = tonumber(ev)
+        P.Fill()
+    end
+    if P.combo then
+        P.combo.OnSelect = function(_, _, _, data) P.SetEv(data ~= "all" and data or nil) end
+    end
+    list.DoDoubleClick = function(_, _, line)
+        if line and line.gsa1Row and onPick then onPick(line.gsa1Row) end
+    end
+    local use = panel:Button("Use this one")
+    if use then
+        use.DoClick = function()
+            local sel = P.list.GetSelectedLine and P.list:GetSelectedLine()
+            local line = sel and P.list.GetLine and P.list:GetLine(sel)
+            if line and line.gsa1Row and onPick then onPick(line.gsa1Row) end
+        end
+    end
+    P.use = use
+    P.FillCombo()
+    P.Fill()
+    return P
 end
 
 GSA1.AddMenuPage(280, "wheel", "Emote wheel", W.BuildPage, W.NEEDS)

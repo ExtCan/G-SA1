@@ -5,12 +5,18 @@
 // (the game's: the context is not thread-safe).
 //
 // Keys: an action row is "a<row>" (SA1_EMOTE_ROW), an extra motion "x<index>" (SA1_EMOTE_EXTRA, the index among the
-// kind's offered extras in list order) - the keys of data/gsa1/emote_wheel.txt (faces_wheel_plan.md 8.1).
+// kind's offered extras in list order) - the keys of data/gsa1/emote_wheel.txt (faces_wheel_plan.md 8.1); round 100-EV
+// (sadc docs/research/emotes_ev.md 7.2): a cutscene animation "e<index>" (SA1_EMOTE_EVENT, its place among the kind's
+// cutscene animations), loaded from the disc first (EmoteEventPool below: never on the game's thread).
 #ifndef GSA1_EMOTE_HPP
 #define GSA1_EMOTE_HPP
 
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "libsa1.h"
@@ -43,6 +49,62 @@ struct EmoteEntry {
     uint32_t frames = 0;        // NJS_MOTION.nbFrame
     int32_t play = 0;           // SA1_EMOTE_PLAY_LOOP / SA1_EMOTE_PLAY_ONCE
     int32_t dup_of = -1;        // the list position (0-based) of the first entry with the same drawn object and motion
+    // round 100-EV: a cutscene animation's fields (sa1_emote_info; 0 / empty for rows and extras)
+    uint32_t event = 0;         // its cutscene (3 = EV0003)
+    uint32_t event_order = 0;   // 1.. ("EV0003 #2")
+    uint32_t cast = 0;          // bit (1 << SA1_CHAR_*) per character with animations in that cutscene
+    float pace = 0.0f;          // the cutscene's speed (frames per 1/30 s)
+    float lift = 0.0f;          // SA1 units (SA1_EMOTE_F_LIFTED)
+    std::vector<uint32_t> events;   // the cutscenes that use it, ascending
+};
+
+// round 100-EV: the source number of a cutscene animation (SA1_EMOTE_EVENT; 2 without the API)
+const uint32_t kEmoteSourceEvent = 2u;
+// round 100-EV: the Notes column's plain words of an entry ("lifted onto the floor, in 21 cutscenes"; "" for none)
+std::string emote_notes(const EmoteEntry &e);
+// round 100-EV: the names of the characters of a cast mask ("sonic", "tails", ...: GSA1.CHARACTERS' names of the kinds)
+std::vector<std::string> emote_cast_names(uint32_t cast);
+// round 100-EV: the plain words of a failed cutscene load (sa1_emote_event_load / _ready's status)
+std::string emote_event_error(sa1_status st, uint32_t event);
+
+// round 100-EV (emotes_ev.md 3.3, 4.2 with its review RX.6): the cutscene loads on a thread of their own, one at a time,
+// for one context. queue() never blocks (a key already queued or ready is not queued again); drain() drops what is queued
+// and waits for the load that runs - G-SA1 calls it before anything unloads the disc or ends the context (gsa1.Shutdown,
+// the module's close), as libsa1's rule asks (sa1_emote_event_load never runs beside sa1_unload_disc / sa1_shutdown).
+class EmoteEventPool {
+public:
+    EmoteEventPool() = default;
+    ~EmoteEventPool() { drain(); }
+    EmoteEventPool(const EmoteEventPool &) = delete;
+    EmoteEventPool &operator=(const EmoteEventPool &) = delete;
+    // false: no API, or more than 1024 waiting
+    bool queue(sa1_context *ctx, int32_t kind, uint32_t index);
+    void drain();
+    size_t waiting();
+    // loads finished (any status) and dropped by drain(), since the pool was made (tests)
+    uint64_t done() const { return done_; }
+    uint64_t dropped() const { return dropped_; }
+    // r1-fix-ev: loads put in the queue (a key already queued or running is not counted again), since the pool was made
+    // (tests: every queued load is done or dropped, queued() == done() + dropped() once none is waiting)
+    uint64_t queued() const { return queued_; }
+    // the last finished load's status (tests)
+    sa1_status last_status() const { return last_; }
+
+private:
+    struct Job {
+        sa1_context *ctx;
+        int32_t kind;
+        uint32_t index;
+    };
+    void run();
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<Job> q_;
+    std::thread t_;
+    bool busy_ = false, stop_ = false;
+    Job cur_ = {nullptr, 0, 0};
+    volatile uint64_t done_ = 0, dropped_ = 0, queued_ = 0;
+    volatile sa1_status last_ = 0;
 };
 
 // "a<row>" / "x<extra>" with 0..kEmoteKeyMax (no sign, no blanks, no leading zeros but "0") -> source, index

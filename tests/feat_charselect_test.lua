@@ -18,14 +18,16 @@ local function done()
     return M.fails == 0
 end
 
--- only this feature's files, the jukebox's and the HUD's (H.Material)
+-- only this feature's files, the jukebox's and the HUD's (H.Material). 1.0.0: the feature's bar and its panel (cl_charselect_bar.lua, sh_upgrades / cl_upgrades), the skins' registry and pictures and the
+-- text they are drawn with
 local real_list = host_list
 host_list = function(dir, pat)
     local out = real_list and real_list(dir, pat) or {}
     if string.find(dir, "/gsa1/feat$") then
         local keep = {}
         for _, n in ipairs(out) do
-            if string.find(n, "_charselect%.lua$") or string.find(n, "_jukebox%.lua$") or n == "cl_hud.lua" then keep[#keep + 1] = n end
+            if string.find(n, "_charselect%.lua$") or string.find(n, "_jukebox%.lua$") or n == "cl_hud.lua" or n == "cl_charselect_bar.lua" or string.find(n, "_upgrades%.lua$") or
+                string.find(n, "_skins%.lua$") or string.find(n, "_skinhud%.lua$") or string.find(n, "_text%.lua$") then keep[#keep + 1] = n end
         end
         return keep
     end
@@ -699,7 +701,9 @@ do
     -- every gsa1_charselect_* ConVar but the memory is a row of 5.9, with the default 5.9 gives it
     local defaults = { gsa1_charselect_key = "0", gsa1_charselect_pad = "1", gsa1_charselect_dialog = "0", gsa1_charselect_close = "0",
                        gsa1_charselect_music = "1", gsa1_charselect_file = "0", gsa1_charselect_wide = "0",
-                       gsa1_charselect_qmark = "1", gsa1_charselect_skins = "1" }
+                       gsa1_charselect_qmark = "1", gsa1_charselect_skins = "1",
+                       -- 1.0.0 (sadc docs/research/gsa1_100_select.md 6): the bar, the Upgrades panel, the skins' own names
+                       gsa1_charselect_bar = "1", gsa1_charselect_upgrades = "1", gsa1_charselect_skin_names = "1" }
     local extra, wrong = {}, {}
     for n, d in pairs(GSA1.CONVARS) do
         if string.find(n, "^gsa1_charselect") then
@@ -1168,9 +1172,11 @@ do
         check(S.SphereAt(S.st, m.ox + (116 + 60 * 7) * m.sx, m.oy + 436 * m.sy, m) == nil, "the quads of sphe_7 after the ring's n are no slots")
     end
     S.cv.file:SetString("1")
+    S.barcv.bar:SetString("0")              -- (1.0.0: with the bar on, File and Clear stay hidden whatever this option says: select 4.4, T5 below)
     fe_paint()
     local n = 0
     for _, t in ipairs(trace) do if t == "2d" then n = n + 1 end end
+    S.barcv.bar:SetString("1")
     S.cv.file:SetString("0")
     S.cv.wide:SetString("1")
     fe_paint()
@@ -1442,6 +1448,306 @@ do
     check(FE.ticks == n0 and not S.IsOpen(), "closed: nothing of the front end runs")
 end
 
+-- ---- 1.0.0 beta 1 (sadc docs/research/gsa1_100_select.md 4.4-4.6, 4.9, 7.2 T4, T5, T8 with RX.1): the bar, skins on Up / Down, CHOOSE YOUR UPGRADE, the pick path pinned -------------------------------
+do
+    local skin_calls = {}
+    G.SUPER = G.SUPER or {}
+    G.SUPER.CREATE_SKIN = G.SUPER.CREATE_SKIN or 0x4000
+    function G.FrontendSkin(desc, quiet)
+        if FE.refuseSkin and desc then return nil, FE.refuseSkin, "not_found" end
+        skin_calls[#skin_calls + 1] = desc and desc.id or false
+        return true
+    end
+    local U = GSA1.UpgradeModels
+    for _, u in ipairs(GSA1.UPGRADES) do
+        M.convars["gsa1_upgrade_" .. u.name]:SetString("0")
+        if M.convars["gsa1_upgrade_model_" .. u.name] then M.convars["gsa1_upgrade_model_" .. u.name]:SetString("0") end     -- (none for Ancient Light: no model)
+    end
+    local function pad_press(bits)
+        pad.raw = bits
+        frames(1)
+        pad.raw = 0
+        frames(1)
+    end
+    local function open_on_sonic()
+        if S.IsOpen() then S.Close("test") end
+        GSA1.Spawn("sonic")
+        frames(2)
+        S.Open("test")
+        frames(3)
+        return S.st
+    end
+    pad.connected = true
+    local st = open_on_sonic()
+    check(st and st.design == "R" and st.slot == 0, "T4 the game's screen on Sonic")
+    -- T4: Up and Down step the slot's skins, one step a press, only idle, and reach the game always (RM.5, F2)
+    FE.inputs = {}
+    pad_press(S.PAD_UP)
+    local a1 = st.skins[0]
+    pad_press(S.PAD_UP)
+    local a2 = st.skins[0]
+    pad_press(S.PAD_UP)
+    local a3 = st.skins[0]
+    check(a1 == 2 and a2 == 3 and a3 == 1 and skin_calls[1] == "metalsonic" and skin_calls[2] == "mechasonic" and skin_calls[3] == false,
+        "T4 Up: Sonic > Metal Sonic > Mecha Sonic > Sonic, on the game's screen each time (%s %s %s)", tostring(a1), tostring(a2), tostring(a3))
+    pad_press(S.PAD_DOWN)
+    local b1 = st.skins[0]
+    pad_press(S.PAD_DOWN)
+    local b2 = st.skins[0]
+    pad_press(S.PAD_DOWN)
+    check(b1 == 3 and b2 == 2 and st.skins[0] == 1, "T4 Down goes the other way")
+    check(#fe_presses(F.UP) == 3 and #fe_presses(F.DOWN) == 3, "T4 Up and Down still reach gsa1.FrontendTick, every press (%d, %d)", #fe_presses(F.UP), #fe_presses(F.DOWN))
+    pad.raw = S.PAD_UP
+    frames(5)
+    pad.raw = 0
+    frames(1)
+    check(st.skins[0] == 2, "T4 held: one step a press")
+    S.SetSkin(st, 0, 1)
+    FE.phase = 2
+    frames(1)
+    FE.inputs = {}
+    pad_press(S.PAD_UP)
+    check(st.skins[0] == 1 and #fe_presses(F.UP) == 1, "T4 in another phase (the dialog): no step, and Up still reaches the game (its cursor)")
+    FE.phase = 0
+    frames(1)
+    -- the keyboard: Up / W forward, Down / S back
+    press(KEY_W or 33)
+    check(st.skins[0] == 2, "T4 W: forward")
+    press(KEY_S or 29)
+    check(st.skins[0] == 1, "T4 S: back")
+    -- a refusal leaves the index
+    FE.refuseSkin = "the disc has no such file"
+    press(KEY_UP or 88)
+    check(st.skins[0] == 1 and S.EntryName(0) == "sonic", "T4 a refusal of the module leaves the index: the pick names what the screen showed")
+    FE.refuseSkin = nil
+    -- the counter's text and the ball, by the shown entry
+    press(KEY_UP or 88)
+    local i, n = S.SkinOf(st, 0)
+    check(i == 2 and n == 3 and S.BallTint(st)[1] == 255 and S.BallTint(st)[2] == 0, "T5 Metal shown: \"2/3\", the red ball (upgrade_model_compatibility none)")
+    S.SetSkin(st, 0, 1)
+    check(S.BallTint(st)[2] == 224 and S.BallTint(st)[1] == 0, "T5 Sonic: the green ball (full)")
+    st.slot = 1
+    i, n = S.SkinOf(st, 1)
+    check(i == 1 and n == 1 and S.BallTint(st)[2] == 224, "T5 Tails: \"1/1\", green")
+    st.slot = 0
+
+    -- T4: Y opens CHOOSE YOUR UPGRADE, only idle; with it up the game gets Start alone from the pad
+    pad_press(S.PAD_Y)
+    check(st.panel_up == true and #st.upList == 3, "T4 Y opens the panel on Sonic (3 rows)")
+    FE.inputs = {}
+    local s0 = U.StateNow("light_speed_shoes")
+    pad.raw, pad.sx, pad.sy = S.PAD_A + S.PAD_LEFT, 1, 0
+    frames(1)
+    local last = FE.inputs[#FE.inputs]
+    check(last and last.buttons == 0 and FE.lastStick[1] == 0 and FE.lastStick[2] == 0, "T4 the panel up: no A, Left or stick reaches the game (%s)", tostring(last and last.buttons))
+    pad.raw, pad.sx = 0, 0
+    frames(1)
+    check(st.panel_up and S.IsOpen() and st.slot == 0, "T4 the panel took them: the screen stays, the ring did not move")
+    check(s0 == "off" and U.StateNow("light_speed_shoes") == "on", "T4 A: the selected row one step (off > on)")
+    pad_press(S.PAD_RB)
+    local all = true
+    for _, u in ipairs(st.upList) do all = all and U.StateNow(u.name) == "on" end
+    check(all, "T4 RB: every row active and visible")
+    pad_press(S.PAD_LB)
+    all = true
+    for _, u in ipairs(st.upList) do all = all and U.StateNow(u.name) == "off" end
+    check(all, "T4 LB: every row disabled entirely")
+    -- RX.1 the keyboard with the panel up: E and Right step, Up / Down move; never the pick keys
+    press(KEY_E or 15)
+    check(U.StateNow("light_speed_shoes") == "on", "RX.1 E steps the upgrade you are on")
+    press(KEY_DOWN or 90)
+    press(KEY_RIGHT or 91)
+    check(st.upSel == 2 and U.StateNow("crystal_ring") == "on" and st.slot == 0, "RX.1 Down moves, Right steps (the ring does not move: slot %d)", st.slot)
+    pad_press(S.PAD_B)
+    frames(1)
+    check(not st.panel_up and S.IsOpen() and #fe_presses(F.B) == 0, "T4 B closes the panel only: the screen stays, the game never saw B")
+    pad_press(S.PAD_B)
+    frames(12)
+    check(not S.IsOpen(), "T4 then B again goes back as always (the game's fade, EV_CANCEL)")
+
+    -- RX.1 THE PICK PATH WITH THE PANEL UP: Enter, keypad Enter, Space and Start pick; Escape closes the screen
+    for _, how in ipairs({ { "Enter", KEY_ENTER or 64 }, { "keypad Enter", KEY_PAD_ENTER or 51 }, { "Space", KEY_SPACE or 65 }, { "Start" }, { "Escape", KEY_ESCAPE or 70 } }) do
+        st = open_on_sonic()
+        pad_press(S.PAD_Y)
+        local up = st.panel_up
+        if how[2] then press(how[2]) else pad_press(S.PAD_START) end
+        frames(2)
+        if how[1] == "Escape" then
+            check(up and not S.IsOpen(), "RX.1 the panel up: Escape closes the whole screen (S.OnKey first)")
+        else
+            check(up and st.picked == 0 and not st.panel_up, "RX.1 the panel up: %s picks, as in 0.9.9g, and the panel closes the frame the bar sees st.picked", how[1])
+        end
+    end
+    if S.IsOpen() then S.Close("test") end
+    -- U: the panel, unless U is the person's own Character Select key (then S.OnKey closes the screen)
+    st = open_on_sonic()
+    press(KEY_U or 31)
+    check(st.panel_up, "T4 U opens the panel")
+    press(KEY_U or 31)
+    frames(1)
+    check(not st.panel_up and S.IsOpen(), "T4 U again closes it")
+    S.cv.key:SetString(tostring(KEY_U or 31))
+    press(KEY_U or 31)
+    check(not S.IsOpen(), "RX.1 U as the person's Character Select key: closes the screen, never the panel")
+    S.cv.key:SetString("0")
+    -- the bar off: no panel, no filter's colour; File and Clear by their own option
+    S.barcv.bar:SetString("0")
+    st = open_on_sonic()
+    check(S.DrawFilter(st, "cs_sinkou_e", {}, 0) == nil, "T5 the bar off: the game's bottom bar as today")
+    S.barcv.bar:SetString("1")
+    S.cv.file:SetString("1")
+    check(S.DrawFilter(st, "cs_sinkou_e", {}, 0) == false and S.DrawFilter(st, "fs_file_num1", {}, 0) == false, "T5 the bar on: File and Clear hidden, whatever gsa1_charselect_file says")
+    S.cv.file:SetString("0")
+    S.barcv.upgrades:SetString("0")
+    pad_press(S.PAD_Y)
+    check(not st.panel_up, "T4 gsa1_charselect_upgrades 0: Y does nothing")
+    S.barcv.upgrades:SetString("1")
+    if S.IsOpen() then S.Close("test") end
+
+    -- Design S: the panel's buttons out of the edges, Start alone picks; A steps, never picks
+    FE.refuse = "test: no game screen"
+    GSA1.Spawn("sonic")
+    frames(2)
+    S.Open("test")
+    frames(2)
+    st = S.st
+    check(st.design == "S", "Design S")
+    pad_press(S.PAD_Y)
+    check(st.panel_up, "T4 Design S: Y opens the panel")
+    local before = U.StateNow("light_speed_shoes")
+    pad_press(S.PAD_A)
+    check(S.IsOpen() and U.StateNow("light_speed_shoes") ~= before, "RX.1 Design S: A steps the row and does not pick")
+    pad_press(S.PAD_START)
+    check(not S.IsOpen(), "RX.1 Design S: Start picks with the panel up")
+    FE.refuse = nil
+    pad.connected = false
+    for _, u in ipairs(GSA1.UPGRADES) do
+        M.convars["gsa1_upgrade_" .. u.name]:SetString("0")
+        if M.convars["gsa1_upgrade_model_" .. u.name] then M.convars["gsa1_upgrade_model_" .. u.name]:SetString("0") end     -- (none for Ancient Light: no model)
+    end
+    frames(30)
+end
+
+-- T5: the draw filter: a skin's name and nameplate pictures on the game's own draws; the support ball's colour on the game's left sphere
+do
+    local st = { slot = 0, design = "R", skins = { [0] = 2 }, state = { phase = 0 }, scr = { v = {} } }
+    local H = GSA1.SkinHud
+    local mA, mB = { tag = "name" }, { tag = "plate" }
+    H.mats.metalsonic = { name = mA, plate = mB }
+    check(S.DrawFilter(st, "m_sonic", {}, 0) == mA and S.DrawFilter(st, "B_SONIC_e", {}, 0) == mB and S.DrawFilter(st, "b_sonic", {}, 0) == mB,
+        "T5 Metal shown: m_sonic and B_SONIC_e (Japanese b_sonic too) draw the skin's pictures on the game's vertices")
+    check(S.DrawFilter(st, "m_tails", {}, 0) == nil, "T5 another slot's name stays the game's")
+    S.barcv.names:SetString("0")
+    check(S.DrawFilter(st, "m_sonic", {}, 0) == nil, "T5 gsa1_charselect_skin_names 0: the game's SONIC under him")
+    S.barcv.names:SetString("1")
+    H.mats.metalsonic = { name = false, plate = false }
+    check(S.DrawFilter(st, "m_sonic", {}, 0) == nil, "T5 a picture not made yet: the game's own (no blank frame)")
+    H.mats.metalsonic = nil
+    -- the left sphere: the 50 x 50 tinted base at (128, 418); its white shine and the ring's 48 x 48 spheres are left alone (LANDING.md C)
+    local D, V = {}, st.scr.v
+    local function quad(d, cx, cy, size, r, g, b)
+        local first = #V / 8
+        local x0, y0, x1, y1 = cx - size / 2, cy - size / 2, cx + size / 2, cy + size / 2
+        for _, p in ipairs({ { x0, y0 }, { x1, y0 }, { x1, y1 }, { x0, y0 }, { x1, y1 }, { x0, y1 } }) do
+            local o = #V
+            V[o + 1], V[o + 2], V[o + 3], V[o + 4], V[o + 5], V[o + 6], V[o + 7], V[o + 8] = p[1], p[2], 0, 0, r, g, b, 255
+        end
+        local k = d * 11
+        D[k + 1], D[k + 2], D[k + 3] = 0, first, 6
+        return k
+    end
+    local base = quad(0, 128, 418, 50, 255, 0, 0)
+    local shine = quad(1, 128, 418, 50, 255, 255, 255)
+    local ring = quad(2, 193.2, 215.9, 48, 0, 0, 255)
+    local right = quad(3, 504, 418, 50, 255, 0, 0)
+    st.skins[0] = 1
+    local t = S.DrawFilter(st, "sphe_7", D, base)
+    check(t and t.tint and t[1] == 0 and t[2] == 224 and t[3] == 0, "T5 Sonic: the left sphere's base turns green (full)")
+    st.skins[0] = 3
+    t = S.DrawFilter(st, "sphe_7", D, base)
+    check(t and t[1] == 255 and t[2] == 0, "T5 Mecha Sonic: red (none)")
+    check(S.DrawFilter(st, "sphe_7", D, shine) == nil and S.DrawFilter(st, "sphe_7", D, ring) == nil and S.DrawFilter(st, "sphe_7", D, right) == nil,
+        "T5 the shine, a ring sphere (48 x 48, centre left of x 320) and the right sphere keep the game's colours")
+    local src = host_read(root .. "/gsa1/feat/cl_charselect.lua")
+    check(string.find(src, "alt = S.DrawFilter(st, name, D, k)", 1, true) ~= nil and string.find(src, "if tint then mesh.Color(tint[1], tint[2], tint[3], V[o + 8])", 1, true) ~= nil,
+        "T5 paint_2d's seam: the filter's material or vertex colours (the game's alpha kept)")
+end
+
+-- T8 (RX.1): the Start and Escape paths and every pick and back line, by content, against the frozen 0.9.9g release ------------------------------------------------------------------------------
+do
+    -- (r1-verify-s: without build/release_0.9.9g, a fresh clone, a scratch copy or the public repo, the pins shrank to an info line.) Each pinned block is compared with the FNV-1a 32 of
+    -- 0.9.9g's own, stored here, always; with the frozen release beside the addon also with its text, and the stored hashes are checked against it
+    local PIN_0999G = {
+        ["function S.StartAllowed()"] = "6f550bc8", ["local function think()"] = "57049bb0", ["function S.OnKey(code)"] = "259699a9", ["function S.Step()"] = "16217b5b",
+        ["hook.Add(\"OnPauseMenuShow\""] = "bbe9afea", ["function S.Close(why)"] = "dca69f33", ["function S.Finish(slot)"] = "6cbafaa4", ["function S.Toggle(how)"] = "578274d4",
+        ["local function make_panel(st)"] = "f5b688b2", ["local function pick_input(st, code)"] = "405bd32e", ["local function events_r(st)"] = "fcd5697a",
+    }
+    local function fnv1a(s)
+        local h = bit.tobit(0x811C9DC5)
+        for i = 1, #s do
+            h = bit.tobit(bit.lshift(bit.bxor(h, string.byte(s, i)), 24) + bit.bxor(h, string.byte(s, i)) * 403)
+        end
+        return bit.tohex(h)
+    end
+    local src = string.gsub(host_read(root .. "/gsa1/feat/cl_charselect.lua") or "", "\r", "")
+    local rel = host_read(root .. "/../../build/release_0.9.9g/addon/lua/gsa1/feat/cl_charselect.lua")
+    if rel then rel = string.gsub(rel, "\r", "") end
+    check(fnv1a("") == "811c9dc5" and fnv1a("a") == "e40c292c", "T8 the pins' hash is FNV-1a 32 (its two reference values)")
+    if not rel then info("T8 no frozen 0.9.9g release beside the addon (a fresh clone or a scratch copy): the blocks are compared with 0.9.9g's hashes stored in this test, the lines with their text here") end
+    do
+        local function block(text, head, tail)
+            local a = string.find(text, head, 1, true)
+            if not a then return "" end
+            local b = string.find(text, tail, a, true)
+            return b and string.sub(text, a, b + #tail - 1) or ""
+        end
+        local pins = {
+            { "function S.StartAllowed()", "\nend\n" }, { "local function think()", "\nend\n" }, { "function S.OnKey(code)", "\nend\n" },
+            { "function S.Step()", "\nend\n" }, { "hook.Add(\"OnPauseMenuShow\"", "\nend)\n" }, { "function S.Close(why)", "\nend\n" },
+            { "function S.Finish(slot)", "\nend\n" }, { "function S.Toggle(how)", "\nend\n" }, { "local function make_panel(st)", "\nend\n" },
+            { "local function pick_input(st, code)", "\nend\n" },
+        }
+        local bad, stored = {}, {}
+        for _, p in ipairs(pins) do
+            local x = block(src, p[1], p[2])
+            if x == "" or fnv1a(x) ~= PIN_0999G[p[1]] or (rel and x ~= block(rel, p[1], p[2])) then bad[#bad + 1] = p[1] end
+            if rel and fnv1a(block(rel, p[1], p[2])) ~= PIN_0999G[p[1]] then stored[#stored + 1] = p[1] end
+        end
+        if rel then
+            if fnv1a(block(rel, "local function events_r(st)", "\nend\n")) ~= PIN_0999G["local function events_r(st)"] then stored[#stored + 1] = "events_r" end
+            check(#stored == 0, "T8 the stored hashes are 0.9.9g's own (checked against the frozen release: %s)", table.concat(stored, "; "))
+        end
+        check(#bad == 0, "T8 not one line changed against 0.9.9g: S.StartAllowed, think, S.OnKey, S.Step, the OnPauseMenuShow hook, S.Close, S.Finish, S.Toggle, make_panel, pick_input (%s)", table.concat(bad, "; "))
+        -- every pick and back line of every input path, by content (their line numbers move with the seams)
+        local lines = {
+            "    if st.picked then\n        if band(pressed, S.PAD_A + S.PAD_START) ~= 0 then\n            pick_input(st)\n            if S.st ~= st then return end\n        end\n        sx, sy = 0, 0\n",
+            "        if band(pad, S.PAD_A) ~= 0 then b = bor(b, F.A) end\n        if band(pad, S.PAD_START) ~= 0 then b = bor(b, F.START) end\n        if band(pad, S.PAD_B + S.PAD_BACK) ~= 0 then b = bor(b, F.B) end\n",
+            "    if band(pressed, S.PAD_A + S.PAD_START) ~= 0 then return S.Finish(st.slot) end\n    if band(pressed, S.PAD_B + S.PAD_BACK) ~= 0 then return S.Close(\"back\") end\n",
+            "    if code == KEY_PICK or code == KEY_PICK_PAD or code == KEY_PICK_SPACE then return pick_input(st, code) end\n    if st.picked then return end\n",
+            "    if code == KEY_GO_BACK then return pulse(st, F.B, code) end\n",
+            "    if code == KEY_PICK or code == KEY_PICK_PAD or code == KEY_PICK_SPACE then return S.Finish(st.slot) end\n    if code == KEY_GO_BACK then return S.Close(\"back\") end\n",
+            "    if code == M_RIGHT then\n        if not st.picked then pulse(st, st.F.B) end\n        return\n    end\n    if code ~= M_LEFT then return end\n    if st.picked then return pick_input(st) end\n",
+            "    if slot then return pick_input(st) end\n",
+            "    if (mx - cx) * (mx - cx) + (my - cy) * (my - cy) <= r * r then return pick_input(st) end\n",
+            "        elseif kind == \"pick\" then\n            st.picked, st.pickFrame, st.run = id >= 0 and id or st.slot, st.frame, nil\n            st.slot = st.picked\n            log(\"the pose: slot %d\", st.picked)\n        elseif kind == \"done\" then\n            S.Finish(st.picked or (id >= 0 and id) or st.slot)\n            return\n        elseif kind == \"cancel\" then\n            S.Close(\"back\")\n            return\n",
+            "    if S.st == st and st.picked and cv.close:GetInt() == 1 and st.frame > st.pickFrame then\n",
+        }
+        local missing = {}
+        for i, l in ipairs(lines) do
+            local _, nx = string.gsub(src, l:gsub("%p", "%%%0"), "")
+            local _, ny = string.gsub(rel or l, l:gsub("%p", "%%%0"), "")
+            if nx ~= 1 or ny ~= 1 then missing[#missing + 1] = tostring(i) .. " (" .. nx .. "/" .. ny .. ")" end
+        end
+        check(#missing == 0, "T8 RX.1: step_r's picked branch and its A / Start / B lines, step_s's Start and B lines, key_r's and key_s's pick and back lines, mouse_r's pick_input calls, events_r's pick, done "
+            .. "and cancel branches, the close option's line: each once, as in 0.9.9g (%s)", table.concat(missing, ", "))
+        -- the seams take nothing of it: the key filter says no to the pick keys and the person's own key first
+        local bar = host_read(root .. "/gsa1/feat/cl_charselect_bar.lua") or ""
+        check(string.find(bar, "if K_PICK[code] or S.IsOwnKey(code) then return false end", 1, true) ~= nil and string.find(src, "if st.panel_up then b, sx, sy = band(b, F.START), 0, 0 end", 1, true) ~= nil,
+            "T8 RX.1: the key filter never takes Enter, keypad Enter, Space or the person's own key; with the panel up the pad gives the game Start alone")
+        local evb = block(src, "local function events_r(st)", "\nend\n")
+        check(evb ~= "" and fnv1a(evb) == PIN_0999G["local function events_r(st)"] and (not rel or evb == block(rel, "local function events_r(st)", "\nend\n")), "T8 RX.1: no line goes into events_r")
+    end
+end
 -- 18. the mock against the module's frontend_api.txt (5.5, review R98.14): the binding test writes it whenever the snapshot's libsa1.h defines
 -- SA1_API_FRONTEND; then it must exist and the mock must match it (a missing file is a failure)
 do

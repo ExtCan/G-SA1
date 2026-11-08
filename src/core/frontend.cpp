@@ -134,6 +134,22 @@ sa1_status Frontend::set_skin(const sa1_skin_desc *skin, bool voiceless, std::st
 }
 #endif
 
+#if defined(SA1_API_SKIN) && SA1_API_SKIN >= 3
+sa1_status Frontend::set_upgrade_models(int32_t kind, uint32_t value, std::string &err)
+{
+    if (!fe_) {
+        err = "the front end is not open";
+        return SA1_ERR_NOT_LOADED;
+    }
+    sa1_status st = sa1_frontend_set_upgrade_models(fe_, kind, value);
+    if (st != SA1_OK) {
+        return fail(st, "sa1_frontend_set_upgrade_models", err);
+    }
+    rendered_ = false;      // the holder batches the next frame's parts
+    return SA1_OK;
+}
+#endif
+
 void Frontend::close()
 {
     if (fe_) {

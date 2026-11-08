@@ -46,6 +46,23 @@
 //       F_NEEDS_PROP, F_HOLD, F_SUPER_ONLY, F_BOARD, F_OTHER_OBJECT, F_EXTRA; version 2: HOLD, STATE_HOLDING; version 3:
 //       SPEED_MIN, SPEED_MAX} - libsa1's numbers (LOOP is G-SA1's own; the speed range is sa1_character_emote's check,
 //       libsa1 src/sa1_emote.c). F_HOLD is a catalogue flag (the game's hold row: play "hold"); HOLD is the play flag.
+// Version 4 (round 100-EV, G-SA1 1.0.0-beta1, libsa1's SA1_API_EMOTE_EVENT; sadc docs/research/emotes_ev.md 4, 7.2): the
+// cutscene animations. EmoteList rows of source gsa1.EMOTE.SOURCE_EVENT (2) with key "e<n>" (n: the place among the kind's
+// cutscene animations; group "cutscene"), and on them: event (the cutscene's number, 3 = EV0003), event_order (#2), cast (a
+// table of the characters' names with animations in that cutscene: "sonic", "tails", ...), pace (the cutscene's speed,
+// frames per 1/30 s), lift (SA1 units, flag F_LIFTED), events (a table of the cutscenes using it), notes (plain words:
+// "moves away", "lifted onto the floor", "made to sit on something", "in 21 cutscenes"), ready (loaded now).
+//   gsa1.EmoteEventLoad(kind, index) -> true | nil, message, code   queues the load on the module's loader thread (one file of
+//       the disc of the session, about 10 ms warm) and returns at once; true also when it is loaded or queued already;
+//       code "bad_argument", "not_ready" (no disc), "limit" (1024 waiting)
+//   gsa1.EmoteEventReady(kind, index) -> true | false | nil, message, code   true: loaded; false: not yet; nil: the load
+//       failed, message in plain words ("your disc's EV0003.PRS does not match the US 1.005 disc"), code "bad_disc" /
+//       "error". G-SA1 logs it once (review RX.6: the loader never logs on its thread)
+//   gsa1.Emote(id, "e<n>", ...): code "not_loaded" when the animation is not loaded yet (the load is queued then: ask again)
+//   gsa1.EMOTE.SOURCE_EVENT, EVENT (= SOURCE_EVENT), CLASS_EVENT, F_EVENT, F_ROOT_MOVES, F_LIFTED, F_RESTS_ON, COPT_LIFT (the
+//       character option 10 G-SA1 sets from gsa1_wheel_ev_lift with gsa1.SetCharacterOption where the module has it)
+//   The loader is drained (queued loads dropped, the running one waited for) at gsa1.Shutdown and at the module's close,
+//   before the session unloads the disc (libsa1.h: never beside sa1_unload_disc / sa1_shutdown).
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -114,7 +131,26 @@ sa1_status emote_play_speed(sa1_context *ctx, int32_t id, uint32_t source, uint3
     return sa1_character_emote(ctx, id, &e);
 }
 
+// round 100-EV: the module's cutscene loader (drained at gsa1.Shutdown and at the close: emote_shutdown)
+gsa1::EmoteEventPool g_ev_pool;
+
+// a new table at key k of the table at absolute index t, left on the stack: its absolute index
+int sub_named(ILuaBase *L, int t, const char *k)
+{
+    L->CreateTable();
+    L->PushString(k);
+    L->Push(-2);
+    L->RawSet(t);
+    return L->Top();
+}
+
 }  // namespace
+
+// tests (feat_emote_binding_test.cpp): the module's loader
+gsa1::EmoteEventPool &gsa1_emote_event_pool()
+{
+    return g_ev_pool;
+}
 
 // gsa1.EmoteList(kind [, form]) -> {n, [i] = {...}} | nil, message, code
 GSA1_FN(gsa1_emote_EmoteList)
@@ -151,6 +187,35 @@ GSA1_FN(gsa1_emote_EmoteList)
         bool dup = e.dup_of >= 0 && (size_t)e.dup_of < list.size() && (size_t)e.dup_of != i;
         raw_num(LUA, r, "dup", dup ? (double)e.dup_of + 1.0 : 0.0);
         raw_str(LUA, r, "dup_key", dup ? list[(size_t)e.dup_of].key : std::string());
+        if (e.source == gsa1::kEmoteSourceEvent) {
+            // round 100-EV (version 4): a cutscene animation's fields
+            raw_num(LUA, r, "event", e.event);
+            raw_num(LUA, r, "event_order", e.event_order);
+            raw_num(LUA, r, "pace", e.pace);
+            raw_num(LUA, r, "lift", e.lift);
+            raw_str(LUA, r, "notes", gsa1::emote_notes(e));
+#if defined(SA1_API_EMOTE_EVENT)
+            LUA->PushBool(sa1_emote_event_ready(se->ctx(), kind, e.index) == 1);
+#else
+            LUA->PushBool(false);
+#endif
+            LUA->SetField(r, "ready");
+            int ct = sub_named(LUA, r, "cast");
+            std::vector<std::string> names = gsa1::emote_cast_names(e.cast);
+            for (size_t k = 0; k < names.size(); k++) {
+                LUA->PushNumber((double)k + 1.0);
+                LUA->PushString(names[k].c_str());
+                LUA->RawSet(ct);
+            }
+            LUA->Pop();
+            int et = sub_named(LUA, r, "events");
+            for (size_t k = 0; k < e.events.size(); k++) {
+                LUA->PushNumber((double)k + 1.0);
+                LUA->PushNumber((double)e.events[k]);
+                LUA->RawSet(et);
+            }
+            LUA->Pop();
+        }
         LUA->Pop();
     }
     return 1;
@@ -190,11 +255,99 @@ GSA1_FN(gsa1_emote_Emote)
     }
     sa1_status st = emote_play_speed(se->ctx(), id, source, index, (uint32_t)flags, (float)speed);
     if (SA1_FAILED(st)) {
+        if (source == gsa1::kEmoteSourceEvent && st == SA1_ERR_NOT_LOADED) {
+            // round 100-EV: not loaded yet - the load is queued (the character's kind: a skin plays its base kind's), ask again
+            g_ev_pool.queue(se->ctx(), c->kind, index);
+            return push_nil_msg(LUA, scrubbed(gsa1::emote_error(se->ctx(), st)), "not_loaded");
+        }
         return push_nil_msg(LUA, scrubbed(gsa1::emote_error(se->ctx(), st)), gsa1::emote_code(st));
     }
     LUA->PushBool(true);
     return 1;
 }
+
+#if defined(SA1_API_EMOTE_EVENT)
+namespace {
+
+// the (kind, index) of a cutscene animation: an EVENT entry of the kind's normal list
+bool event_args(ILuaBase *L, int32_t &kind, uint32_t &index, uint32_t &event)
+{
+    int32_t k = -1, i = -1;
+    if (!arg_int(L, 1, k, 0, 8) || !arg_int(L, 2, i, 0, 9999)) {
+        return false;
+    }
+    kind = k;
+    index = (uint32_t)i;
+    event = 0;
+    gsa1::Session *se = session();
+    if (se && se->ready()) {
+        // the cutscene animations end the normal list: the last entry's index says how many there are (two calls, no scan:
+        // the page asks for every one of them twice a second)
+        uint32_t n = sa1_emote_count(se->ctx(), kind, SA1_EMOTE_FORM_NORMAL);
+        sa1_emote_info last, info;
+        std::memset(&last, 0, sizeof last);
+        last.struct_size = sizeof last;
+        if (n == 0 || sa1_emote_get(se->ctx(), kind, SA1_EMOTE_FORM_NORMAL, n - 1, &last) != SA1_OK ||
+            last.source != SA1_EMOTE_EVENT || index > last.index) {
+            return false;
+        }
+        std::memset(&info, 0, sizeof info);
+        info.struct_size = sizeof info;
+        if (sa1_emote_get(se->ctx(), kind, SA1_EMOTE_FORM_NORMAL, n - 1 - (last.index - index), &info) != SA1_OK ||
+            info.source != SA1_EMOTE_EVENT || info.index != index) {
+            return false;
+        }
+        event = info.event;
+        return true;
+    }
+    return true;
+}
+
+}  // namespace
+
+// gsa1.EmoteEventLoad(kind, index) -> true | nil, message, code
+GSA1_FN(gsa1_emote_EmoteEventLoad)
+{
+    int32_t kind = 0;
+    uint32_t index = 0, event = 0;
+    gsa1::Session *se = session();
+    if (!se || !se->ready()) {
+        return push_nil_msg(LUA, "G-SA1 is not initialised (the disc is not loaded yet)", "not_ready");
+    }
+    if (!event_args(LUA, kind, index, event)) {
+        return push_nil_msg(LUA, "EmoteEventLoad(kind 0..8, index of a cutscene animation of that kind)", "bad_argument");
+    }
+    if (sa1_emote_event_ready(se->ctx(), kind, index) == 1) {
+        LUA->PushBool(true);
+        return 1;
+    }
+    if (!g_ev_pool.queue(se->ctx(), kind, index)) {
+        return push_nil_msg(LUA, "too many cutscene animations are waiting to load", "limit");
+    }
+    LUA->PushBool(true);
+    return 1;
+}
+
+// gsa1.EmoteEventReady(kind, index) -> true | false | nil, message, code
+GSA1_FN(gsa1_emote_EmoteEventReady)
+{
+    int32_t kind = 0;
+    uint32_t index = 0, event = 0;
+    gsa1::Session *se = session();
+    if (!se || !se->ready()) {
+        return push_nil_msg(LUA, "G-SA1 is not initialised (the disc is not loaded yet)", "not_ready");
+    }
+    if (!event_args(LUA, kind, index, event)) {
+        return push_nil_msg(LUA, "EmoteEventReady(kind 0..8, index of a cutscene animation of that kind)", "bad_argument");
+    }
+    int32_t r = sa1_emote_event_ready(se->ctx(), kind, index);
+    if (r < 0) {
+        return push_nil_msg(LUA, gsa1::emote_event_error(r, event), r == SA1_ERR_BAD_HASH || r == SA1_ERR_BAD_FORMAT ? "bad_disc" : "error");
+    }
+    LUA->PushBool(r == 1);
+    return 1;
+}
+#endif
 
 // gsa1.EmoteStop(id [, how]) -> true | nil, message, code
 GSA1_FN(gsa1_emote_EmoteStop)
@@ -300,7 +453,30 @@ void emote_open(ILuaBase *L, int t)
     raw_num(L, c, "SPEED_MIN", kEmoteSpeedMin);
     raw_num(L, c, "SPEED_MAX", kEmoteSpeedMax);
 #endif
+#if defined(SA1_API_EMOTE_EVENT)
+    // version 4 (round 100-EV): the cutscene animations
+    raw_num(L, c, "SOURCE_EVENT", SA1_EMOTE_EVENT);
+    raw_num(L, c, "EVENT", SA1_EMOTE_EVENT);
+    raw_num(L, c, "CLASS_EVENT", SA1_EMOTE_CLASS_EVENT);
+    raw_num(L, c, "F_EVENT", SA1_EMOTE_F_EVENT);
+    raw_num(L, c, "F_ROOT_MOVES", SA1_EMOTE_F_ROOT_MOVES);
+    raw_num(L, c, "F_LIFTED", SA1_EMOTE_F_LIFTED);
+    raw_num(L, c, "F_RESTS_ON", SA1_EMOTE_F_RESTS_ON);
+    raw_num(L, c, "COPT_LIFT", SA1_COPT_EMOTE_LIFT);
+#endif
     L->RawSet(t);
+}
+
+// round 100-EV: the loader is drained before the session unloads the disc (gsa1.Shutdown) and at the module's close
+void emote_shutdown()
+{
+    g_ev_pool.drain();
+}
+
+void emote_close(ILuaBase *L)
+{
+    (void)L;
+    g_ev_pool.drain();
 }
 
 const gsa1::FeatureFn k_emote_fns[] = {
@@ -308,6 +484,10 @@ const gsa1::FeatureFn k_emote_fns[] = {
     {"Emote", gsa1_emote_Emote},
     {"EmoteStop", gsa1_emote_EmoteStop},
     {"EmoteState", gsa1_emote_EmoteState},
+#if defined(SA1_API_EMOTE_EVENT)
+    {"EmoteEventLoad", gsa1_emote_EmoteEventLoad},
+    {"EmoteEventReady", gsa1_emote_EmoteEventReady},
+#endif
 };
 
 }  // namespace
@@ -316,10 +496,15 @@ const gsa1::FeatureFn k_emote_fns[] = {
 // SA1_API_EMOTE_HOLD): Emote's flag gsa1.EMOTE.HOLD, EmoteState's STATE_HOLDING; version 3 (0.9.4e): Emote's play rate
 // (its 4th argument; sa1_emote_item.speed is libsa1's since SA1_API_EMOTE), gsa1.EMOTE.SPEED_MIN / SPEED_MAX. A libsa1
 // without HOLD stays version 1 (the versions are cumulative); its Emote takes the speed all the same
-#if defined(SA1_API_EMOTE_HOLD)
-GSA1_FEATURE(emote, 3, k_emote_fns, emote_open, nullptr, gsa1::kCloseDefault);
+// version 4 (round 100-EV, with libsa1's SA1_API_EMOTE_EVENT): the cutscene animations (EmoteList's "e<n>" rows,
+// EmoteEventLoad, EmoteEventReady, Emote's "not_loaded", the EMOTE constants of the header comment)
+#if defined(SA1_API_EMOTE_EVENT) && defined(SA1_API_EMOTE_HOLD)
+GSA1_FEATURE(emote, 4, k_emote_fns, emote_open, emote_close, gsa1::kCloseDefault);
+#elif defined(SA1_API_EMOTE_HOLD)
+GSA1_FEATURE(emote, 3, k_emote_fns, emote_open, emote_close, gsa1::kCloseDefault);
 #else
-GSA1_FEATURE(emote, 1, k_emote_fns, emote_open, nullptr, gsa1::kCloseDefault);
+GSA1_FEATURE(emote, 1, k_emote_fns, emote_open, emote_close, gsa1::kCloseDefault);
 #endif
+GSA1_FEATURE_ON_SHUTDOWN(emote, emote_shutdown);
 
 #endif

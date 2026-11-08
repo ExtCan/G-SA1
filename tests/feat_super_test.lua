@@ -319,7 +319,7 @@ if not (ok_load and S) then return done() end
 local k8, def8 = GSA1.KindByName("supersonic")
 local kg, defg = GSA1.KindByName("supersonic_general")
 check(k8 == 8 and def8.title == "Super Sonic (Vs. Perfect Chaos)" and kg == 0 and defg.form == "general" and
-    defg.title == "Super Sonic (General Gameplay)" and #GSA1.CHARACTERS == 12 and GSA1.KindByName("super") == 8 and
+    defg.title == "Super Sonic (General Gameplay)" and #GSA1.CHARACTERS == 11 + (GSA1.Skins and #GSA1.Skins.ORDER or 0) and GSA1.KindByName("super") == 8 and
     GSA1.KindByName("Super_Sonic") == 8 and GSA1.KindByName("vspc") == 8 and select(2, GSA1.KindByName("ssg")) == defg and
     select(2, GSA1.KindByName("super_general")) == defg and GSA1.CharacterByKind(0).name == "sonic" and
     GSA1.CharacterByName("0").name == "sonic" and GSA1.CharacterByName("8").name == "supersonic",
@@ -488,8 +488,10 @@ if char_entry then
             end
         end
     end
-    -- (0.9.9e: ten: the "?" comes with the unlocking, tests/feat_unlock_test.lua; 0.9.9f: eleven: Metal Sonic)
-    check(cok and shoes == 1 and #choices == 11 and #quick == 11 and note ~= "",
+    -- (0.9.9e: ten: the "?" comes with the unlocking, tests/feat_unlock_test.lua; 0.9.9f: eleven: Metal Sonic; 1.0.0: the skins' rows come from feat/sh_skins.lua's
+    -- registry, which this test's autorun does not load: ten and the skins registered)
+    local nsk = GSA1.Skins and #GSA1.Skins.ORDER or 0
+    check(cok and shoes == 1 and #choices == 10 + nsk and #quick == 10 + nsk and note ~= "",
         "the Character page: both Super Sonics in the list (%d entries) and the quick spawn buttons (%d); Sonic's upgrade "
         .. "block once (RC4: %d), \"Both Super Sonics use Sonic's upgrades\"%s", #choices, #quick, shoes,
         cok and "" or (": " .. tostring(cerr)))

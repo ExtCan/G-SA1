@@ -46,9 +46,10 @@ local function font_id(key, size)
 end
 
 local names, nnames = {}, 0
-local function name_of(text, font, size, color, sw, sh)
+local function name_of(text, font, size, color, sw, sh, outline)
     local n = names[text]
-    if n and n.font == font and n.size == size and n.r == color.r and n.g == color.g and n.b == color.b and n.a == (color.a or 255) and n.sw == sw and n.sh == sh then
+    outline = outline or 0
+    if n and n.font == font and n.size == size and n.r == color.r and n.g == color.g and n.b == color.b and n.a == (color.a or 255) and n.sw == sw and n.sh == sh and n.ol == outline then
         return n.name
     end
     if not n then
@@ -59,8 +60,8 @@ local function name_of(text, font, size, color, sw, sh)
         n = {}
         names[text] = n
     end
-    n.font, n.size, n.r, n.g, n.b, n.a, n.sw, n.sh = font, size, color.r, color.g, color.b, color.a or 255, sw, sh
-    n.name = T.FileName(text, font, size, color, sw, sh)
+    n.font, n.size, n.r, n.g, n.b, n.a, n.sw, n.sh, n.ol = font, size, color.r, color.g, color.b, color.a or 255, sw, sh, outline
+    n.name = T.FileName(text, font, size, color, sw, sh, outline)
     return n.name
 end
 
@@ -78,7 +79,8 @@ function T.Probe(key)
         p.why = "no such font in the table"
         return p
     end
-    p.there = file.Exists(T.FONT_DIR .. "/" .. f.file, "GAME") == true
+    -- (1.0.0: a family Windows has, f.system, has no file to look for: the engine is only asked)
+    p.there = f.system == true or file.Exists(T.FONT_DIR .. "/" .. tostring(f.file), "GAME") == true
     if not p.there then
         p.why = f.file .. " is not in garrysmod/resource/fonts"
     elseif not (surface.CreateFont and surface.SetFont and surface.GetTextSize) then
@@ -93,34 +95,43 @@ function T.Probe(key)
         local w1, h1 = surface.GetTextSize(T.PROBE_LINE)
         p.widths = { w0, w1 }
         if w0 == w1 and h0 == h1 then
-            p.why = f.file .. " is there, but the engine did not take it: the test line measures " .. tostring(w1) .. " px, the same as with a font that does not exist"
+            p.why = (f.system and (f.family .. " is not on this PC") or (f.file .. " is there, but the engine did not take it")) .. ": the test line measures " .. tostring(w1) .. " px, the same as with a font that does not exist"
         else
             p.taken = true
         end
     end
     if p.taken then
-        log("font %s: %s is there and the engine took it (the test line: %s px, %s px with no font)", f.title, f.file, tostring(p.widths[2]), tostring(p.widths[1]))
+        log("font %s: %s is there and the engine took it (the test line: %s px, %s px with no font)", f.title, f.system and "Windows' own" or f.file, tostring(p.widths[2]), tostring(p.widths[1]))
     else
         log("font %s: not used: %s", f.title, p.why)
     end
     return p
 end
 
--- the font an element draws with now: its own if it was found and the option is on, else today's. The log says which, once
+-- the font key an element draws with now (nil: today's engine font): its own if it was found and the option is on; 1.0.0: else the Windows family it names (e.system), if the engine has it
+function T.Pick(name)
+    local e = T.ELEMENTS[name]
+    if not e then return nil end
+    if cv:GetBool() and e.font and T.Probe(e.font).taken then return e.font end
+    if e.system and T.Probe(e.system).taken then return e.system end
+    return nil
+end
+
+-- the font an element draws with now: T.Pick's, else today's. The log says which, once
 function T.FontFor(name, size)
     local e = T.ELEMENTS[name]
-    if not cv:GetBool() then return e.fallback end
-    local p = T.Probe(e.font)
-    local f = T.FONTS[e.font]
+    local key = T.Pick(name)
     if not T.said[name] then
         T.said[name] = true
-        if p.taken then
-            log("%s: %s", e.title, f.title)
-        else
-            log("%s: today's %s (%s)", e.title, e.fallback, p.why or "?")
+        if key and key == e.font then
+            log("%s: %s", e.title, T.FONTS[key].title)
+        elseif key then
+            log("%s: %s (%s)", e.title, T.FONTS[key].title, cv:GetBool() and (T.Probe(e.font).why or "?") or "the option is off")
+        elseif cv:GetBool() or e.system then
+            log("%s: today's %s (%s)", e.title, e.fallback, (e.font and T.Probe(e.font).why) or "?")
         end
     end
-    if p.taken then return font_id(e.font, size) end
+    if key then return font_id(key, size) end
     return e.fallback
 end
 
@@ -138,13 +149,33 @@ local function measure(font, text)
     return (tonumber(w) or 0) + 2 * T.PAD, (tonumber(h) or 0) + 2 * T.PAD
 end
 
+-- an outline: a width in px (black), or { width, r, g, b }; -> width, colour, the key that names it
+local BLACK = { r = 0, g = 0, b = 0 }
+local okeys = {}
+local function outline_of(o)
+    if type(o) == "table" then
+        local w = tonumber(o[1]) or 0
+        local k = tostring(w) .. ":" .. tostring(o[2]) .. "," .. tostring(o[3]) .. "," .. tostring(o[4])
+        local c = okeys[k]
+        if not c then
+            c = { r = tonumber(o[2]) or 0, g = tonumber(o[3]) or 0, b = tonumber(o[4]) or 0 }
+            okeys[k] = c
+        end
+        return w, c, k
+    end
+    local w = tonumber(o) or 0
+    return w, BLACK, w
+end
+T.OutlineOf = outline_of
+
 -- the saved picture, or a job for the next frame
-local function open(name, text, e, size, color)
+local function open(name, text, key, size, color, outline, ocolor)
     local path = T.DIR .. "/" .. name
     if file.Exists(path, "DATA") then
         local mat = Material("../data/" .. path, "smooth")
         if mat and not (mat.IsError and mat:IsError()) then
-            local w, h = measure(font_id(e.font, size), text)
+            local w, h = measure(font_id(key, size), text)
+            w, h = w + 2 * (outline or 0), h + 2 * (outline or 0)
             local m = { mat = mat, w = w, h = h }
             remember(name, m)
             T.stats.loaded = T.stats.loaded + 1
@@ -153,18 +184,29 @@ local function open(name, text, e, size, color)
     end
     local m = { waiting = true }
     remember(name, m)
-    T.queue[#T.queue + 1] = { name = name, text = text, font = e.font, size = size, color = { r = color.r, g = color.g, b = color.b, a = color.a or 255 } }
+    T.queue[#T.queue + 1] = { name = name, text = text, font = key, size = size, color = { r = color.r, g = color.g, b = color.b, a = color.a or 255 }, outline = outline or 0,
+        ocolor = ocolor and { r = ocolor.r, g = ocolor.g, b = ocolor.b } or nil }
     return m
 end
 
--- true: drawn from its picture. false: the caller draws it its own way (with T.FontFor's font): the option is off, the font was not found, or the picture is not ready yet
-function T.Draw(text, name, size, color, x, y, ax, ay)
-    if not cv:GetBool() or not text or text == "" then return false end
+-- 1.0.0: the picture of a text ({ mat =, w =, h = }), or nil: the caller draws it its own way (with T.FontFor's font): no font was picked, or the picture is not ready yet. outline: a black outline of
+-- that many px round the letters, or { px, r, g, b } in that colour (0 / nil: none). An element without a Windows family (e.system) keeps 0.9.9g's rule: nothing with the option off
+function T.Get(text, name, size, color, outline)
+    if not text or text == "" then return nil end
     local e = T.ELEMENTS[name]
-    if not e or not T.Probe(e.font).taken then return false end
-    local fname = name_of(text, e.font, size, color, ScrW(), ScrH())
-    local m = T.mem[fname] or open(fname, text, e, size, color)
-    if not m.mat then return false end
+    if not e or (not e.system and not cv:GetBool()) then return nil end
+    local key = T.Pick(name)
+    if not key then return nil end
+    local ow, oc, okey = outline_of(outline)
+    local fname = name_of(text, key, size, color, ScrW(), ScrH(), okey)
+    local m = T.mem[fname] or open(fname, text, key, size, color, ow, oc)
+    return m.mat and m or nil
+end
+
+-- true: drawn from its picture. false: the caller draws it its own way (with T.FontFor's font): the option is off, the font was not found, or the picture is not ready yet
+function T.Draw(text, name, size, color, x, y, ax, ay, outline)
+    local m = T.Get(text, name, size, color, outline)
+    if not m then return false end
     local px, py = x, y
     if ax == 1 then px = x - m.w / 2 elseif ax == 2 then px = x - m.w end
     if ay == 1 then py = y - m.h / 2 elseif ay == 2 or ay == 4 then py = y - m.h end
@@ -211,27 +253,54 @@ function T.Make(job)
         end
     end
     local font = font_id(job.font, job.size)
+    local ol = tonumber(job.outline) or 0
     surface.SetFont(font)
     local tw, th = surface.GetTextSize(job.text)
-    local w, h = (tonumber(tw) or 0) + 2 * T.PAD, (tonumber(th) or 0) + 2 * T.PAD
+    local w, h = (tonumber(tw) or 0) + 2 * T.PAD + 2 * ol, (tonumber(th) or 0) + 2 * T.PAD + 2 * ol
     if w <= 2 * T.PAD or h <= 2 * T.PAD or w > T.MAX_SIDE or h > T.MAX_SIDE then
         return failed(string.format("%d x %d px", w, h))
     end
     local bw, bh = T.Bucket(w), T.Bucket(h)
     local rt = GetRenderTargetEx("gsa1_text_" .. bw .. "x" .. bh, bw, bh, RT_SIZE_LITERAL or 1, MATERIAL_RT_DEPTH_NONE or 2, 0, 0, IMAGE_FORMAT_BGRA8888 or 12)
     local c = job.color
+    -- (with an outline the ground is black at alpha 0, so the outline's soft edge stays black)
+    local gr, gg, gb = c.r, c.g, c.b
+    if ol > 0 then
+        local oc = job.ocolor or BLACK
+        gr, gg, gb = oc.r, oc.g, oc.b
+    end
     local data
     render.PushRenderTarget(rt)
     render.OverrideAlphaWriteEnable(true, true)
-    render.Clear(c.r, c.g, c.b, 0, true, true)
+    render.Clear(gr, gg, gb, 0, true, true)
     cam.Start2D()
     local ok, err = pcall(function()
+        -- 1.0.0 (sadc docs/research/gsa1_100_select.md 4.8, the doubled skin line of 14.1bi): render.Clear did not empty a shared bucket in the owner's game, so the whole bucket is also REPLACED by one draw,
+        -- colour and alpha (ONE, ZERO), before the text: whatever the last picture left, none of it stays. S.RenderIcon writes its picture the same way
+        if render.OverrideBlend then
+            render.OverrideBlend(true, BLEND_ONE or 1, BLEND_ZERO or 0, BLENDFUNC_ADD or 0, BLEND_ONE or 1, BLEND_ZERO or 0, BLENDFUNC_ADD or 0)
+        end
+        surface.SetDrawColor(gr, gg, gb, 0)
+        surface.DrawRect(0, 0, bw, bh)
         if render.OverrideBlend then
             render.OverrideBlend(true, BLEND_SRC_ALPHA or 4, BLEND_ONE_MINUS_SRC_ALPHA or 5, BLENDFUNC_ADD or 0, BLEND_ONE or 1, BLEND_ONE_MINUS_SRC_ALPHA or 5, BLENDFUNC_ADD or 0)
         end
         surface.SetFont(font)
+        if ol > 0 then
+            -- the outline: the text in its colour (black unless asked) at every whole offset within the width, then the text itself
+            local oc = job.ocolor or BLACK
+            surface.SetTextColor(oc.r, oc.g, oc.b, c.a or 255)
+            for dy = -ol, ol do
+                for dx = -ol, ol do
+                    if (dx ~= 0 or dy ~= 0) and dx * dx + dy * dy <= ol * ol + ol then
+                        surface.SetTextPos(T.PAD + ol + dx, T.PAD + ol + dy)
+                        surface.DrawText(job.text)
+                    end
+                end
+            end
+        end
         surface.SetTextColor(c.r, c.g, c.b, c.a or 255)
-        surface.SetTextPos(T.PAD, T.PAD)
+        surface.SetTextPos(T.PAD + ol, T.PAD + ol)
         surface.DrawText(job.text)
         if render.OverrideBlend then render.OverrideBlend(false) end
     end)
@@ -293,9 +362,14 @@ end
 function T.ElementLine(name)
     local e = T.ELEMENTS[name]
     local f = T.FONTS[e.font]
-    if not cv:GetBool() then return e.title .. ": today's " .. e.fallback .. " (the option is off)." end
+    local key = T.Pick(name)
+    if not cv:GetBool() then
+        if key then return e.title .. ": " .. T.FONTS[key].title .. " (the option is off)." end
+        return e.title .. ": today's " .. e.fallback .. " (the option is off)."
+    end
     local p = T.Probe(e.font)
     if p.taken then return e.title .. ": " .. f.title .. ", found." end
+    if key then return e.title .. ": " .. T.FONTS[key].title .. ". " .. f.title .. " was not used: " .. (p.why or "?") .. "." end
     return e.title .. ": today's " .. e.fallback .. ". " .. f.title .. " was not used: " .. (p.why or "?") .. "."
 end
 
@@ -316,5 +390,8 @@ function T.Page(panel)
     panel:Help("Saved pictures, in garrysmod/data/gsa1/textcache: " .. T.FolderLine())
     panel:Button("Clear the saved pictures", "gsa1_text_clear")
     panel:ControlHelp("They are made again when they are next shown.")
+    -- 1.0.0 (sadc docs/research/gsa1_100_select.md 4.7, 6): the skins' name and nameplate pictures (feat/cl_skinhud.lua)
+    panel:Button("Make the skins' name pictures again", "gsa1_skins_hud_remake")
+    panel:ControlHelp("Deletes only the pictures G-SA1 made in garrysmod/data/gsa1/skins/<character>/<skin>/HUD (listed in generated.txt there) and makes them again, with the fonts above. Your own pictures stay.")
 end
 if GSA1.AddMenuPage then GSA1.AddMenuPage(297, "text", "Text", T.Page) end

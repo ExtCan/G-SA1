@@ -28,6 +28,10 @@
 //       one the upgrade flags use, libsa1_internal_api.hpp) and checks the field against sa1_state_ex.breath_timer first.
 //   gsa1.CHAROPT = {COMPANION_BIRD, TAILS_SNAP_TAILS, DEATH_OTHER, DEATH_HURT, DEATH_HOST, DEATH_DROWN, DEATH_ZONE,
 //       EVENT_DEATH, EVENT_RESTART, EVENT_TIME_UP, LIVES_START (4), LIVES_MAX (127), BREATH_COUNTDOWN (1080)}
+//   1.0.0-beta1 (libsa1 SA1_GOPT_UPGRADE_MODELS; sadc docs/research/gsa1_100_select.md 4.3.3, 4.6): CHAROPT.UPGRADE_MODELS (5), UPGRADE_MODELS_ON, UPGRADE_MODELS_ALL:
+//       gsa1.SetGameOption(id, CHAROPT.UPGRADE_MODELS, value): 0 = the game, UPGRADE_MODELS_ON + bits = these upgrades' parts drawn, every other's plain (the
+//       ability is never touched: feat/cl_upgrades.lua). The value is taken whole, 0..4294967295 (the ON bit is the top one)
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -177,9 +181,13 @@ GSA1_FN(gsa1_charopt_Companion)
 GSA1_FN(gsa1_charopt_SetGameOption)
 {
     int32_t id = 0, option = 0, value = 0;
-    if (!char_arg(LUA, 1, id) || !arg_int(LUA, 2, option, 0, 255) || !arg_int(LUA, 3, value, -1000000.0, 1000000.0)) {
+    double v = 0.0;
+    // (1.0.0-beta1: a whole number -1000000 .. 4294967295; one past 2^31 - 1 goes to libsa1 as its 32 bits, SA1_UPGRADE_MODELS_ON being the top one)
+    if (!char_arg(LUA, 1, id) || !arg_int(LUA, 2, option, 0, 255) || !arg_number(LUA, 3, v) || !(v >= -1000000.0 && v <= 4294967295.0) ||
+        v != std::floor(v)) {
         return push_nil_msg(LUA, "SetGameOption(id of a character of yours, option, value)", "bad_argument");
     }
+    value = v >= 2147483648.0 ? (int32_t)(uint32_t)v : (int32_t)v;
     sa1_context *ctx = ready_ctx();
     if (!ctx) {
         return push_nil_msg(LUA, "G-SA1 is not initialised", "not_ready");
@@ -253,6 +261,11 @@ void charopt_open(ILuaBase *L, int t)
     raw_num(L, c, "LIVES_START", 4);
     raw_num(L, c, "LIVES_MAX", 127);
     raw_num(L, c, "BREATH_COUNTDOWN", 0x438);
+#if defined(SA1_GOPT_UPGRADE_MODELS)
+    raw_num(L, c, "UPGRADE_MODELS", SA1_GOPT_UPGRADE_MODELS);       // 1.0.0-beta1 (feat/cl_upgrades.lua)
+    raw_num(L, c, "UPGRADE_MODELS_ON", (double)SA1_UPGRADE_MODELS_ON);
+    raw_num(L, c, "UPGRADE_MODELS_ALL", SA1_UPGRADE_MODELS_ALL);
+#endif
     L->RawSet(t);
 }
 

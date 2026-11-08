@@ -305,7 +305,13 @@ static void test_lists(Session &s, const std::string &out_path)
             problems += format(" %s: %s", d.name, err.c_str());
             continue;
         }
+        // round 100-EV: the cutscene animations at the end of the normal lists are loaded from the disc before they play
+        // (libsa1's emote_test T3 plays all 334; feat_emote_binding_test the module's way): counted here, not played
+        size_t nev = 0;
+        for (size_t i = list.size(); i > 0 && list[i - 1].source == kEmoteSourceEvent; i--) nev++;
+        list.resize(list.size() - nev);
         sizes += format("%s%s %zu", sizes.empty() ? "" : ", ", d.name, list.size());
+        if (nev) sizes += format(" + %zu cutscene", nev);
         if (list.size() != d.want) problems += format(" %s: %zu entries (libsa1's report: %zu)", d.name, list.size(), d.want);
         const float at[3] = {(float)(-6000 + 1500 * (int)(&d - defs)), 1000.0f, 8.0f};
         int32_t id = make(s, d.kind, at, err, d.general);

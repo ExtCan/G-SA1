@@ -155,8 +155,8 @@ end
 do
     local names = {}
     for _, c in ipairs(GSA1.ListedCharacters()) do names[#names + 1] = c.name end
-    check(#names == 11 and not string.find(table.concat(names, " "), "question", 1, true), "U1 the list has the eleven others: %s", table.concat(names, " "))
-    check(#GSA1.CHARACTERS == 12, "U1 the entry itself stays in the table (the seam for the unlocking)")
+    check(#names == 12 and not string.find(table.concat(names, " "), "question", 1, true), "U1 the list has the twelve others: %s", table.concat(names, " "))
+    check(#GSA1.CHARACTERS == 13, "U1 the entry itself stays in the table (the seam for the unlocking)")
 end
 -- a saved "?" goes back to Sonic
 check(GetConVar("gsa1_character"):GetString() == "sonic", "U2 gsa1_character saved as question falls back to sonic at load (%s)", GetConVar("gsa1_character"):GetString())
@@ -201,7 +201,7 @@ do
     check(#bad == 0, "U4 no command's help names it: %s", table.concat(bad, " "))
     check(helps[COMMAND] == "" and completes[COMMAND] == nil, "U4 the secret has no help text and no completion")
     local comp = completes.gsa1_spawn("gsa1_spawn", "")
-    check(not string.find(table.concat(comp, " "), "question", 1, true) and #comp == 11, "U4 gsa1_spawn's completion has the eleven others")
+    check(not string.find(table.concat(comp, " "), "question", 1, true) and #comp == 12, "U4 gsa1_spawn's completion has the twelve others")
     local cvs = {}
     for n, d in pairs(GSA1.CONVARS) do
         if string.find(n, "gsa1_question", 1, true) or string.find(n, "charselect_super", 1, true) then cvs[#cvs + 1] = n end
@@ -355,7 +355,7 @@ do
     check(opts0["?"] == true, "U10 the menubar that was already filled has it")
     local names = {}
     for _, c in ipairs(GSA1.ListedCharacters()) do names[#names + 1] = c.name end
-    check(#names == 12 and names[12] == "question", "U10 the list has it, last")
+    check(#names == 13 and names[13] == "question", "U10 the list has it, last")
     check(M.convars.gsa1_question_rings ~= nil and M.convars.gsa1_question_spin ~= nil, "U10 its options exist now")
     creates = {}
     RunConsoleCommand("gsa1_spawn", "question")

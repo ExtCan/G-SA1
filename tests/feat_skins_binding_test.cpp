@@ -5,6 +5,9 @@
 //   * THE API PART runs whenever libsa1.h has SA1_API_SKIN: gsa1.SUPER's CREATE_SKIN, ARCHIVE_SKIN, COPT_SKIN_ANIM, SKIN_ANIM_* are libsa1's numbers; voice_class by its table (T2).
 //   * THE BEHAVIOUR PART, with the disc: gsa1.Create(0, ..., {create_flags = CREATE_SKIN, skin = the flat entry}): his batches keep their textures of archive 61, 1,015 triangles, gsa1.SetVoiceless; on Character
 //     Select gsa1.FrontendSkin: with the skin on a draw of archive 61 in the screen's holder keeps its texture, with it off none is there (T9, RM.4: white on this screen only).
+//   * 1.0.0 beta 1 (libsa1 SA1_API_SKIN 3; sadc docs/research/gsa1_100_select.md 7.2 T9): a skin draws from SA1_ARCHIVE_SKIN_FIRST + its slot (64 .. 79; 61 before); the holder and the follower
+//     path keep those textures; gsa1.SkinArchive; gsa1.SUPER's SKIN_ANIM_TRAIL, DRAW_SKIN_TRAIL, ARCHIVE_SKIN_FIRST / _LAST, TEXTURE_VARIANT_SKIN_FIRST; gsa1.CHAROPT.UPGRADE_MODELS; gsa1.FrontendUpgradeModels
+//     and gsa1.FrontendState's ring; a draw marked SA1_DRAW_SKIN_TRAIL batches with WRAP_SKIN_TRAIL and its skin's slot (the variant 16 + slot the addon draws).
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -91,6 +94,15 @@ Val skin_desc()
     t.tab->set(Val::string("glow_b"), Val::number(1.00));
     t.tab->set(Val::string("glow_inflate"), Val::number(0.30));
     return t;
+}
+
+// a skin's parts' archive: 61 (libsa1 0.5), or SA1_ARCHIVE_SKIN_FIRST .. _LAST (1.0.0 beta 1: one per loaded skin)
+bool skin_arch(double a)
+{
+#if SA1_API_SKIN >= 3
+    if (a >= (double)SA1_ARCHIVE_SKIN_FIRST && a <= (double)SA1_ARCHIVE_SKIN_LAST) return true;
+#endif
+    return a == (double)SA1_ARCHIVE_SKIN;
 }
 
 Val extras_skin(bool with_skin)
@@ -183,6 +195,62 @@ int main(int argc, char **argv)
               K.tab->field("COPT_SKIN_ANIM").num == (double)SA1_COPT_SKIN_ANIM && K.tab->field("SKIN_ANIM_FLY").num == (double)SA1_SKIN_ANIM_FLY &&
               K.tab->field("SKIN_ANIM_WALK").num == (double)SA1_SKIN_ANIM_WALK && K.tab->field("SKIN_ANIM_GLOW").num == (double)SA1_SKIN_ANIM_GLOW && SA1_CREATE_SKIN == 0x4000u && SA1_ARCHIVE_SKIN == 61u,
           "gsa1.SUPER.CREATE_SKIN 0x4000, ARCHIVE_SKIN 61, COPT_SKIN_ANIM, SKIN_ANIM_*: libsa1's numbers");
+#if SA1_API_SKIN >= 3
+    {
+        // T9: 1.0.0 beta 1's constants and calls
+        CHECK(K.tab->field("SKIN_ANIM_TRAIL").num == 8.0 && K.tab->field("DRAW_SKIN_TRAIL").num == (double)SA1_DRAW_SKIN_TRAIL && K.tab->field("ARCHIVE_SKIN_FIRST").num == 64.0 &&
+                  K.tab->field("ARCHIVE_SKIN_LAST").num == 79.0 && K.tab->field("TEXTURE_VARIANT_SKIN_FIRST").num == 16.0 && K.tab->field("WRAP_SKIN_TRAIL").num == (double)gsa1::WRAP_SKIN_TRAIL &&
+                  K.tab->field("WRAP_SKIN_SLOT_SHIFT").num == 9.0,
+              "T9 gsa1.SUPER.SKIN_ANIM_TRAIL 8, DRAW_SKIN_TRAIL, ARCHIVE_SKIN_FIRST 64 / _LAST 79, TEXTURE_VARIANT_SKIN_FIRST 16, WRAP_SKIN_TRAIL and its slot's shift");
+        Val C = g.tab->field("CHAROPT");
+        CHECK(C.type == Type::Table && C.tab->field("UPGRADE_MODELS").num == 5.0 && C.tab->field("UPGRADE_MODELS_ON").num == 2147483648.0 && C.tab->field("UPGRADE_MODELS_ALL").num == (double)0xF1FFFu,
+              "T9 gsa1.CHAROPT.UPGRADE_MODELS 5, UPGRADE_MODELS_ON 0x80000000, UPGRADE_MODELS_ALL 0xF1FFF");
+        CHECK(g.tab->field("SkinArchive").type == Type::Function && g.tab->field("FrontendUpgradeModels").type == Type::Function, "T9 gsa1.SkinArchive and gsa1.FrontendUpgradeModels exist");
+        std::vector<Val> bad = L.call("FrontendUpgradeModels", {Val::number(0), Val::number(-1)});
+        std::vector<Val> bad2 = L.call("SetGameOption", {Val::number(1), Val::number(5), Val::number(4294967296.0)});
+        CHECK(num_of(bad, 0) < 0.0 && str_of(bad, 2) == "bad_argument" && str_of(bad2, 2) == "bad_argument", "T9 a value outside 0 .. 4294967295: bad_argument (%s, %s)", str_of(bad, 2).c_str(), str_of(bad2, 2).c_str());
+        // the trail: a draw libsa1 marked SA1_DRAW_SKIN_TRAIL batches with WRAP_SKIN_TRAIL + its skin's slot, never merged with the game-coloured one; the skin's archives keep their textures
+        gsa1::Session probe;
+        gsa1::Character c;
+        c.kind = 0;
+        c.num_archives = 8;
+        c.create_extra = SA1_CREATE_SKIN;
+        c.skin_slot = 1;
+        c.r_triangles = 3;
+        sa1_draw d;
+        std::memset(&d, 0, sizeof d);
+        d.prim = SA1_PRIM_TRIANGLES;
+        d.count = 1;
+        d.archive = 3;
+        d.texture = 2;
+        d.flags = SA1_DRAW_SKIN_TRAIL;
+        c.r_draws.push_back(d);
+        d.first = 1;
+        d.flags = 0;
+        c.r_draws.push_back(d);
+        d.first = 2;
+        d.archive = 65;
+        d.texture = 4;
+        c.r_draws.push_back(d);
+        probe.rebatch(c);
+        uint32_t trail = 0, plain = 0, skinb = 0;
+        for (uint32_t i = 0; i < c.batch_count && i < c.batches.size(); i++) {
+            const gsa1::RenderBatch &rb = c.batches[i];
+            if (rb.archive == 3 && (rb.wrap & gsa1::WRAP_SKIN_TRAIL)) trail = rb.wrap;
+            if (rb.archive == 3 && !(rb.wrap & gsa1::WRAP_SKIN_TRAIL)) plain++;
+            if (rb.archive == 65 && rb.texture == 4) skinb++;
+        }
+        CHECK(trail != 0 && ((trail >> gsa1::WRAP_SKIN_SLOT_SHIFT) & 15u) == 1u && plain == 1 && skinb == 1,
+              "T9 the trail's draw: WRAP_SKIN_TRAIL with slot 1 (wrap 0x%X), the plain one beside it a batch of its own; archive 65 keeps its texture (%u)", (unsigned)trail, skinb);
+        c.skin_slot = -1;
+        probe.rebatch(c);
+        trail = 0;
+        for (uint32_t i = 0; i < c.batch_count && i < c.batches.size(); i++) {
+            if (c.batches[i].wrap & gsa1::WRAP_SKIN_TRAIL) trail = c.batches[i].wrap;
+        }
+        CHECK(trail == 0, "T9 a character whose skin slot is not known: no trail variant (the game's texture)");
+    }
+#endif
     if (gdi.empty()) {
         std::printf("  info  no disc: the behaviour part is skipped\n");
         return finish();
@@ -241,7 +309,7 @@ int main(int argc, char **argv)
     for (int i = 1; i <= n; i++) {
         Val e = b.tab->at(i);
         if (e.type != Type::Table) continue;
-        if (e.tab->field("archive").num == SA1_ARCHIVE_SKIN) {
+        if (skin_arch(e.tab->field("archive").num)) {
             tris += (int)e.tab->field("tris").num;
         } else if (e.tab->field("archive").num < 0) {
             untex++;
@@ -250,6 +318,14 @@ int main(int argc, char **argv)
         }
     }
     CHECK(tris == 1015 && untex == 0, "his batches keep their textures (session.cpp): %d triangles on archive 61 (1015), %d untextured, %d of other archives (the blob)", tris, untex, others);
+#if SA1_API_SKIN >= 3
+    {
+        std::vector<Val> sa = L.call("SkinArchive", {Val::number(id)});
+        CHECK(num_of(sa, 0) >= 64.0 && num_of(sa, 0) <= 79.0, "T9 gsa1.SkinArchive(id): %.0f (64 + the skin's slot)", num_of(sa, 0));
+        gsa1::Character *cc = se->get((int32_t)id);
+        CHECK(cc && cc->skin_slot >= 0 && cc->skin_slot == (int32_t)num_of(sa, 0) - 64, "T9 the character knows its skin's slot (%d): its trails' variant 16 + slot", cc ? cc->skin_slot : -9);
+    }
+#endif
     std::vector<Val> t0 = L.call("Texture", {Val::number(0), Val::number(6), Val::number(61)});
     std::string n6 = t0.size() >= 1 && t0[0].type == Type::Table ? t0[0].tab->field("name").str : "";
     CHECK(n6.find("msblue") != std::string::npos, "gsa1.Texture(0, 6, 61), position 6 of keep, id 101: %s (msblue)", n6.c_str());
@@ -326,7 +402,7 @@ int main(int argc, char **argv)
                 for (int i = 1; i <= nb; i++) {
                     Val e = b2.tab->at(i);
                     if (e.type != Type::Table) continue;
-                    if (e.tab->field("archive").num == SA1_ARCHIVE_SKIN) {
+                    if (skin_arch(e.tab->field("archive").num)) {
                         skin_tris += (int)e.tab->field("tris").num;
                         skin_tex += e.tab->field("tex").num >= 0;
                     } else if (e.tab->field("archive").num < 0) {
@@ -376,7 +452,7 @@ int main(int argc, char **argv)
         for (int i = 1; i <= c; i++) {
             Val e = o.tab->at(i);
             if (e.type != Type::Table) continue;
-            if (e.tab->field("archive").num == SA1_ARCHIVE_SKIN) {
+            if (skin_arch(e.tab->field("archive").num)) {
                 skin_tris += (int)e.tab->field("tris").num;
                 skin_tex += e.tab->field("tex").num >= 0;
             } else if (e.tab->field("archive").num < 0) {
@@ -396,6 +472,17 @@ int main(int argc, char **argv)
     int st2, tx2, un2;
     fe_tick(2);
     fe_count(st2, tx2, un2);
+#if SA1_API_SKIN >= 3
+    {
+        Val fs = Val::table();
+        std::vector<Val> fsr = L.call("FrontendState", {fs});
+        CHECK(fsr.size() >= 1 && fsr[0].type == Type::Table && fs.tab->field("ring").type == Type::Number, "T9 gsa1.FrontendState gives ring (%.0f)", fs.tab->field("ring").num);
+        std::vector<Val> um = L.call("FrontendUpgradeModels", {Val::number(0), Val::number(2147483648.0 + 3.0)});
+        std::vector<Val> um0 = L.call("FrontendUpgradeModels", {Val::number(0), Val::number(0)});
+        CHECK(um.size() >= 1 && um[0].type == Type::Bool && um[0].b && um0.size() >= 1 && um0[0].type == Type::Bool && um0[0].b,
+              "T9 gsa1.FrontendUpgradeModels(0, ON + shoes + ring), then 0: true (%s)", str_of(um, 1).c_str());
+    }
+#endif
     CHECK(st0 == 0 && st1 == 1015 && tx1 > 0 && un1 == 0 && st2 == 0,
           "T9 RM.4: Character Select: without it no draw of archive 61 (%d triangles), with it %d triangles in %d batches, every one with its texture (%d untextured); off again %d",
           st0, st1, tx1, un1, st2);
