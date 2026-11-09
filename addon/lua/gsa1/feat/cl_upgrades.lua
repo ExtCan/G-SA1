@@ -239,7 +239,7 @@ function U.PanelClick(st, mx, my, W, H)
     local m = st.F and st.m and st.m.sx and st.m or S.Layout(W, H, st.design == "R" and S.cv.wide:GetBool() or false, {})
     local gx, gy = (mx - m.ox) / m.sx, (my - m.oy) / m.sy
     local n = #(st.upList or {})
-    if gx > U.LAYOUT.band_fade then return false end
+    if gx > U.BAND.click_to then return false end
     for k = 1, n do
         local sy, sh, ny, nh = U.RowPlace(k, n)
         if gy >= sy - 2 and gy <= ny + nh + 2 then
@@ -274,12 +274,17 @@ local function text_at(text, element, size, c, x, y, s, alpha, outline, dim)
     size = math.max(8, math.floor(size + 0.5))
     local pic = Tx and Tx.Get and Tx.Get(text, element, size, c, outline)
     local a = math.floor(255 * alpha)
-    if pic then
+    if pic and pic.mat and pic.u1 then
+        -- (1.0.0-beta1a, b1a-text's API: the picture is a part of an atlas page; T.DrawPic draws that part, with its UVs, in this colour: grey 153 dims a disabled row)
         local w, h = pic.w * s, pic.h * s
         local v = dim and 153 or 255
-        surface.SetDrawColor(v, v, v, a)
-        surface.SetMaterial(pic.mat)
-        surface.DrawTexturedRect(math.floor(x), math.floor(y - h / 2), w, h)
+        if Tx.DrawPic then
+            Tx.DrawPic(pic, math.floor(x), math.floor(y - h / 2), w, h, v, v, v, a)
+        else
+            surface.SetDrawColor(v, v, v, a)
+            surface.SetMaterial(pic.mat)
+            surface.DrawTexturedRectUV(math.floor(x), math.floor(y - h / 2), w, h, pic.u0, pic.v0, pic.u1, pic.v1)
+        end
         return w
     end
     local font = Tx and Tx.FontFor and Tx.FontFor(element, size) or "DermaLarge"
@@ -309,41 +314,76 @@ function U.Ring(st)
     return (SysTime() * 60 * U.RING_STEP) % 65536
 end
 
+-- THE BAND (1.0.0-beta1a, lane b1a-bar; the owner's 10.png and 12.png at 1280 x 960, MEASURED): dark green 207A01 at the picture's left edge to yellow-green BDF604 at game x 200 (U.LAYOUT.from / to),
+-- solid to 214, then fading out as (1 - t)^4 over 214 .. 500. Fix run (fix-bar): the fade fitted to the mockup's alpha MEASURED against the same sky in 9.png (rows y 8 .. 55 of 10.png, all three
+-- channels; game x: alpha) 220: 0.91, 240: 0.70, 260: 0.49, 280: 0.35, 300: 0.23, 320: 0.15, 340: 0.09, 360: 0.06, 380: 0.04, 400: 0.02, 420: 0.01, within 0.03 at every point (b1a-bar's first fade,
+-- (1 - t)^2 over 210 .. 380, was half the mockup's from x 320 on and none from 380; beta 1's straight fade to 400 left 0.63 at 280). Its last strip of alpha 1 / 255 or more ends at game x 440 (seen_to:
+-- the slide's reach and the log's end); a click past game x 380 (click_to, where the mockup's alpha falls under 0.05) is not on a row. From the top to game y 324 (MEASURED 326). On a screen wider than
+-- 4:3 the green starts at the SCREEN's left edge and turns yellow-green where the mockup has it (beta 1 filled the side bar with the flat dark green, the owner's 15.jpg; a matter of taste on the owner's
+-- checklist). The slide moves it in from beyond the screen's left edge (U.LAYOUT.slide), the rows with it
+U.BAND = { ramp_to = 200, solid_to = 214, fade_to = 500, power = 4, step = 2, seen_to = 440, click_to = 380 }
+function U.BandAlpha(x)
+    local B = U.BAND
+    if x <= B.solid_to then return 1 end
+    if x >= B.fade_to then return 0 end
+    return (1 - (x - B.solid_to) / (B.fade_to - B.solid_to)) ^ B.power
+end
+
+-- one strip of the band, screen px [xa, xb) shifted by `shift`, clipped at the screen's left edge
+local function strip(xa, xb, shift, y0, h, r, g, b, a)
+    local x0, x1 = math.floor(xa + shift + 0.5), math.floor(xb + shift + 0.5)
+    if x0 < 0 then x0 = 0 end
+    if x1 <= x0 or a <= 0 then return 0 end
+    surface.SetDrawColor(r, g, b, a)
+    surface.DrawRect(x0, y0, x1 - x0, h)
+    return 1
+end
+
+-- the band on layout m, moved by `shift` screen px, at `fade` (0..1). Returns its right end on the screen (px, unshifted) and the strips drawn
+function U.PaintBand(m, shift, fade)
+    local S, L, B = GSA1.CharSelect, U.LAYOUT, U.BAND
+    local y0 = math.floor(S.PlaceY(m, 0) + 0.5)
+    local h = math.floor(S.PlaceY(m, L.band_h) + 0.5) - y0
+    local xr, xs, xe = S.PlaceX(m, B.ramp_to), S.PlaceX(m, B.solid_to), S.PlaceX(m, B.seen_to)
+    local n = 0
+    -- the ramp from the screen's left edge: a strip every 2 game px of the box's scale
+    local steps = math.max(8, math.ceil(xr / (B.step * m.sx)))
+    for i = 0, steps - 1 do
+        local t = (i + 0.5) / steps
+        n = n + strip(xr * i / steps, xr * (i + 1) / steps, shift, y0, h, math.floor(L.from[1] + (L.to[1] - L.from[1]) * t + 0.5),
+            math.floor(L.from[2] + (L.to[2] - L.from[2]) * t + 0.5), math.floor(L.from[3] + (L.to[3] - L.from[3]) * t + 0.5), math.floor(255 * fade + 0.5))
+    end
+    n = n + strip(xr, xs, shift, y0, h, L.to[1], L.to[2], L.to[3], math.floor(255 * fade + 0.5))
+    for gx = B.solid_to, B.seen_to - B.step, B.step do          -- (past seen_to every strip rounds to alpha 0)
+        local a = U.BandAlpha(gx + B.step / 2)
+        n = n + strip(S.PlaceX(m, gx), S.PlaceX(m, gx + B.step), shift, y0, h, L.to[1], L.to[2], L.to[3], math.floor(255 * a * fade + 0.5))
+    end
+    return xe, n
+end
+
 -- the panel (S.Overlay calls it while it is up or sliding out). m: the game screen's layout
 function U.PanelPaint(st, m, W, H)
     local S, L = GSA1.CharSelect, U.LAYOUT
     local now = SysTime()
-    local off, fade = 0, 1
+    local reach = S.PlaceX(m, U.BAND.seen_to)            -- (the band's visible right end: a slide from beyond the screen's left edge moves it this far)
+    local shift, fade = 0, 1
     if st.panelFade and not st.panel_up then
         local t = (now - (st.upClosed or now)) / L.close
         if t >= 1 then
             st.panelFade = nil
             return
         end
-        off, fade = -L.band_fade * ease_out(t), 1 - t
+        shift, fade = -reach * ease_out(t), 1 - t
     elseif st.panelFade and st.panelEnding then
-        off = 0
+        shift = 0
     else
-        off = -L.band_fade * (1 - ease_out((now - (st.upT0 or now)) / L.slide))
+        shift = -reach * (1 - ease_out((now - (st.upT0 or now)) / L.slide))
     end
-    -- the band: green to yellow, solid to 210, fading out by 400 (from the screen's left edge)
-    local y0, y1 = S.PlaceY(m, 0), S.PlaceY(m, L.band_h)
-    local edge = S.PlaceX(m, math.max(0.001, off + 0.001))
-    if edge > 0 and off > -L.band_fade + 1 then
-        surface.SetDrawColor(L.from[1], L.from[2], L.from[3], math.floor(255 * fade))
-        surface.DrawRect(0, y0, math.ceil(edge), y1 - y0)
-    end
-    local step = 2
-    for x = 0, L.band_fade - step, step do
-        local gx = x + off
-        if gx + step > 0 then
-            local r, g, b, a = U.BandAt(x + step / 2)
-            local sx0, sx1 = S.PlaceX(m, math.max(0.001, gx)), S.PlaceX(m, gx + step)
-            if sx1 > sx0 and a > 0 then
-                surface.SetDrawColor(r, g, b, math.floor(255 * a * fade))
-                surface.DrawRect(math.floor(sx0), y0, math.ceil(sx1 - sx0), y1 - y0)
-            end
-        end
+    local xe, strips = U.PaintBand(m, shift, fade)
+    if st.upSaid ~= st.upT0 and shift == 0 then
+        st.upSaid = st.upT0
+        log("Choose Your Upgrade: the band from the screen's left edge to x %d px of %d (game x %d, the mockup's fade), bottom at y %d px, %d strips; %d rows from x %d px", math.floor(xe + 0.5), W or 0,
+            U.BAND.seen_to, math.floor(S.PlaceY(m, L.band_h) + 0.5), strips, #(st.upList or {}), math.floor(S.PlaceX(m, L.x) + 0.5))
     end
     -- the title, then the rows (each fading in after the one above)
     local list = st.upList or {}
@@ -351,7 +391,7 @@ function U.PanelPaint(st, m, W, H)
     local white, grey = col(L.white[1], L.white[2], L.white[3]), col(L.grey[1], L.grey[2], L.grey[3])
     local ol = math.max(1, math.floor(2 * m.sy + 0.5))
     local tsize = L.title_h * m.sy * 1.35
-    text_at("CHOOSE YOUR UPGRADE", "upgrades_title", tsize, white, S.PlaceX(m, math.max(0.001, L.title_x + off)), S.PlaceY(m, L.title_y + L.title_h / 2), 1, fade, ol)
+    text_at("CHOOSE YOUR UPGRADE", "upgrades_title", tsize, white, S.PlaceX(m, L.title_x) + shift, S.PlaceY(m, L.title_y + L.title_h / 2), 1, fade, ol)
     local t = now - (st.upT0 or now)
     local pulse = U.PulseScale(U.Ring(st))
     local skin = S.SkinEntry and S.SkinEntry(st, st.slot) or nil      -- (the shown skin: its name colour for an upgrade with none of its own)
@@ -364,7 +404,7 @@ function U.PanelPaint(st, m, W, H)
             local active, model = U.Get(u.name)
             local state = U.StateOf(active, model, u.name)
             local vis = U.STATE[state].visible and not U.NO_MODEL[u.name]
-            local x = S.PlaceX(m, math.max(0.001, L.x + off))
+            local x = S.PlaceX(m, L.x) + shift                  -- (the rows move with the band)
             local ssize, olr = sh * m.sy * 1.35, math.max(1, math.floor(ol * sh / L.status_h + 0.5))
             local yc = S.PlaceY(m, sy + sh / 2)
             local w1 = text_at("ACTIVE", "upgrades_status", ssize, active and white or grey, x, yc, s, a, olr)
@@ -375,6 +415,6 @@ function U.PanelPaint(st, m, W, H)
     end
     -- Super Sonic (Vs. Perfect Chaos) uses Sonic's (select 4.6)
     if st.slot == S.SUPER_SLOT and n > 0 then
-        text_at("Super Sonic uses Sonic's upgrades", "upgrades_status", 13 * m.sy * 1.35, white, S.PlaceX(m, math.max(0.001, L.x + off)), S.PlaceY(m, L.band_h - 14), 1, fade, ol)
+        text_at("Super Sonic uses Sonic's upgrades", "upgrades_status", 13 * m.sy * 1.35, white, S.PlaceX(m, L.x) + shift, S.PlaceY(m, L.band_h - 14), 1, fade, ol)
     end
 end

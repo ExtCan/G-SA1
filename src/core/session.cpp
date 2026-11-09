@@ -1985,7 +1985,7 @@ uint32_t Session::texture_archives(int32_t kind)
     if (sa1_character_info_get(ctx_, kind, &info) != SA1_OK || !info.loaded) {
         return 0;
     }
-    return std::min<uint32_t>(info.num_archives, 64u);
+    return std::min<uint32_t>(info.num_archives, kArchivesOwn);     // (libsa1 numbers a kind's own archives below its skins')
 }
 
 bool Session::texture_count(int32_t kind, uint32_t archive, uint32_t &count, std::string &err, std::string *name)

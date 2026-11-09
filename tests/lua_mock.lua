@@ -344,6 +344,17 @@ draw = { NoTexture = noop, SimpleText = noop, SimpleTextOutlined = noop }
 local MATMT = {}
 MATMT.__index = MATMT
 function MATMT:GetName() return self.name end
+-- (the names fix after 1.0.0-beta1a: feat/cl_skinhud.lua's self-check asks what a material samples) IMaterial:GetTexture(key): the texture its parameter names (a render target of
+-- GetRenderTargetEx by its name; Garry's Mod's error texture for a name no texture has, IsError true); ITexture:GetName / Width / Height / IsError (a render target here is the same kind of table)
+function MATMT:GetTexture(key)
+    local v = self.params and self.params[key]
+    if type(v) == "table" then return v end
+    if v == nil then return nil end
+    return M.rts[tostring(v)] or setmetatable({ name = "error", w = 32, h = 32, error = true }, MATMT)
+end
+function MATMT:IsError() return self.error == true end
+function MATMT:Width() return self.w or 0 end
+function MATMT:Height() return self.h or 0 end
 function CreateMaterial(name, shader, params)
     count("CreateMaterial")
     if M.material_cost > 0 then M.T = M.T + M.material_cost end

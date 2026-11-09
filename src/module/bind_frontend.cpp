@@ -539,7 +539,7 @@ GSA1_FN(gsa1_frontend_FrontendTextureArchives)
     gsa1::Session *se = session();
     LUA->CreateTable();
     int t = LUA->Top();
-    for (uint32_t a = 0; a < 64u; a++) {
+    for (uint32_t a = 0; a < gsa1::kArchivesOwn; a++) {     // (1.0.0-beta1a: libsa1's bound of a kind's own archives, session.hpp)
         uint32_t n = 0;
         std::string err, name;
         if (!se->texture_count(SA1_KIND_FRONTEND, a, n, err, &name)) {
@@ -563,7 +563,7 @@ GSA1_FN(gsa1_frontend_FrontendTextureCount)
         return ret;
     }
     int32_t archive = 0;
-    if (!absent(LUA, 1) && !arg_int(LUA, 1, archive, 0, 63)) {
+    if (!absent(LUA, 1) && !arg_int(LUA, 1, archive, 0, gsa1::kArchiveLast)) {     // (1.0.0-beta1a: libsa1's range; libsa1 answers the rest)
         return push_nil_msg(LUA, "FrontendTextureCount([archive])", "bad_argument");
     }
     uint32_t n = 0;
@@ -583,7 +583,7 @@ GSA1_FN(gsa1_frontend_FrontendTexture)
         return ret;
     }
     int32_t index = 0, archive = 0;
-    if (!arg_int(LUA, 1, index, 0, 65535) || (!absent(LUA, 2) && !arg_int(LUA, 2, archive, 0, 63))) {
+    if (!arg_int(LUA, 1, index, 0, 65535) || (!absent(LUA, 2) && !arg_int(LUA, 2, archive, 0, gsa1::kArchiveLast))) {
         return push_nil_msg(LUA, "FrontendTexture(index [, archive])", "bad_argument");
     }
     gsa1::TextureRuns tr;
@@ -617,7 +617,7 @@ GSA1_FN(gsa1_frontend_FrontendTexturePixel)
     int32_t archive, index, x, y;
     uint8_t px[4];
     gsa1::Session *se = session();
-    if (!se || !arg_int(LUA, 1, archive, 0, 63) || !arg_int(LUA, 2, index, 0, 65535) || !arg_int(LUA, 3, x, 0, 4095) ||
+    if (!se || !arg_int(LUA, 1, archive, 0, gsa1::kArchiveLast) || !arg_int(LUA, 2, index, 0, 65535) || !arg_int(LUA, 3, x, 0, 4095) ||
         !arg_int(LUA, 4, y, 0, 4095) ||
         !se->texture_pixel(SA1_KIND_FRONTEND, (uint32_t)archive, (uint32_t)index, (uint32_t)x, (uint32_t)y, px)) {
         LUA->PushNil();

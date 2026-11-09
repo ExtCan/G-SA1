@@ -171,7 +171,7 @@ function K.ExtrasFor(skin, super)
 end
 -- THE SKINS ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -- rig.parts: [figure node, from 0, depth first] = { Sonic's joint, Sonic's mesh node, the figure's bone end or -1, Sonic's bone end or -1 } (metal099e.md section 2, 3.2 with its review's RM.3: both columns).
--- options: the prefix of its ConVars gsa1_<options>_<key> (feat/cl_skins.lua), with these defaults; option_keys: which of K.OPTIONS (fly, walk_fly, voice, glow, trail) the skin has (1.0.0,
+-- options: the prefix of its ConVars gsa1_<options>_<key> (feat/cl_skins.lua), with these defaults; option_keys: which of K.OPTIONS (fly, walk_fly, voice, glow, trail; 1.0.0-beta1a plant, jog_pace) the skin has (1.0.0,
 -- gsa1_100_master.md 3's R1 delta with RY.1: the ConVars are made by a loop, so a skin without a fly has no fly key and no fly box). anim_always: its anim rows are always on (no fly box to turn them)
 K.Register("metalsonic", {
     skin_for = "sonic", char_name = "Metal Sonic", char_color = "3900b5",                  -- the owner's own example values (owner_mockups/skin.ini)
@@ -208,7 +208,8 @@ K.Register("metalsonic", {
 -- build/staging/upgdisp/LANDING.md B, D: 20 parts, 819 triangles, its feet on the ground at scale 0.52). THE OWNER'S ANSWER 17 (rounds plan 14.1bl, confirmed in 14.1bm): "He's a heavier robot
 -- canonically, so he runs instead of flies. He never uses the arms behind back run animation though, he uses the Jog." So he is on his feet with no fly and no fly box: Sonic's own rows, Sonic's
 -- jog (row 11) where Sonic runs with his arms behind him (rows 12 and 13, MEASURED: select 4.2.1), lift 0; his name stays orange. libsa1 poses a drawn row of Sonic's own tree by Sonic's own
--- mesh nodes, steps it as the game steps the jog at that speed and stands him on Sonic's own lowest point (sa1_skin.c). The scale and the lift are here and nowhere else
+-- mesh nodes, steps it as the game steps the jog at that speed but never faster than Sonic's own fastest jog, and stands his lowest point on the floor (1.0.0-beta1a; sa1_skin.c). The scale and
+-- the lift are here and nowhere else
 K.Register("mechasonic", {
     skin_for = "sonic", char_name = "Mecha Sonic", char_color = "ff8a1c",
     auto_generate_name = true, name_tex_location = "[skin folder]/HUD/name.png",
@@ -234,7 +235,10 @@ K.Register("mechasonic", {
     glow = { color = { 1.00, 0.45, 0.05 }, inflate = 0.35 },
     trail = { color = { 1.00, 0.45, 0.05 } },
     voice = false,
-    options = "mecha", defaults = { voice = 0, glow = 1, trail = 1 },
-    option_keys = { "voice", "glow", "trail" },             -- no fly, no walk_fly: gsa1_mecha_fly and gsa1_mecha_walk_fly are never made
+    -- 1.0.0-beta1a (lane b1a-mecha; the owner: "Mecha Sonic is floating ... his run animation has stuttering and it animates far too fast"): the step that keeps his feet on the floor (libsa1 D9,
+    -- now on the floor itself, slopes too, in every 60 Hz frame: since the lane's fix run libsa1's render calls sa1k_frame for the frames between two pairs) and his jog's pace (D10: never faster
+    -- than Sonic's own jog at its fastest, 1 = that pace) are options of their own (feat/cl_skins.lua K.OPTIONS)
+    options = "mecha", defaults = { voice = 0, glow = 1, trail = 1, plant = 1, jog_pace = 1 },
+    option_keys = { "voice", "glow", "trail", "plant", "jog_pace" }, -- no fly, no walk_fly: gsa1_mecha_fly and gsa1_mecha_walk_fly are never made
     title = "Mecha Sonic", aliases = { "mecha", "mecha_sonic" },
 })

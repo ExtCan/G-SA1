@@ -68,7 +68,7 @@ static_assert(offsetof(lua_State, luabase) == (sizeof(void *) == 8 ? 120 : 72),
 using GarrysMod::Lua::ILuaBase;
 namespace LT = GarrysMod::Lua::Type;
 
-#define GSA1_MODULE_VERSION "1.0.0-beta1"
+#define GSA1_MODULE_VERSION "1.0.0-beta1a2"
 #define GSA1_API_VERSION 6
 
 namespace {
@@ -1943,6 +1943,7 @@ GSA1_FN(gsa1_lua_TextureArchives)
 }
 
 // gsa1.TextureCount(kind [, archive]) -> n | nil, message
+// archive (1.0.0-beta1a): 0 .. gsa1::kArchiveLast, libsa1's own range (session.hpp: a skin's archives 64 .. 79 included; beta 1 refused them: the skins drew white)
 GSA1_FN(gsa1_lua_TextureCount)
 {
     int ret;
@@ -1951,7 +1952,7 @@ GSA1_FN(gsa1_lua_TextureCount)
     }
     int32_t kind, archive = 0;
     if (!arg_int(LUA, 1, kind, 0, SA1_CHAR_COUNT - 1) ||
-        (!LUA->IsType(2, LT::Nil) && !LUA->IsType(2, LT::None) && !arg_int(LUA, 2, archive, 0, 63))) {
+        (!LUA->IsType(2, LT::Nil) && !LUA->IsType(2, LT::None) && !arg_int(LUA, 2, archive, 0, gsa1::kArchiveLast))) {
         return push_nil_msg(LUA, "TextureCount(kind [, archive])");
     }
     uint32_t n = 0;
@@ -1965,6 +1966,7 @@ GSA1_FN(gsa1_lua_TextureCount)
 
 // gsa1.Texture(kind, index [, archive [, variant]]) -> {w, h, fmt, dfmt, alpha, name, runs, nruns, canary, cx, cy, cr, cg,
 // cb, ca}
+// archive: 0 .. gsa1::kArchiveLast (1.0.0-beta1a: libsa1's range, a skin's 64 .. 79 included; see TextureCount)
 // runs: 10 bytes per run: u16 x, u16 y, u16 length, u8 r, g, b, a (little-endian); (0,0,0,0) pixels left out
 // variant (0.9.4a, sadc docs/research/super2_plan.md 6.4 task 1 with its review R.6): absent or 0 = the texture; > 0 =
 // libsa1's variant of it (sa1_texture_variant_get: gsa1.SUPER.TEXTURE_VARIANT_SUPER_GOLD 1 for SON_EFF lcharge01-04 of
@@ -1977,7 +1979,7 @@ GSA1_FN(gsa1_lua_Texture)
     }
     int32_t kind, index, archive = 0, variant = 0;
     if (!arg_int(LUA, 1, kind, 0, SA1_CHAR_COUNT - 1) || !arg_int(LUA, 2, index, 0, 65535) ||
-        (!LUA->IsType(3, LT::Nil) && !LUA->IsType(3, LT::None) && !arg_int(LUA, 3, archive, 0, 63)) ||
+        (!LUA->IsType(3, LT::Nil) && !LUA->IsType(3, LT::None) && !arg_int(LUA, 3, archive, 0, gsa1::kArchiveLast)) ||
         (!LUA->IsType(4, LT::Nil) && !LUA->IsType(4, LT::None) && !arg_int(LUA, 4, variant, 0, 255))) {
         return push_nil_msg(LUA, "Texture(kind, index [, archive [, variant]])");
     }
@@ -2011,7 +2013,7 @@ GSA1_FN(gsa1_lua_TexturePixel)
 {
     int32_t kind, archive, index, x, y;
     uint8_t px[4];
-    if (!g_session || !arg_int(LUA, 1, kind, 0, SA1_CHAR_COUNT - 1) || !arg_int(LUA, 2, archive, 0, 63) ||
+    if (!g_session || !arg_int(LUA, 1, kind, 0, SA1_CHAR_COUNT - 1) || !arg_int(LUA, 2, archive, 0, gsa1::kArchiveLast) ||
         !arg_int(LUA, 3, index, 0, 65535) || !arg_int(LUA, 4, x, 0, 4095) || !arg_int(LUA, 5, y, 0, 4095) ||
         !g_session->texture_pixel(kind, (uint32_t)archive, (uint32_t)index, (uint32_t)x, (uint32_t)y, px)) {
         LUA->PushNil();

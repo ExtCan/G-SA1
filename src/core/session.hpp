@@ -90,6 +90,18 @@ enum : uint32_t {
     WRAP_SKIN_SLOT_SHIFT = 9u,
 };
 
+// 1.0.0-beta1a (b1a-tex; the owner: "Metal Sonic and Mecha Sonic are PURE WHITE"): the archive numbers a texture call may name are libsa1's, not the module's. A kind's own
+// archives are numbered below kArchivesOwn (libsa1.h: SA1_ARCHIVE_SKIN_FIRST; the special ones, 61 the first skin's and 62 the question mark's, are inside it); the
+// skins' archives run SA1_ARCHIVE_SKIN_FIRST .. SA1_ARCHIVE_SKIN_LAST (64 .. 79: one per loaded skin). 1.0.0-beta1's bindings stopped at 63, so every skin texture
+// (archive 64 + the skin's slot) was refused and its batches drew vgui/white. Every binding that takes an archive checks it against kArchiveLast; libsa1 answers the rest
+#if defined(SA1_ARCHIVE_SKIN_FIRST) && defined(SA1_ARCHIVE_SKIN_LAST)
+constexpr uint32_t kArchivesOwn = SA1_ARCHIVE_SKIN_FIRST;
+constexpr uint32_t kArchiveLast = SA1_ARCHIVE_SKIN_LAST;
+#else
+constexpr uint32_t kArchivesOwn = 64u;         // (a libsa1 before 1.0.0-beta1: no skin archives above 63)
+constexpr uint32_t kArchiveLast = 63u;
+#endif
+
 // SA1_DRAW_* bits that select a batch's material (the others are informational). SA1_DRAW_SHADOW (libsa1 of G-SA1 0.8):
 // the game's blob shadow gets batches of its own, drawn with their own switch (gsa1_shadow) before the effects test.
 // 0.9.4 (sadc docs/research/gsa1_094_plan.md review R.1): SA1_DRAW_OBJECT (libsa1 0.4: a ring, a ring's sparkle or blob

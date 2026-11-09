@@ -163,10 +163,114 @@ local function info_of(kind, archive, index, variant)
         i = info or false
         T.infos[k] = i
         if not info and variant > 0 then T.infoErrors[k] = tostring(err) end
+        -- 1.0.0-beta1a: the first texture asked of a skin's archive runs the skin's self-check (T.SkinCheck, below)
+        if variant == 0 and T.SkinCheck and not is_frontend(kind) and T.IsSkinArchive(archive) and not T.skinChecked[kind .. "_" .. archive] then
+            T.SkinCheck(kind, archive)
+        end
     end
     return i or nil
 end
 T.infoErrors = T.infoErrors or {}
+
+-- 1.0.0-beta1a (lane b1a-tex; the owner on beta 1: "Metal Sonic and Mecha Sonic are PURE WHITE"). A skin's parts draw from libsa1's skin archives,
+-- SA1_ARCHIVE_SKIN_FIRST + the skin's slot (64 .. 79: gsa1.SUPER.ARCHIVE_SKIN_FIRST / _LAST), which gsa1.TextureArchives never lists. Beta 1's module refused
+-- every gsa1.Texture of an archive above 63 (the owner's log: "texture 2 of archive 64 of character 0: Texture(kind, index [, archive [, variant]])" for every
+-- texture of archives 64 and 65), so every batch of the skin got a vgui/white material ("gsa1m_white_..."). The first time a skin's archive is asked for (its
+-- first draw, Character Select's circle, or cl_warm.lua at the spawn), every texture of it is asked once, listed for painting (as T.Prepare lists a kind's own
+-- archives at a spawn) and ONE line says how many the module gave:
+--   skin textures: Metal Sonic, archive 64: the module gives 9 of 9 (painted next, then read back)
+-- (fewer than all: the rest draw white). When the painting is idle again, T.SkinPaintCheck (below the device-reset check) writes the second line, once: how
+-- many of its textures are painted into render targets, one of them read back (render.CapturePixels / ReadPixel, the alpha probe's and the canary's own calls)
+-- against the module's runs, and how many of the skin's batch materials were made on its render targets and how many on vgui/white:
+--   skin textures: Metal Sonic, archive 64: 9 of 9 made (painted; read back 8 of 8 texels as the module gives them; its batches: 14 textured, 0 white)
+T.skinTitles = T.skinTitles or {}     -- [archive] = the title of the skin drawn from it (cl_warm.lua at the spawn, or T.SkinTitle's own find)
+T.skinChecked = T.skinChecked or {}   -- [kind .. "_" .. archive] = the self-check's first line (once per session)
+T.skinPaint = T.skinPaint or {}       -- [kind .. "_" .. archive] = the paint check still to make: { kind, archive, title, n, given }
+T.skinPainted = T.skinPainted or {}   -- [kind .. "_" .. archive] = the paint check's line (once per session)
+T.skinMats = T.skinMats or {}         -- [kind .. "_" .. archive] = { tex = batch materials made on its render targets, white = on vgui/white } (T.Material)
+
+function T.IsSkinArchive(archive)
+    local S = gsa1 and gsa1.SUPER
+    local first, last = S and tonumber(S.ARCHIVE_SKIN_FIRST), S and tonumber(S.ARCHIVE_SKIN_LAST)
+    archive = tonumber(archive)
+    return first ~= nil and last ~= nil and archive ~= nil and archive >= first and archive <= last
+end
+
+local function worn_title(C, archive)
+    if not (type(C) == "table" and C.skin and C.id and gsa1 and gsa1.SkinArchive) then return nil end
+    if gsa1.SkinArchive(C.id) ~= archive then return nil end
+    return C.skin.title or C.skin.char_name or C.title
+end
+
+-- does Character Select's circle draw from `archive` now? (its batch table: feat/cl_charselect.lua paint_3d fills st.batches before its T.Material calls)
+local function circle_draws(st, archive)
+    local B = type(st) == "table" and st.batches
+    if type(B) ~= "table" then return false end
+    for i = 1, tonumber(B.count) or #B do
+        local b = B[i]
+        if type(b) == "table" and b.archive == archive then return true end
+    end
+    return false
+end
+
+-- the title of the skin that draws from `archive`: your character's, a follower's, or the one Character Select's circle shows (its Sonic slot) when the circle
+-- draws from that archive (the verifier's LOW: another skin first drawn while the panel is open is not named after the circle's); nil: not known
+function T.SkinTitle(archive)
+    if T.skinTitles[archive] then return T.skinTitles[archive] end
+    local ok, found = pcall(function()
+        local f = worn_title(GSA1.Char, archive)
+        if f then return f end
+        local Fo = GSA1.Followers
+        for _, F in ipairs(Fo and Fo.list or {}) do
+            f = worn_title(F, archive)
+            if f then return f end
+        end
+        local S = GSA1.CharSelect
+        if S and S.st and S.SkinEntry and circle_draws(S.st, archive) then
+            local e = S.SkinEntry(S.st, 0)
+            if e then return e.title or e.char_name end
+        end
+        return nil
+    end)
+    if ok and found then
+        T.skinTitles[archive] = found
+        return found
+    end
+    return nil
+end
+
+-- the self-check of a skin's archive (once per session and archive): every texture asked of the module and listed for painting, one log line; returns the line.
+-- The paint check (T.SkinPaintCheck) follows when the painting is idle
+function T.SkinCheck(kind, archive, title)
+    local key = kind .. "_" .. archive
+    if T.skinChecked[key] then return T.skinChecked[key] end
+    T.skinChecked[key] = "(checking)"      -- (info_of below comes back here)
+    if title then T.skinTitles[archive] = T.skinTitles[archive] or title end
+    title = title or T.SkinTitle(archive) or ("the skin of character " .. tostring(kind))
+    local n, err = nil, "this module has no gsa1.TextureCount"
+    if gsa1 and gsa1.TextureCount then n, err = gsa1.TextureCount(kind, archive) end
+    local line
+    if type(n) ~= "number" then
+        line = string.format("skin textures: %s, archive %d: the module refused the archive (%s): its parts draw white", title, archive, tostring(err))
+    else
+        local given = 0
+        for i = 0, n - 1 do
+            if info_of(kind, archive, i) then
+                given = given + 1
+                -- (listed for painting in the clamped address mode, a few per frame: the PostRender hook "gsa1_texture_later")
+                T.later[#T.later + 1] = { kind, archive, i }
+            end
+        end
+        line = string.format("skin textures: %s, archive %d: the module gives %d of %d%s", title, archive, given, n,
+            given < n and " (the others draw white)" or " (painted next, then read back)")
+        if given > 0 then
+            T.skinPaint[key] = { kind = kind, archive = archive, title = title, n = n, given = given }
+        end
+    end
+    T.skinChecked[key] = line
+    if GSA1.Log then GSA1.Log("texture", "%s", line) end
+    return line
+end
 
 local function enqueue(e, urgent)
     if e.queued then
@@ -934,6 +1038,93 @@ hook.Add("PostRender", "gsa1_texture_check", function()
     if GSA1.HitchAdd then GSA1.HitchAdd("Texture check", SysTime() - t0) end
 end)
 
+-- 1.0.0-beta1a (lane b1a-tex; the verifier's LOW: the first line only says the module gave the runs). A skin's paint check: up to 8 texels of a painted render
+-- target (runs with alpha > 0, spread over the texture) read back with ONE render.CapturePixels and compared with the module's runs (2 of 255 allowed, as
+-- gsa1_texcheck). Returns { n, good, swapped, bad (the first wrong texel), unreadable, err }
+local function skin_read_back(e)
+    local info = e.info
+    local runs, nruns = info.runs, tonumber(info.nruns) or 0
+    local picks = {}
+    local step = math.max(1, math.floor(nruns / 8))
+    for r = 1, nruns, step do
+        local o = (r - 1) * 10 + 1
+        local x0, x1, y0, y1, _, _, cr, cg, cb, ca = string.byte(runs, o, o + 9)
+        if ca and ca > 0 then picks[#picks + 1] = { x0 + x1 * 256, y0 + y1 * 256, cr, cg, cb, ca } end
+        if #picks >= 8 then break end
+    end
+    local res = { n = #picks, good = 0, swapped = 0 }
+    if #picks == 0 then return res end
+    render.PushRenderTarget(e.rt)
+    local ok, err = pcall(function()
+        render.CapturePixels()
+        for _, p in ipairs(picks) do
+            local r, g, b, a = render.ReadPixel(p[1], p[2])
+            if r == nil then
+                res.unreadable = true
+                return
+            end
+            local d = math.max(math.abs(r - p[3]), math.abs(g - p[4]), math.abs(b - p[5]), a and math.abs(a - p[6]) or 0)
+            if d <= 2 then
+                res.good = res.good + 1
+            else
+                -- (red and blue the other way round: how render.ReadPixel orders them, not the texture)
+                if math.max(math.abs(b - p[3]), math.abs(g - p[4]), math.abs(r - p[5])) <= 2 then res.swapped = res.swapped + 1 end
+                res.bad = res.bad or string.format("%s at %d,%d: read %d %d %d %s, the module %d %d %d %d", tostring(info.name), p[1], p[2], r, g, b,
+                    tostring(a), p[3], p[4], p[5], p[6])
+            end
+        end
+    end)
+    render.PopRenderTarget()
+    if not ok then res.err = tostring(err) end
+    return res
+end
+
+-- the paint check of a skin's archive P (T.skinPaint), in an idle frame (nothing to paint, nothing listed, no pre-warm): its textures painted (a finished render
+-- target of any address mode, the golden / trail variants left out), the one with the most runs read back, its batch materials; returns the line
+function T.SkinPaintCheck(P)
+    local key = P.kind .. "_" .. P.archive
+    local painted, best = {}, nil
+    for _, e in pairs(T.entries) do
+        if e and e.kind == P.kind and e.archive == P.archive and not e.gold and e.done then
+            painted[e.index] = true
+            if not e.mask and (best == nil or (e.info.nruns or 0) > (best.info.nruns or 0)) then best = e end
+        end
+    end
+    local made = 0
+    for i = 0, P.n - 1 do
+        if painted[i] then made = made + 1 end
+    end
+    local m = T.skinMats[key] or { tex = 0, white = 0 }
+    local mats = string.format("its batches: %d textured, %d white", m.tex, m.white)
+    local short = made < P.n and string.format(", %d not painted", P.n - made) or ""
+    local head = string.format("skin textures: %s, archive %d: ", P.title, P.archive)
+    if made == 0 then
+        return head .. string.format("0 of %d painted (no render target was finished; %s): please report this line", P.n, mats)
+    end
+    local rb = best and skin_read_back(best) or { n = 0, good = 0, swapped = 0 }
+    if rb.err or rb.unreadable then
+        return head .. string.format("%d of %d made (painted%s; not read back: %s; %s)", made, P.n, short,
+            rb.err or "render.ReadPixel gives nothing here", mats)
+    elseif rb.bad then
+        return head .. string.format("%d of %d painted, but %d of %d texels read back wrong (%s%s; %s): please report this line", made, P.n,
+            rb.n - rb.good, rb.n, rb.bad, rb.swapped > 0 and "; red and blue read swapped" or "", mats)
+    end
+    return head .. string.format("%d of %d made (painted%s; read back %d of %d texels as the module gives them; %s)", made, P.n, short, rb.good, rb.n, mats)
+end
+
+hook.Add("PostRender", "gsa1_texture_skincheck", function()
+    if next(T.skinPaint) == nil then return end
+    if #T.queue > 0 or #T.later > 0 or (GSA1.WarmRunning and GSA1.WarmRunning()) then return end
+    local key, P = next(T.skinPaint)
+    local t0 = SysTime()
+    T.skinPaint[key] = nil
+    local ok, line = pcall(T.SkinPaintCheck, P)
+    if not ok then line = string.format("skin textures: %s, archive %d: the paint check failed (%s)", tostring(P.title), P.archive, tostring(line)) end
+    T.skinPainted[key] = line
+    if GSA1.Log then GSA1.Log("texture", "%s", line) end
+    if GSA1.HitchAdd then GSA1.HitchAdd("Texture check", SysTime() - t0) end
+end)
+
 hook.Add("OnScreenSizeChanged", "gsa1_texture_repaint", function()
     T.RepaintAll("the screen size changed")
 end)
@@ -1025,6 +1216,16 @@ function T.Material(kind, b, warm)
         if e then
             tex = e.rt:GetName()
             texname = tex
+        end
+        -- 1.0.0-beta1a: a skin's batch materials, textured or white, for its paint check's line (T.SkinPaintCheck)
+        if T.IsSkinArchive(b.archive) then
+            local sk = kind .. "_" .. b.archive
+            local c = T.skinMats[sk]
+            if not c then
+                c = { tex = 0, white = 0 }
+                T.skinMats[sk] = c
+            end
+            if e then c.tex = c.tex + 1 else c.white = c.white + 1 end
         end
     end
     local name = string.format("gsa1m_%s_%s%d%d%d%s", texname, MODE_LETTER[mode], lit and 1 or 0, nocull and 1 or 0,

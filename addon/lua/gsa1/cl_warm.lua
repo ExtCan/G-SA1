@@ -95,10 +95,19 @@ local function item_key(b)
 end
 
 -- every state to warm for a character (an array of synthetic batches, in order: the shader states first, then the
--- census's states, then the textures by archive), one per material and draw state under the current settings
-function W.States(kind)
+-- census's states, then the textures by archive), one per material and draw state under the current settings.
+-- 1.0.0-beta1a (lane b1a-tex): skin = the archive a skin's parts draw from (gsa1.SkinArchive: 64 + the skin's slot) for a character that wears one.
+-- Its world is its base's (the effects, the shadow, the shader states: items 1, 4, 5 as they are); its parts replace the base's body, so the census's
+-- states of the body's own archive 0 are left out and item 3 warms every texture of the skin's archive in the body's state instead (the ball's texture
+-- among them: its first jump makes no material)
+function W.States(kind, skin)
     local all = {}
     local A = GSA1.Tex.Archives(kind)
+    skin = tonumber(skin)
+    local skin_n = 0
+    if skin and gsa1 and gsa1.TextureCount then
+        skin_n = tonumber((gsa1.TextureCount(kind, skin))) or 0
+    end
     -- 1. the material states, untextured and on one of the character's textures (its first effect texture; not one of
     -- OBJ_REGULAR's, which are never painted at a spawn: cl_textures.lua T.NO_PREPARE)
     local skip = GSA1.Tex.NO_PREPARE or {}
@@ -133,14 +142,20 @@ function W.States(kind)
     -- 8th field); a texture the archives do not have is left out
     for _, c in ipairs((GSA1.WarmCensus or {})[kind] or {}) do
         local a, t = c[1], c[2]
-        if a < 0 or t < 0 or (a < (A.n or 0) and t < (A[a].count or 0)) then
+        if (a < 0 or t < 0 or (a < (A.n or 0) and t < (A[a].count or 0))) and not (skin and a == 0) then
             all[#all + 1] = state(a, t, c[3], c[4], c[5], c[6], c[7], c[8])
         end
     end
     -- 3. the model's own textures in the body's state (opaque, palette-lit): the ones the first frames do not draw, such
-    -- as Sonic's spin texture, which the first spin dash or Light Speed charge brings
-    for i = 0, ((A.n or 0) > 0 and A[0].count or 0) - 1 do
-        all[#all + 1] = state(0, i, PALETTE_LIT, 1, 0, CLAMP, 0)
+    -- as Sonic's spin texture, which the first spin dash or Light Speed charge brings (a skin: its own archive's)
+    if skin then
+        for i = 0, skin_n - 1 do
+            all[#all + 1] = state(skin, i, PALETTE_LIT, 1, 0, CLAMP, 0)
+        end
+    else
+        for i = 0, ((A.n or 0) > 0 and A[0].count or 0) - 1 do
+            all[#all + 1] = state(0, i, PALETTE_LIT, 1, 0, CLAMP, 0)
+        end
     end
     -- 4. every texture of the effect archives as effects draw them (OBJ_REGULAR left out: of its 96 textures only the
     -- blob shadow's is drawn, in the census's own state - item 2)
@@ -162,7 +177,7 @@ function W.States(kind)
         for _, c in ipairs((GSA1.WarmCensus or {})[kind] or {}) do
             local a, t = c[1], c[2]
             if c[7] == 0 and band(c[3], ALPHA_TEST) ~= 0 and band(c[3], BLEND) == 0 and a >= 0 and t >= 0 and
-               a < (A.n or 0) and t < (A[a].count or 0) then
+               a < (A.n or 0) and t < (A[a].count or 0) and not (skin and a == 0) then
                 local d = state(a, t, c[3], c[4], c[5], c[6], 0)
                 d.depth = color
                 all[#all + 1] = d
@@ -183,8 +198,19 @@ end
 
 -- queues a character's warm-up (at its creation, and again when the material settings change)
 function W.Start(C)
+    -- 1.0.0-beta1a (lane b1a-tex): a skin is warmed too (beta 1 skipped it): its parts' archive (gsa1.SkinArchive: 64 + the skin's slot), and its self-check
+    -- lines (cl_textures.lua T.SkinCheck: "skin textures: Metal Sonic, archive 64: the module gives 9 of 9 ...", then, painted, "... 9 of 9 made (...)"), written
+    -- whatever gsa1_prewarm says. A module without gsa1.SkinArchive (before 1.0.0-beta1): no pre-warm for a skin, as before
+    local skin = nil
+    if C and C.skin then
+        local a = C.id and gsa1 and gsa1.SkinArchive and gsa1.SkinArchive(C.id)
+        if type(a) == "number" then
+            skin = a
+            if GSA1.Tex.SkinCheck then GSA1.Tex.SkinCheck(C.kind, a, C.title or C.skin.title) end
+        end
+    end
     -- 0.9.9: no census for "?": as with the pre-warm off (Super Sonic's census is not its own)
-    if not C or C.question or C.skin or not GSA1.cv.prewarm:GetBool() then
+    if not C or C.question or (C.skin and not skin) or not GSA1.cv.prewarm:GetBool() then
         W.total = nil
         W.queue, W.head = { [0] = {}, [1] = {} }, { [0] = 1, [1] = 1 }
         return 0
@@ -192,7 +218,7 @@ function W.Start(C)
     local t0 = SysTime()
     local q = { [0] = {}, [1] = {} }
     local n = 0
-    for _, b in ipairs(W.States(C.kind)) do
+    for _, b in ipairs(W.States(C.kind, skin)) do
         -- one item per material and pass / blend factors (W.States); items done already (this session) are skipped
         local id = C.kind .. ":" .. item_key(b)
         if not W.done[id] then

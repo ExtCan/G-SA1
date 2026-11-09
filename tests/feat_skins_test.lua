@@ -136,8 +136,8 @@ do
         for i = 1, #a do if a[i] ~= b[i] then return false end end
         return true
     end
-    check(same_keys(me.option_keys or {}, { "voice", "glow", "trail" }) and same_keys(K.SKINS.metalsonic.option_keys or {}, { "fly", "walk_fly", "voice", "glow", "trail" }),
-        "T1 [14.1bl] [RY.1] option_keys: Mecha voice, glow, trail; Metal all five")
+    check(same_keys(me.option_keys or {}, { "voice", "glow", "trail", "plant", "jog_pace" }) and same_keys(K.SKINS.metalsonic.option_keys or {}, { "fly", "walk_fly", "voice", "glow", "trail" }),
+        "T1 [14.1bl] [RY.1] option_keys: Mecha voice, glow, trail and (1.0.0-beta1a) plant, jog_pace; Metal his five")
     check(#dm.parts == 80 and #dm.keep == 22 and dm.turn == 1 and dm.ball_texture == 86 and dm.scale == 0.52 and dm.model_root == 0x0CA88AC4 and dm.model_first == 0x0CA824C0 and dm.model_end == 0x0CA88AF8,
         "T1 Mecha's numbers: 20 parts by four, 22 textures, -z, ball 86, scale 0.52 (the prep lane's), his root and bytes")
     check(dm.id == "mechasonic" and dm.base_kind == 0 and dm.trail_r == 1.00 and dm.trail_g == 0.45 and dm.trail_b == 0.05 and dm.glow_r == 1.00 and dm.glow_inflate == 0.35, "T1 DescOf carries id, base_kind 0, the trail's colour (1.0.0's sa1_skin_desc fields)")
@@ -197,16 +197,34 @@ do
         made[#made + 1] = key .. ":" .. (M.convars["gsa1_metal_" .. key] and "metal" or "-") .. "/" .. (M.convars["gsa1_mecha_" .. key] and "mecha" or "-")
     end
     check(M.convars.gsa1_mecha_fly == nil and M.convars.gsa1_mecha_walk_fly == nil and M.convars.gsa1_mecha_voice ~= nil and M.convars.gsa1_mecha_glow ~= nil and M.convars.gsa1_mecha_trail ~= nil
+        and M.convars.gsa1_mecha_plant ~= nil and M.convars.gsa1_mecha_jog_pace ~= nil and M.convars.gsa1_metal_plant == nil and M.convars.gsa1_metal_jog_pace == nil
         and M.convars.gsa1_metal_fly ~= nil and M.convars.gsa1_metal_walk_fly ~= nil and M.convars.gsa1_metal_voice ~= nil and M.convars.gsa1_metal_glow ~= nil and M.convars.gsa1_metal_trail ~= nil,
-        "T1 [14.1bl] the ConVars made: Metal's five, Mecha's voice, glow and trail; gsa1_mecha_fly and gsa1_mecha_walk_fly never created (%s)", table.concat(made, " "))
-    check(M.convars.gsa1_mecha_voice and M.convars.gsa1_mecha_voice:GetInt() == 0 and M.convars.gsa1_mecha_glow:GetInt() == 1 and M.convars.gsa1_mecha_trail:GetInt() == 1,
-        "T1 [14.1bl] Mecha's defaults: voice 0, glow 1, trail 1")
+        "T1 [14.1bl] the ConVars made: Metal's five, Mecha's voice, glow, trail, plant and jog_pace (1.0.0-beta1a); gsa1_mecha_fly, gsa1_mecha_walk_fly, gsa1_metal_plant, gsa1_metal_jog_pace never created (%s)", table.concat(made, " "))
+    check(M.convars.gsa1_mecha_voice and M.convars.gsa1_mecha_voice:GetInt() == 0 and M.convars.gsa1_mecha_glow:GetInt() == 1 and M.convars.gsa1_mecha_trail:GetInt() == 1
+        and M.convars.gsa1_mecha_plant and M.convars.gsa1_mecha_plant:GetInt() == 1 and M.convars.gsa1_mecha_jog_pace and M.convars.gsa1_mecha_jog_pace:GetFloat() == 1,
+        "T1 [14.1bl] Mecha's defaults: voice 0, glow 1, trail 1; 1.0.0-beta1a: plant 1, jog_pace 1 (Sonic's own fastest jog)")
     local P = character_page()
-    local boxes = {}
+    local boxes, slider = {}, nil
     for _, c in ipairs(P.calls) do
-        if c[1] == "CheckBox" and type(c[3]) == "string" and string.sub(c[3], 1, 11) == "gsa1_mecha_" then boxes[#boxes + 1] = c[3] end
+        if (c[1] == "CheckBox" or c[1] == "NumSlider") and type(c[3]) == "string" and string.sub(c[3], 1, 11) == "gsa1_mecha_" then boxes[#boxes + 1] = c[3] end
+        if c[1] == "NumSlider" and c[3] == "gsa1_mecha_jog_pace" then slider = c end
     end
-    check(#boxes == 3 and boxes[1] == "gsa1_mecha_voice" and boxes[2] == "gsa1_mecha_glow" and boxes[3] == "gsa1_mecha_trail", "T1 [14.1bl] three check boxes under Mecha Sonic, no fly box (%s)", table.concat(boxes, ", "))
+    check(#boxes == 5 and boxes[1] == "gsa1_mecha_voice" and boxes[2] == "gsa1_mecha_glow" and boxes[3] == "gsa1_mecha_trail" and boxes[4] == "gsa1_mecha_plant" and boxes[5] == "gsa1_mecha_jog_pace",
+        "T1 [14.1bl] 1.0.0-beta1a: five controls under Mecha Sonic, no fly box (%s)", table.concat(boxes, ", "))
+    check(slider and slider[2] == "Mecha Sonic: jog pace when running fast" and slider[4] == 0.5 and slider[5] == 2.5 and slider[6] == 2,
+        "T1 1.0.0-beta1a: \"Mecha Sonic: jog pace when running fast\" is a slider 0.5 .. 2.5 (%s)", slider and tostring(slider[2]) or "none")
+    local plant_box
+    for _, c in ipairs(P.calls) do if c[1] == "CheckBox" and c[3] == "gsa1_mecha_plant" then plant_box = c[2] end end
+    check(plant_box == "Mecha Sonic: keep his feet on the floor", "T1 1.0.0-beta1a: the box \"Mecha Sonic: keep his feet on the floor\" (%s)", tostring(plant_box))
+    -- the lane's fix run (its verifier, LOW): the page's words say what is now true: no "nothing to choose, so no box" under his five controls, and the box's off text is the MEASURED one
+    local stale, off_text = nil, nil
+    for _, c in ipairs(P.calls) do
+        if c[1] == "ControlHelp" and type(c[2]) == "string" then
+            if string.find(c[2], "nothing to choose", 1, true) or string.find(c[2], "which floats", 1, true) then stale = c[2] end
+            if string.find(c[2], "sink up to about 6 units into the floor", 1, true) then off_text = c[2] end
+        end
+    end
+    check(stale == nil and off_text ~= nil, "T1 1.0.0-beta1a fix run: the Character page's help under Mecha Sonic says what is true (stale: %s; the off text: %s)", tostring(stale), tostring(off_text ~= nil))
     local sup = G.SUPER
     local had = sup.SKIN_ANIM_TRAIL
     sup.SKIN_ANIM_TRAIL = 8
@@ -227,9 +245,33 @@ do
     local notrail = K.AnimValue(mecha)
     M.convars.gsa1_mecha_trail:SetString("1")
     sup.SKIN_ANIM_TRAIL = had
-    check(v[1] == 13 and v[3] == 13 and walk_m == 13 and noglow == 9 and notrail == 5,
-        "T1 [14.1bl] K.AnimValue: Mecha FLY + GLOW + TRAIL (13) with gsa1_metal_fly 0 and 1 and gsa1_metal_walk_fly 1, never WALK (%s %s %s); without his glow %s, without his trail %s",
+    -- 1.0.0-beta1a: and SA1_SKIN_ANIM_PACE(100) (25600) for his jog's default pace
+    local P100 = 100 * 256
+    check(v[1] == 13 + P100 and v[3] == 13 + P100 and walk_m == 13 + P100 and noglow == 9 + P100 and notrail == 5 + P100,
+        "T1 [14.1bl] K.AnimValue: Mecha FLY + GLOW + TRAIL (13) + the pace 1.00 (100 x 256) with gsa1_metal_fly 0 and 1 and gsa1_metal_walk_fly 1, never WALK (%s %s %s); without his glow %s, without his trail %s",
         tostring(v[1]), tostring(v[3]), tostring(walk_m), tostring(noglow), tostring(notrail))
+    -- 1.0.0-beta1a: the plant's box and the jog's slider (libsa1.h SA1_SKIN_ANIM_NO_PLANT 16, SA1_SKIN_ANIM_PACE(h) h << 8, SA1_SKIN_ANIM_PACE_FREE 2047)
+    sup.SKIN_ANIM_TRAIL = 8
+    M.convars.gsa1_mecha_plant:SetString("0")
+    local noplant = K.AnimValue(mecha)
+    M.convars.gsa1_mecha_plant:SetString("1")
+    M.convars.gsa1_mecha_jog_pace:SetString("0.5")
+    local slow = K.AnimValue(mecha)
+    M.convars.gsa1_mecha_jog_pace:SetString("1.65")
+    local p165 = K.AnimValue(mecha)
+    M.convars.gsa1_mecha_jog_pace:SetString("2.5")
+    local free = K.AnimValue(mecha)
+    M.convars.gsa1_mecha_jog_pace:SetString("9")
+    local clamped = K.AnimValue(mecha)
+    M.convars.gsa1_mecha_jog_pace:SetString("1")
+    local metal_v = K.AnimValue(metal)
+    sup.SKIN_ANIM_TRAIL = had
+    check(noplant == 13 + 16 + P100 and slow == 13 + 50 * 256 and p165 == 13 + 165 * 256 and free == 13 + 2047 * 256 and clamped == free and metal_v < 256,
+        "T1 1.0.0-beta1a: plant off adds NO_PLANT (%s); the pace 0.5 -> 50, 1.65 -> 165, the top 2.5 -> 2047 no limit, past the top clamped (%s %s %s %s); Metal has neither (%s)",
+        tostring(noplant), tostring(slow), tostring(p165), tostring(free), tostring(clamped), tostring(metal_v))
+    local ct = K.CheckText(mecha, true)
+    check(ct and string.find(ct, "self-check: Mecha Sonic: keep his feet on the floor on; jog pace when running fast 1.00 x Sonic's own fastest jog (4.0 jog cycles a second)", 1, true) ~= nil
+        and K.CheckText(metal, true) == nil, "T1 1.0.0-beta1a: the self-check line: %s", tostring(ct))
     check(v[2] == 12 and v[4] == 13 and walk_t == 15, "T1 Metal as 0.9.9g: fly 0 gives GLOW + TRAIL (%s), fly 1 FLY + GLOW + TRAIL (%s), with the walk too (%s)", tostring(v[2]), tostring(v[4]), tostring(walk_t))
 end
 -- the data never carries the game: numbers and names
@@ -322,7 +364,12 @@ do
     for _, l in ipairs(logged) do
         if string.find(l, "jogs", 1, true) and not string.find(l, "flies", 1, true) then jogs = true end
     end
-    check(C and C.name == "mechasonic" and anim == 5 and jogs, "T1 [14.1bl] Mecha spawned: SA1_COPT_SKIN_ANIM %s at creation (FLY + GLOW), the log line says he jogs (%s)", tostring(anim), tostring(logged[#logged]))
+    local selfcheck
+    for _, l in ipairs(logged) do
+        if string.find(l, "self-check: Mecha Sonic: keep his feet on the floor on; jog pace when running fast 1.00", 1, true) and string.find(l, "taken by libsa1", 1, true) then selfcheck = l end
+    end
+    check(C and C.name == "mechasonic" and anim == 5 + 100 * 256 and jogs, "T1 [14.1bl] Mecha spawned: SA1_COPT_SKIN_ANIM %s at creation (FLY + GLOW + the pace 1.00), the log line says he jogs (%s)", tostring(anim), tostring(logged[1]))
+    check(selfcheck ~= nil, "T1 1.0.0-beta1a: once a spawn, the self-check line (%s)", tostring(selfcheck or logged[#logged]))
     if GSA1.Char then GSA1.Remove(true) end
     GSA1.cv.character:SetString("sonic")
 end

@@ -5,6 +5,11 @@
 -- the Light Speed trails in the skin's colour (libsa1 SA1_SKIN_ANIM_TRAIL, select 4.3.2); Mecha Sonic's are new (his voice, glow and trails).
 -- The owner's answer 17 (rounds plan 14.1bl; gsa1_100_master.md 3's R1 delta with RY.1, RY.13): a skin has only the options its entry's option_keys name (Metal all five, Mecha voice, glow and trail:
 -- gsa1_mecha_fly and gsa1_mecha_walk_fly are never made, so no fly box shows); an entry with anim_always (Mecha) has its rows on always: SKIN_ANIM_FLY always, never WALK.
+-- 1.0.0-beta1a (lane b1a-mecha; the owner on beta 1: "Mecha Sonic is floating ... his run animation has stuttering and it animates far too fast"): a skin of Sonic's own tree (Mecha) has two more:
+-- "plant" (libsa1 SA1_SKIN_ANIM_NO_PLANT when off: D9, his lowest point on the floor every frame) and "jog_pace", a slider (SA1_SKIN_ANIM_PACE: D10, his jog in rows 12 and 13 never faster than this
+-- times Sonic's own fastest jog; the slider's top is no limit, beta 1's). Both in the render option's value, at once; a self-check line in the log at every spawn says what libsa1 took.
+-- The lane's fix run: the frames between two pairs (half of Garry's Mod's) are libsa1's own now (sa1_character.c's render calls sa1k_frame; libsa1 logs "the 60 Hz frames between two pairs are
+-- drawn by sa1k_frame" once a character); the off text says what was MEASURED with the box off (his lowest point from -1.43 to +0.60 SA1 units, about -6 to +2 Garry's Mod units).
 GSA1 = GSA1 or {}
 local K = GSA1.Skins
 if not K then error("gsa1/feat/sh_skins.lua did not load: the skins need it") end
@@ -21,7 +26,15 @@ K.OPTIONS = {
       page = "The model again, slightly larger, in the skin's colour, where Sonic's Light Speed glow would draw. At once." },
     { key = "trail", label = "%s: Light Speed trails in the skin's colour", help = "%s: the Light Speed Dash's sparkles and streaks in the skin's colour (off: the game's blue). At once",
       page = "The charge's sparkles and streaks (also with the Crystal Ring) in the skin's own colour. Off: the game's blue. At once." },
+    -- 1.0.0-beta1a: only the entries whose option_keys name them (Mecha Sonic)
+    { key = "plant", label = "%s: keep his feet on the floor", help = "%s: keep his feet on the floor while he stands, walks and runs (off: drawn where Sonic's own body would put him, so his shorter legs sink into the floor or stand off it). At once",
+      page = "On: his lowest point stays on the floor in every frame while he stands, walks and runs, on slopes too; it only dips where Sonic's own toes dip. Off: drawn where Sonic's own body would put him: his shorter legs then sink up to about 6 units into the floor, or stand up to about 2 units above it. At once." },
+    { key = "jog_pace", slider = { 0.5, 2.5, 2 }, label = "%s: jog pace when running fast",
+      help = "%s: jog pace when running fast, times Sonic's own fastest jog (1: never faster than Sonic's jog gets; 2.5: no limit, as in beta 1). At once",
+      page = "1 (the default): never faster than Sonic's own jog at its fastest (4 jog cycles a second). Lower is slower. At 2.5 there is no limit: the jog speeds up with him, as in beta 1. At once." },
 }
+K.PACE_FREE = 2.5           -- the slider's top: no limit (libsa1 SA1_SKIN_ANIM_PACE_FREE)
+K.PACE_TOP_CPS = 4.0179     -- Sonic's own jog at its fastest, cycles a second (4.2853 of its 32 frames a pair, 30 pairs a second: libsa1 sa1_skin.c SK_OWN_TOP_FRAMES)
 
 -- whether a skin's entry has an option (its option_keys; an entry that lists none has all five, as 0.9.9f's)
 function K.HasOption(e, key)
@@ -51,7 +64,9 @@ local function cvs_for(e)
     t = {}
     local d = e.defaults or {}
     for _, o in ipairs(K.OptionsOf(e)) do
-        t[o.key] = GSA1.ConVar("gsa1_" .. pre .. "_" .. o.key, tonumber(d[o.key]) or 0, string.format(o.help, e.title or e.id), 0, 1)
+        local lo, hi = 0, 1
+        if o.slider then lo, hi = o.slider[1], o.slider[2] end
+        t[o.key] = GSA1.ConVar("gsa1_" .. pre .. "_" .. o.key, tonumber(d[o.key]) or 0, string.format(o.help, e.title or e.id), lo, hi)
     end
     K.cvs[pre] = t
     return t
@@ -96,7 +111,33 @@ function K.AnimValue(skin)
     end
     if on(c, "glow", true) and sup.SKIN_ANIM_GLOW then v = v + sup.SKIN_ANIM_GLOW end
     if on(c, "trail", true) and sup.SKIN_ANIM_TRAIL and skin and skin.trail then v = v + sup.SKIN_ANIM_TRAIL end
+    -- 1.0.0-beta1a: D9 off by its box; D10's top in hundredths of Sonic's own fastest jog, the slider's top 2047 (no limit). The bits are libsa1.h's (the module's table may not have them yet)
+    if K.HasOption(skin, "plant") and not on(c, "plant", true) then v = v + (sup.SKIN_ANIM_NO_PLANT or 16) end
+    if K.HasOption(skin, "jog_pace") then v = v + K.PaceField(K.Pace(skin)) * 2 ^ (sup.SKIN_ANIM_PACE_SHIFT or 8) end
     return v
+end
+
+-- the jog's pace of a skin that has the slider, 0.5 .. 2.5 (1 without the ConVar)
+function K.Pace(skin)
+    local c = K.CvOf(skin)
+    local x = c and c.jog_pace and c.jog_pace:GetFloat() or 1
+    if x ~= x then x = 1 end
+    return math.min(K.PACE_FREE, math.max(0.5, x))
+end
+
+-- libsa1's field: hundredths (50 .. 249), 2047 at the slider's top (SA1_SKIN_ANIM_PACE_FREE: no limit)
+function K.PaceField(x)
+    if x >= K.PACE_FREE - 0.005 then return 2047 end
+    return math.max(1, math.min(2046, math.floor(x * 100 + 0.5)))
+end
+
+-- the self-check line's words for a skin's feet and jog (nil: the skin has neither option)
+function K.CheckText(skin, took, err)
+    if not (K.HasOption(skin, "plant") or K.HasOption(skin, "jog_pace")) then return nil end
+    local c, x = K.CvOf(skin), K.Pace(skin)
+    local pace = x >= K.PACE_FREE - 0.005 and "no limit (as in beta 1)" or string.format("%.2f x Sonic's own fastest jog (%.1f jog cycles a second)", x, x * K.PACE_TOP_CPS)
+    return string.format("self-check: %s: keep his feet on the floor %s; jog pace when running fast %s; render option %d %s libsa1 %s", tostring(skin.title or skin.id),
+        on(c, "plant", true) and "on" or "off", pace, K.AnimValue(skin), took and "taken by" or ("refused (" .. tostring(err) .. ") by"), tostring(gsa1 and gsa1.LIBSA1_VERSION or "?"))
 end
 
 -- the options of the render step, at once and before a new character's first tick
@@ -104,6 +145,7 @@ function K.ApplyAnim(C)
     if not (C and C.skin and C.id and gsa1 and gsa1.SetCharOption and gsa1.SUPER and gsa1.SUPER.COPT_SKIN_ANIM) then return false end
     local ok, err, code = gsa1.SetCharOption(C.id, gsa1.SUPER.COPT_SKIN_ANIM, K.AnimValue(C.skin))
     if not ok then log("the running: refused: %s (%s)", tostring(err), tostring(code)) end
+    C.skinAnimOk, C.skinAnimErr = ok == true, err      -- 1.0.0-beta1a: for the self-check line
     return ok == true
 end
 
@@ -127,6 +169,9 @@ hook.Add("GSA1CharacterCreated", "gsa1_skins", function(C, how)
         jog and "jogs (Sonic's jog where Sonic runs with his arms behind him)" or (on(c, "fly", true) and "flies" or "as Sonic"),
         (not jog and on(c, "fly", true) and on(c, "walk_fly", false)) and "flies" or "as Sonic", K.Voiceless(C.skin) and "voiceless" or "with Sonic's voice",
         on(c, "glow", true) and "glows when charged" or "no glow", on(c, "trail", true) and "trails in its colour" or "the game's blue trails")
+    -- 1.0.0-beta1a: once a spawn, what the render step took for his feet and his jog
+    local check = K.CheckText(C.skin, C.skinAnimOk, C.skinAnimErr)
+    if check then log("%s", check) end
 end)
 
 -- 0.9.9h: your character and every follower that wears a skin (feat/cl_follower.lua F.skin), at once
@@ -159,10 +204,14 @@ function K.BuildOptions(panel)
         if e and e.options and K.cvs[e.options] then
             panel:Help(e.title or id)
             for _, o in ipairs(K.OptionsOf(e)) do
-                panel:CheckBox(string.format(o.label, e.title or id), "gsa1_" .. e.options .. "_" .. o.key)
+                if o.slider then
+                    panel:NumSlider(string.format(o.label, e.title or id), "gsa1_" .. e.options .. "_" .. o.key, o.slider[1], o.slider[2], o.slider[3])
+                else
+                    panel:CheckBox(string.format(o.label, e.title or id), "gsa1_" .. e.options .. "_" .. o.key)
+                end
                 panel:ControlHelp(o.page)
             end
-            if e.anim_always then panel:ControlHelp((e.title or id) .. " runs on his feet with Sonic's jog where Sonic runs with his arms behind him: nothing to choose, so no box.") end
+            if e.anim_always then panel:ControlHelp((e.title or id) .. " always runs on his feet with Sonic's jog where Sonic runs with his arms behind him, so there is no flying box for him.") end
             panel:ControlHelp("These are " .. (e.title or id) .. "'s as a follower too (Q menu > Options > G-SA1 > Followers: Character to spawn).")
         end
     end

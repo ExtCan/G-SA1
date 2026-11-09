@@ -1525,10 +1525,10 @@ do
     local i, n = S.SkinOf(st, 0)
     check(i == 2 and n == 3 and S.BallTint(st)[1] == 255 and S.BallTint(st)[2] == 0, "T5 Metal shown: \"2/3\", the red ball (upgrade_model_compatibility none)")
     S.SetSkin(st, 0, 1)
-    check(S.BallTint(st)[2] == 224 and S.BallTint(st)[1] == 0, "T5 Sonic: the green ball (full)")
+    check(S.BallTint(st)[2] == 255 and S.BallTint(st)[1] == 77, "T5 Sonic: the green ball (full; 1.0.0-beta1a: the owner's 11.png green 4DFF00)")
     st.slot = 1
     i, n = S.SkinOf(st, 1)
-    check(i == 1 and n == 1 and S.BallTint(st)[2] == 224, "T5 Tails: \"1/1\", green")
+    check(i == 1 and n == 1 and S.BallTint(st)[2] == 255 and S.BallTint(st)[1] == 77, "T5 Tails: \"1/1\", green")
     st.slot = 0
 
     -- T4: Y opens CHOOSE YOUR UPGRADE, only idle; with it up the game gets Start alone from the pad
@@ -1630,18 +1630,56 @@ end
 
 -- T5: the draw filter: a skin's name and nameplate pictures on the game's own draws; the support ball's colour on the game's left sphere
 do
-    local st = { slot = 0, design = "R", skins = { [0] = 2 }, state = { phase = 0 }, scr = { v = {} } }
+    -- (the names fix after beta 1a, sadc/build/research/b1a2: a skin's name and plate are atlas pictures of feat/cl_skinhud.lua, drawn at the game's own quad with surface.DrawTexturedRectUV in the
+    -- quad's colour, the bar's labels' call; the filter then answers false and paint_2d skips the game's draw. Beta 1a swapped a canvas material onto the game's vertices)
+    local st = { slot = 0, design = "R", skins = { [0] = 2 }, state = { phase = 0 }, scr = { v = {} }, F = { KIND = 32 }, m = S.Layout(1280, 960, false, {}) }
     local H = GSA1.SkinHud
-    local mA, mB = { tag = "name" }, { tag = "plate" }
-    H.mats.metalsonic = { name = mA, plate = mB }
-    check(S.DrawFilter(st, "m_sonic", {}, 0) == mA and S.DrawFilter(st, "B_SONIC_e", {}, 0) == mB and S.DrawFilter(st, "b_sonic", {}, 0) == mB,
-        "T5 Metal shown: m_sonic and B_SONIC_e (Japanese b_sonic too) draw the skin's pictures on the game's vertices")
-    check(S.DrawFilter(st, "m_tails", {}, 0) == nil, "T5 another slot's name stays the game's")
+    local page = { tag = "atlas page" }
+    local pA = { mat = page, u0 = 0, v0 = 0, u1 = 0.25, v1 = 0.125, w = 512, h = 128 }
+    local pB = { mat = page, u0 = 0.25, v0 = 0, u1 = 0.75, v1 = 0.125, w = 1024, h = 128 }
+    H.mats.metalsonic = { name = pA, plate = pB }
+    local QD, QV = {}, st.scr.v
+    local function gquad(d, x0, y0, x1, y1, a)
+        local first = #QV / 8
+        for _, p in ipairs({ { x0, y0, 0, 0 }, { x1, y0, 1, 0 }, { x1, y1, 1, 1 }, { x0, y0, 0, 0 }, { x1, y1, 1, 1 }, { x0, y1, 0, 1 } }) do
+            local o = #QV
+            QV[o + 1], QV[o + 2], QV[o + 3], QV[o + 4], QV[o + 5], QV[o + 6], QV[o + 7], QV[o + 8] = p[1], p[2], p[3], p[4], 255, 255, 255, a
+        end
+        local k = d * 11
+        QD[k + 1], QD[k + 2], QD[k + 3], QD[k + 4], QD[k + 5] = 0, first, 6, 5, 0
+        return k
+    end
+    local kn = gquad(0, 205.5, 314.4, 426.5, 369.6, 255)        -- (m_sonic's and B_SONIC_e's quads MEASURED on the real screen, charselect_screen.lua)
+    local kp = gquad(1, 164, 390, 563.4, 439.9, 128)
+    local drawn, col, smat = {}, nil, nil
+    local sdc, ssm, suv = surface.SetDrawColor, surface.SetMaterial, surface.DrawTexturedRectUV
+    surface.SetDrawColor = function(r, g, b, a) col = { r, g, b, a } end
+    surface.SetMaterial = function(m) smat = m end
+    surface.DrawTexturedRectUV = function(x, y, w, h, u0, v0, u1, v1) drawn[#drawn + 1] = { x = x, y = y, w = w, h = h, uv = { u0, v0, u1, v1 }, mat = smat, c = col } end
+    local m = st.m
+    local function at(d, x0, y0, x1, y1)
+        if not d then return false end
+        local px, py = math.floor(m.ox + x0 * m.sx + 0.5), math.floor(m.oy + y0 * m.sy + 0.5)
+        return d.x == px and d.y == py and d.w == math.floor(m.ox + x1 * m.sx + 0.5) - px and d.h == math.floor(m.oy + y1 * m.sy + 0.5) - py
+    end
+    local rn, rp, rj = S.DrawFilter(st, "m_sonic", QD, kn), S.DrawFilter(st, "B_SONIC_e", QD, kp), S.DrawFilter(st, "b_sonic", QD, kp)
+    local d1, d2 = drawn[1], drawn[2]
+    check(rn == false and rp == false and rj == false and #drawn == 3 and d1.mat == page and d1.uv[1] == 0 and d1.uv[2] == 0 and d1.uv[3] == 0.25 and d1.uv[4] == 0.125 and at(d1, 205.5, 314.4, 426.5, 369.6)
+        and d1.c[1] == 255 and d1.c[4] == 255 and d2.uv[1] == 0.25 and d2.uv[3] == 0.75 and at(d2, 164, 390, 563.4, 439.9) and d2.c[4] == 128,
+        "T5 Metal shown: m_sonic and B_SONIC_e (Japanese b_sonic too) are his pictures, drawn at the game's quad with surface.DrawTexturedRectUV in its colour and alpha; the game's draw skipped (false)")
+    drawn = {}
+    check(S.DrawFilter(st, "m_tails", QD, kn) == nil and #drawn == 0, "T5 another slot's name stays the game's")
     S.barcv.names:SetString("0")
-    check(S.DrawFilter(st, "m_sonic", {}, 0) == nil, "T5 gsa1_charselect_skin_names 0: the game's SONIC under him")
+    check(S.DrawFilter(st, "m_sonic", QD, kn) == nil and #drawn == 0, "T5 gsa1_charselect_skin_names 0: the game's SONIC under him")
     S.barcv.names:SetString("1")
     H.mats.metalsonic = { name = false, plate = false }
-    check(S.DrawFilter(st, "m_sonic", {}, 0) == nil, "T5 a picture not made yet: the game's own (no blank frame)")
+    check(S.DrawFilter(st, "m_sonic", QD, kn) == nil and #drawn == 0, "T5 a picture not made yet, or read changed (the fallback): the game's own (never a blank or black frame)")
+    -- not one plain quad (another shape, more colours): the game's own
+    H.mats.metalsonic = { name = pA, plate = pB }
+    QV[QD[kn + 2] * 8 + 13] = 200
+    check(S.DrawFilter(st, "m_sonic", QD, kn) == nil and #drawn == 0, "T5 a quad of more than one colour: the game's own")
+    QV[QD[kn + 2] * 8 + 13] = 255
+    surface.SetDrawColor, surface.SetMaterial, surface.DrawTexturedRectUV = sdc, ssm, suv
     H.mats.metalsonic = nil
     -- the left sphere: the 50 x 50 tinted base at (128, 418); its white shine and the ring's 48 x 48 spheres are left alone (LANDING.md C)
     local D, V = {}, st.scr.v
@@ -1661,12 +1699,20 @@ do
     local ring = quad(2, 193.2, 215.9, 48, 0, 0, 255)
     local right = quad(3, 504, 418, 50, 255, 0, 0)
     st.skins[0] = 1
+    -- (1.0.0-beta1a: the game merges the spheres into one draw, so the filter colours the ball's own six vertices and returns nil; the real screen: tests/feat_charselect_bar_test.lua B1)
+    local function rgb(k) local o = D[k + 2] * 8 return V[o + 5], V[o + 6], V[o + 7] end
     local t = S.DrawFilter(st, "sphe_7", D, base)
-    check(t and t.tint and t[1] == 0 and t[2] == 224 and t[3] == 0, "T5 Sonic: the left sphere's base turns green (full)")
+    local r, g, b = rgb(base)
+    check(t == nil and r == 77 and g == 255 and b == 0, "T5 Sonic: the left sphere's base turns green (full)")
     st.skins[0] = 3
     t = S.DrawFilter(st, "sphe_7", D, base)
-    check(t and t[1] == 255 and t[2] == 0, "T5 Mecha Sonic: red (none)")
-    check(S.DrawFilter(st, "sphe_7", D, shine) == nil and S.DrawFilter(st, "sphe_7", D, ring) == nil and S.DrawFilter(st, "sphe_7", D, right) == nil,
+    r, g, b = rgb(base)
+    check(t == nil and r == 255 and g == 0 and b == 0, "T5 Mecha Sonic: red (none)")
+    local same = S.DrawFilter(st, "sphe_7", D, shine) == nil and S.DrawFilter(st, "sphe_7", D, ring) == nil and S.DrawFilter(st, "sphe_7", D, right) == nil
+    local s1, s2, s3 = rgb(shine)
+    local q1, q2, q3 = rgb(ring)
+    local w1, w2, w3 = rgb(right)
+    check(same and s1 + s2 + s3 == 765 and q1 == 0 and q2 == 0 and q3 == 255 and w1 == 255 and w2 == 0 and w3 == 0,
         "T5 the shine, a ring sphere (48 x 48, centre left of x 320) and the right sphere keep the game's colours")
     local src = host_read(root .. "/gsa1/feat/cl_charselect.lua")
     check(string.find(src, "alt = S.DrawFilter(st, name, D, k)", 1, true) ~= nil and string.find(src, "if tint then mesh.Color(tint[1], tint[2], tint[3], V[o + 8])", 1, true) ~= nil,
